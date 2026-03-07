@@ -1,0 +1,518 @@
+{
+    "esi": {
+        "base_url": "https://esi.evetech.net/latest",
+        "user_agent": "NullsecTrader/1.0 (local tool)",
+        "callback_url": "http://localhost:12563/callback",
+        "scope": "esi-markets.structure_markets.v1",
+        "client_id": "PASTE_CLIENT_ID_OR_USE_ENV",
+        "client_secret": "PASTE_CLIENT_SECRET_OR_USE_ENV",
+        "strict_region_mapping": false,
+        "auto_fill_structure_regions": false,
+        "request_min_interval_sec": 0.2,
+        "rate_limit_cooldown_sec": 10.0
+    },
+    "structures": {
+        "o4t": 1040804972352,
+        "cj6": 1049588174021,
+        "c-j6mt": 1049588174021
+    },
+    "locations": {
+        "jita_44": {
+            "name": "Jita IV Moon 4 Caldari Navy Assembly Plant",
+            "location_id": 60003760,
+            "region_id": 10000002
+        }
+    },
+    "structure_regions": {
+        "1040804972352": 10000059,
+        "1049588174021": 10000009
+    },
+    "defaults": {
+        "cargo_m3": 10000,
+        "budget_isk": 500000000
+    },
+    "fees": {
+        "sales_tax": 0.075,
+        "buy_broker_fee": 0.0,
+        "sell_broker_fee": 0.03,
+        "scc_surcharge": 0.005,
+        "sell_market_type": "upwell",
+        "apply_broker_relations_on_upwell": false,
+        "sales_tax_delta_per_level": 0.005,
+        "broker_relations_delta_per_level": 0.001,
+        "advanced_broker_relations_relist_discount_per_level": 0.05,
+        "skills": {
+            "accounting": 3,
+            "broker_relations": 3,
+            "advanced_broker_relations": 3
+        },
+        "relist_budget_pct": 0.0,
+        "relist_budget_isk": 0.0
+    },
+    "filters_forward": {
+        "min_profit_pct": 0.06,
+        "min_profit_isk_total": 100000,
+        "price_depth_pct": 0.3,
+        "min_depth_units": 5,
+        "min_market_history_volume": 0,
+        "ranking_metric": "profit_per_m3_per_day",
+        "competition_band_pct": 0.02,
+        "max_turnover_factor": 3.0,
+        "min_fill_probability": 0.05,
+        "min_instant_fill_ratio": 0.3,
+        "min_dest_buy_depth_units": 5,
+        "fallback_daily_volume": 0.1,
+        "explain_max_entries": 2000
+    },
+    "filters_return": {
+        "mode": "fast_sell",
+        "min_profit_pct": 0.06,
+        "min_profit_isk_total": 100000,
+        "price_depth_pct": 0.05,
+        "min_depth_units": 3,
+        "undercut_pct": 0.001,
+        "exclude_keywords": [
+            "skill book",
+            "encryption"
+        ],
+        "exclude_type_ids": [],
+        "min_market_history_volume": 0,
+        "ranking_metric": "profit_per_m3_per_day",
+        "competition_band_pct": 0.02,
+        "max_turnover_factor": 3.0,
+        "min_fill_probability": 0.05,
+        "min_instant_fill_ratio": 0.3,
+        "min_dest_buy_depth_units": 3,
+        "fallback_daily_volume": 0.1,
+        "explain_max_entries": 2000
+    },
+    "replay": {
+        "enabled": false,
+        "snapshot_path": "replay_snapshot.json",
+        "write_snapshot_after_fetch": true
+    },
+    "orderbook": {
+        "outlier_ratio": 0.25,
+        "outlier_window_levels": 5,
+        "min_top_level_units": 5,
+        "min_source_sell_price_isk": 200,
+        "min_units_in_window": 4,
+        "window_levels_for_units": 20
+    },
+    "portfolio": {
+        "max_item_share_of_budget": 0.5,
+        "max_items": 50,
+        "target_budget_utilization": 0.9,
+        "target_cargo_utilization": 0.9,
+        "cargo_fill_enabled": true,
+        "cargo_fill_trigger_gap": 0.2,
+        "cargo_fill_profit_floor_ratio": 0.9,
+        "cargo_fill_max_extra_items": 8,
+        "cargo_fill_max_item_share_of_budget": 0.75,
+        "cargo_fill_ranking_metric": "profit_per_m3_and_isk",
+        "cargo_fill_allow_topup_existing": true,
+        "cargo_fill_stop_util": 0.98,
+        "cargo_fill_min_profit_per_m3_ratio": 0.75,
+        "cargo_fill_min_profit_pct": 0.03,
+        "cargo_fill_min_profit_abs_isk": 1000000,
+        "instant_budget_ratio": 0.6,
+        "planned_budget_ratio": 0.4,
+        "instant_planned_budget_split": {
+            "enabled": true,
+            "instant": 0.6,
+            "planned_sell": 0.4
+        }
+    },
+    "route_profiles": {
+        "enabled": true,
+        "include_forward_pairs": true,
+        "include_reverse_pairs": true,
+        "max_hops": 99
+    },
+    "route_search": {
+        "enabled": true,
+        "max_routes": 5,
+        "ranking_metric": "profit_total",
+        "allow_all_structures_internal": true,
+        "allow_shipping_lanes": true,
+        "allowed_pairs": [
+            {
+                "from": "jita_44",
+                "to": "1st",
+                "shipping_lane_id": "itl_jita_1st"
+            },
+            {
+                "from": "1st",
+                "to": "jita_44",
+                "shipping_lane_id": "itl_1st_jita"
+            },
+            {
+                "from": "jita_44",
+                "to": "o4t",
+                "shipping_lane_id": "hwl_jita_o4t"
+            },
+            {
+                "from": "o4t",
+                "to": "jita_44",
+                "shipping_lane_id": "hwl_o4t_jita"
+            },
+            {
+                "from": "jita_44",
+                "to": "ualx-3",
+                "shipping_lane_id": "itl_jita_ualx"
+            },
+            {
+                "from": "ualx-3",
+                "to": "jita_44",
+                "shipping_lane_id": "itl_ualx_jita"
+            },
+            {
+                "from": "jita_44",
+                "to": "c-j6mt",
+                "shipping_lane_id": "itl_jita_c_j6mt"
+            },
+            {
+                "from": "c-j6mt",
+                "to": "jita_44",
+                "shipping_lane_id": "itl_c_j6mt_jita"
+            }
+        ]
+    },
+    "route_costs": {
+        "o4t_to_r-arkn": {
+            "fixed_isk": 0,
+            "isk_per_m3": 0
+        },
+        "r-arkn_to_ualx-3": {
+            "fixed_isk": 0,
+            "isk_per_m3": 0
+        },
+        "ualx-3_to_1st_taj_mahgoon": {
+            "fixed_isk": 0,
+            "isk_per_m3": 0
+        }
+    },
+    "shipping_defaults": {
+        "collateral_buffer_pct": 0.0
+    },
+    "shipping_lanes": {
+        "itl_jita_1st": {
+            "enabled": true,
+            "pricing_model": "itl_max",
+            "from_location_id": 60003760,
+            "to_structure_id": 1049588174021,
+            "from": "jita_44",
+            "to": "1st",
+            "per_m3_rate": 1200.0,
+            "full_load_reward": 415000000.0,
+            "minimum_reward": 5000000.0,
+            "collateral_rate": 0.0,
+            "max_volume_per_contract_m3": 350000,
+            "collateral_basis": "jita_split"
+        },
+        "itl_1st_jita": {
+            "enabled": true,
+            "pricing_model": "itl_max",
+            "from_structure_id": 1049588174021,
+            "to_location_id": 60003760,
+            "from": "1st",
+            "to": "jita_44",
+            "per_m3_rate": 1200.0,
+            "full_load_reward": 415000000.0,
+            "minimum_reward": 5000000.0,
+            "collateral_rate": 0.005,
+            "max_volume_per_contract_m3": 350000,
+            "collateral_basis": "jita_split"
+        },
+        "itl_jita_ualx": {
+            "enabled": true,
+            "pricing_model": "itl_max",
+            "from_location_id": 60003760,
+            "to_structure_id": 1046664001931,
+            "from": "jita_44",
+            "to": "ualx-3",
+            "per_m3_rate": 1100.0,
+            "full_load_reward": 380000000.0,
+            "minimum_reward": 5000000.0,
+            "collateral_rate": 0.0,
+            "max_volume_per_contract_m3": 350000,
+            "collateral_basis": "jita_split"
+        },
+        "itl_ualx_jita": {
+            "enabled": true,
+            "pricing_model": "itl_max",
+            "from_structure_id": 1046664001931,
+            "to_location_id": 60003760,
+            "from": "ualx-3",
+            "to": "jita_44",
+            "per_m3_rate": 1100.0,
+            "full_load_reward": 380000000.0,
+            "minimum_reward": 5000000.0,
+            "collateral_rate": 0.005,
+            "max_volume_per_contract_m3": 350000,
+            "collateral_basis": "jita_split"
+        },
+        "itl_jita_c_j6mt": {
+            "enabled": true,
+            "pricing_model": "itl_max",
+            "from_location_id": 60003760,
+            "to_structure_id": 1049588174021,
+            "from": "jita_44",
+            "to": "c-j6mt",
+            "per_m3_rate": 1200.0,
+            "full_load_reward": 415000000.0,
+            "minimum_reward": 5000000.0,
+            "collateral_rate": 0.0,
+            "max_volume_per_contract_m3": 350000,
+            "collateral_basis": "jita_split"
+        },
+        "itl_c_j6mt_jita": {
+            "enabled": true,
+            "pricing_model": "itl_max",
+            "from_structure_id": 1049588174021,
+            "to_location_id": 60003760,
+            "from": "c-j6mt",
+            "to": "jita_44",
+            "per_m3_rate": 1200.0,
+            "full_load_reward": 415000000.0,
+            "minimum_reward": 5000000.0,
+            "collateral_rate": 0.005,
+            "max_volume_per_contract_m3": 350000,
+            "collateral_basis": "jita_split"
+        },
+        "hwl_jita_o4t": {
+            "enabled": true,
+            "pricing_model": "hwl_volume_plus_value",
+            "from_location_id": 60003760,
+            "to_structure_id": 1040804972352,
+            "from": "jita_44",
+            "to": "o4t",
+            "per_m3_rate": 1250,
+            "additional_collateral_rate": 0.01,
+            "minimum_reward": 5000000,
+            "max_value": 340000000000,
+            "max_collateral_per_contract_isk": 340000000000,
+            "frequency": "daily",
+            "collateral_basis": "jita_split"
+        },
+        "hwl_o4t_jita": {
+            "enabled": true,
+            "pricing_model": "hwl_volume_plus_value",
+            "from_structure_id": 1040804972352,
+            "to_location_id": 60003760,
+            "from": "o4t",
+            "to": "jita_44",
+            "per_m3_rate": 1250,
+            "additional_collateral_rate": 0.01,
+            "minimum_reward": 5000000,
+            "max_value": 60000000000,
+            "max_collateral_per_contract_isk": 60000000000,
+            "frequency": "daily",
+            "collateral_basis": "jita_split"
+        },
+        "hwl_jita_ra": {
+            "enabled": true,
+            "pricing_model": "hwl_volume_plus_value",
+            "from_location_id": 60003760,
+            "to_structure_id": 1048663825563,
+            "from": "jita_44",
+            "to": "r-arkn",
+            "per_m3_rate": 1250,
+            "additional_collateral_rate": 0.01,
+            "minimum_reward": 5000000,
+            "max_collateral_per_contract_isk": 160000000000,
+            "frequency": "daily",
+            "collateral_basis": "jita_split"
+        },
+        "hwl_ra_jita": {
+            "enabled": true,
+            "pricing_model": "hwl_volume_plus_value",
+            "from_structure_id": 1048663825563,
+            "to_location_id": 60003760,
+            "from": "r-arkn",
+            "to": "jita_44",
+            "per_m3_rate": 1250,
+            "additional_collateral_rate": 0.01,
+            "minimum_reward": 5000000,
+            "max_collateral_per_contract_isk": 160000000000,
+            "frequency": "daily",
+            "collateral_basis": "jita_split"
+        },
+        "hwl_jita_ualx": {
+            "enabled": true,
+            "pricing_model": "hwl_volume_plus_value",
+            "from_location_id": 60003760,
+            "to_structure_id": 1046664001931,
+            "from": "jita_44",
+            "to": "ualx-3",
+            "per_m3_rate": 1250,
+            "additional_collateral_rate": 0.01,
+            "minimum_reward": 5000000,
+            "max_collateral_per_contract_isk": 60000000000,
+            "frequency": "daily",
+            "collateral_basis": "jita_split"
+        },
+        "hwl_ualx_jita": {
+            "enabled": true,
+            "pricing_model": "hwl_volume_plus_value",
+            "from_structure_id": 1046664001931,
+            "to_location_id": 60003760,
+            "from": "ualx-3",
+            "to": "jita_44",
+            "per_m3_rate": 1250,
+            "additional_collateral_rate": 0.01,
+            "minimum_reward": 5000000,
+            "max_collateral_per_contract_isk": 60000000000,
+            "frequency": "daily",
+            "collateral_basis": "jita_split"
+        }
+    },
+    "strategy": {
+        "mode": "balanced",
+        "strategy_modes": {
+            "max_profit": {
+                "description": "Pursue highest absolute profit, accept high risk/concentration",
+                "min_profit_pct_boost": 0.0,
+                "concentration_limit": 0.7,
+                "volatility_penalty_factor": 0.0,
+                "diversity_min_items": 3
+            },
+            "fast_turnover": {
+                "description": "Prefer high-volume, liquid items; low volatility",
+                "liquidity_min_score": 50,
+                "min_history_volume": 10000,
+                "concentration_limit": 0.4,
+                "volatility_penalty_factor": 2.0,
+                "diversity_min_items": 8
+            },
+            "balanced": {
+                "description": "Balanced profit, risk, and diversity (default)",
+                "concentration_limit": 0.5,
+                "volatility_penalty_factor": 1.0,
+                "diversity_min_items": 5
+            },
+            "conservative": {
+                "description": "Minimize risk via high diversity and liquidity focus",
+                "min_profit_pct": 0.1,
+                "liquidity_min_score": 60,
+                "concentration_limit": 0.35,
+                "volatility_penalty_factor": 3.0,
+                "diversity_min_items": 12
+            }
+        }
+    },
+    "route_chain": {
+        "enabled": true,
+        "legs": [
+            {
+                "id": 1040804972352,
+                "label": "O4T"
+            },
+            {
+                "id": 1048663825563,
+                "label": "R-ARKN"
+            },
+            {
+                "id": 1046664001931,
+                "label": "UALX-3"
+            },
+            {
+                "id": 1049588174021,
+                "label": "1st Taj Mahgoon"
+            }
+        ],
+        "fallback_to_non_chain_on_invalid_route": false,
+        "fallback_to_non_chain_on_middle_failure": false
+    },
+    "chain_leg_budget_util_min_pct": 0.1,
+    "chain_return_mode": "fast_sell",
+    "filters_chain_return": {
+        "min_profit_pct": 0.04,
+        "min_depth_units": 2,
+        "min_fill_probability": 0.01,
+        "min_instant_fill_ratio": 0.05
+    },
+    "forward_mode": "instant_first",
+    "strict_mode": {
+        "enabled": true,
+        "prefer_instant_first": true,
+        "disable_fallback_volume_for_planned": true,
+        "require_reference_price_for_planned": true,
+        "planned_max_expected_days_to_sell": 45,
+        "planned_min_sell_through_ratio_90d": 0.7,
+        "planned_min_avg_daily_volume_30d": 0.25,
+        "planned_min_avg_daily_volume_7d": 0.15,
+        "planned_soft_sell_markup_vs_ref": 0.2,
+        "planned_max_sell_markup_vs_ref": 0.4,
+        "planned_hard_max_sell_markup_vs_ref": 0.9,
+        "planned_reference_penalty_strength": 0.6,
+        "planned_max_units_cap": 3,
+        "planned_profit_floor_isk": 2000000,
+        "instant_min_profit_pct": 0.03,
+        "instant_min_profit_isk_total": 1000000,
+        "instant_min_fill_probability": 0.9,
+        "instant_min_depth_units": 3,
+        "fast_sell_allowed_for_capital_release": false,
+        "chain_leg_max_budget_share": 0.75
+    },
+    "route_wide_scan": {
+        "enabled": true,
+        "max_hops_forward": 99,
+        "max_hops_return": 99,
+        "prefer_nearer_exit_if_profit_close_pct": 0.1,
+        "cargo_penalty_per_extra_leg": 0.05,
+        "capital_lock_penalty_per_extra_leg": 0.07,
+        "allow_mixed_destinations_within_leg": true,
+        "score_weight_density": 0.36,
+        "score_weight_margin": 0.27,
+        "score_weight_absolute": 0.17,
+        "score_weight_liquidity": 0.12,
+        "score_weight_plausibility": 0.08
+    },
+    "planned_sell": {
+        "horizon_days": 90,
+        "history_days": 30
+    },
+    "filters_planned_sell_forward": {
+        "min_expected_profit_isk": 1000000,
+        "max_expected_days_to_sell": 120,
+        "min_sell_through_ratio_90d": 0.15,
+        "min_avg_daily_volume": 0.07,
+        "fallback_daily_volume": 0.2,
+        "fallback_volume_penalty": 0.35,
+        "fallback_fill_probability_cap": 0.2,
+        "fallback_max_units_cap": 5,
+        "fallback_require_high_profit_pct": 0.12,
+        "ranking_metric": "expected_profit_per_m3_90d"
+    },
+    "reference_price": {
+        "enabled": true,
+        "prefer": "average_price",
+        "fallback_to_adjusted": true,
+        "soft_sell_markup_vs_ref_planned": 0.35,
+        "max_sell_markup_vs_ref_planned": 0.65,
+        "hard_max_sell_markup_vs_ref_planned": 1.15,
+        "ranking_penalty_strength": 0.45
+    },
+    "route_mode": "roundtrip",
+    "capital_flow": {
+        "enabled": true,
+        "release_on_instant": true,
+        "release_on_fast_sell": false,
+        "fast_sell_release_ratio": 1.0
+    },
+    "reporting": {
+        "enable_filter_funnel": true,
+        "enable_rejection_tracking": true,
+        "enable_bottleneck_analysis": true,
+        "top_rejected_count": 10,
+        "detailed_summary": true
+    },
+    "diagnostics": {
+        "network_verbose": false
+    },
+    "global_excludes": {
+        "type_ids": [],
+        "name_keywords": []
+    }
+}

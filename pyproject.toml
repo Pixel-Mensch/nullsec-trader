@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nullsec-trader-tool"
+version = "0.1.0"
+description = "Nullsec EVE structure trading assistant with chain routing and strict mode"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.31,<3"
+]
+
+[project.scripts]
+nullsec-trader = "main:main"
+
+[tool.setuptools]
+py-modules = [
+  "main",
+  "nullsectrader",
+  "legacy_core",
+  "legacy_runtime",
+  "startup_helpers",
+  "candidate_engine",
+  "config_loader",
+  "execution_plan",
+  "fees",
+  "fee_engine",
+  "location_utils",
+  "market_fetch",
+  "market_normalization",
+  "models",
+  "portfolio_builder",
+  "route_costs",
+  "route_search",
+  "scoring",
+  "shipping",
+  "transport_allocation",
+]

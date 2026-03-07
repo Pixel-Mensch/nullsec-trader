@@ -1,0 +1,30 @@
+﻿# Python caches
+__pycache__/
+*.py[cod]
+
+# Packaging
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+.env
+.env.*
+
+# Local config and secrets
+config.local.json
+*.local.json
+
+# Local runtime cache/auth
+cache/
+
+# Runtime outputs
+market_snapshot.json
+replay_snapshot.json
+*_to_*_20??-??-??_??-??-??.csv
+*_top_candidates_*.txt
+*_chain_summary_*.txt
+execution_plan_*.txt
+route_leaderboard_*.txt
