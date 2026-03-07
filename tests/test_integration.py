@@ -221,3 +221,20 @@ def test_replay_main_smoke_runs_to_completion() -> None:
         except Exception:
             pass
 
+def test_replay_fixture_files_normalize_cleanly() -> None:
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fixture_dir = os.path.join(repo_root, "tests", "fixtures")
+    fixture_names = [
+        "replay_profitable_jita_o4t.json",
+        "replay_dead_market_jita_cj6.json",
+    ]
+    for fixture_name in fixture_names:
+        path = os.path.join(fixture_dir, fixture_name)
+        with open(path, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        normalized = nst.normalize_replay_snapshot(raw, 1040804972352, 1049588174021)
+        assert isinstance(normalized, dict)
+        assert "structures" in normalized
+        assert "60003760" in normalized["structures"]
+        assert normalized["type_cache"], f"fixture missing type cache: {fixture_name}"
+

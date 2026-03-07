@@ -281,3 +281,111 @@ def test_route_wide_score_not_pure_cargo_density() -> None:
     s2 = nst._route_adjusted_candidate_score(c_high_margin, hop_count=1, scan_cfg=scan_cfg)
     assert s2 > s1
 
+def test_planned_sell_rejects_when_queue_ahead_is_too_heavy() -> None:
+    esi = _FakeESI(history_30=30, history_7=10, reference_price=100.0)
+    source_orders = [{"type_id": 42, "is_buy_order": False, "price": 90.0, "volume_remain": 500}]
+    dest_orders = [
+        {"type_id": 42, "is_buy_order": False, "price": 130.0, "volume_remain": 500},
+        {"type_id": 42, "is_buy_order": False, "price": 130.1, "volume_remain": 500},
+    ]
+    filters = _strict_filters()
+    filters["strict_mode"]["enabled"] = False
+    filters["strict_require_reference_price_for_planned"] = False
+    filters["strict_disable_fallback_volume_for_planned"] = False
+    explain = {}
+    candidates = nst.compute_candidates(
+        esi=esi,
+        source_orders=source_orders,
+        dest_orders=dest_orders,
+        fees={"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0},
+        filters=filters,
+        dest_structure_id=123,
+        explain=explain,
+    )
+    assert candidates == []
+    assert int(explain.get("reason_counts", {}).get("planned_queue_ahead_too_heavy", 0)) >= 1
+
+def test_build_portfolio_can_choose_planned_over_weaker_instant() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    portfolio_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 1,
+        "max_liquidation_days_per_position": 45.0,
+        "max_share_of_estimated_demand_per_position": 0.5,
+    }
+    instant = nst.TradeCandidate(
+        type_id=1,
+        name="instant",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=110.0,
+        max_units=1,
+        profit_per_unit=10.0,
+        profit_pct=0.10,
+        instant=True,
+        dest_buy_depth_units=10,
+        fill_probability=1.0,
+        expected_realized_profit_90d=10.0,
+        expected_realized_profit_per_m3_90d=10.0,
+        overall_confidence=1.0,
+    )
+    planned = nst.TradeCandidate(
+        type_id=2,
+        name="planned",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=220.0,
+        max_units=1,
+        profit_per_unit=120.0,
+        profit_pct=1.20,
+        instant=False,
+        mode="planned_sell",
+        expected_days_to_sell=10.0,
+        expected_units_sold_90d=0.8,
+        expected_units_unsold_90d=0.2,
+        expected_realized_profit_90d=96.0,
+        expected_realized_profit_per_m3_90d=96.0,
+        estimated_sellable_units_90d=10.0,
+        exit_confidence=0.8,
+        liquidity_confidence=0.8,
+        overall_confidence=0.8,
+    )
+    picks, _, _, _ = nst.build_portfolio([instant, planned], 1_000.0, 100.0, fees, filters, portfolio_cfg)
+    assert len(picks) == 1
+    assert int(picks[0]["type_id"]) == 2
+
+def test_build_portfolio_caps_single_position_by_estimated_demand() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    portfolio_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 3,
+        "max_liquidation_days_per_position": 45.0,
+        "max_share_of_estimated_demand_per_position": 0.5,
+    }
+    thin_candidate = nst.TradeCandidate(
+        type_id=3,
+        name="thin-demand",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=180.0,
+        max_units=100,
+        profit_per_unit=80.0,
+        profit_pct=0.80,
+        instant=False,
+        mode="planned_sell",
+        expected_days_to_sell=20.0,
+        expected_units_sold_90d=4.0,
+        expected_units_unsold_90d=1.0,
+        expected_realized_profit_90d=320.0,
+        expected_realized_profit_per_m3_90d=64.0,
+        estimated_sellable_units_90d=10.0,
+        exit_confidence=0.7,
+        liquidity_confidence=0.7,
+        overall_confidence=0.7,
+    )
+    picks, _, _, _ = nst.build_portfolio([thin_candidate], 1_000_000.0, 100_000.0, fees, filters, portfolio_cfg)
+    assert len(picks) == 1
+    assert int(picks[0]["qty"]) <= 5
+

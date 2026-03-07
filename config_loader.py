@@ -909,6 +909,9 @@ def validate_config(cfg: dict) -> dict:
                 err(f"shipping_lanes.{lid}.frequency must be a string")
 
     route_search_cfg = cfg.get("route_search", {})
+    zero_transport_allow = cfg.get("allow_zero_transport_cost_for_routes", [])
+    if zero_transport_allow is not None and not isinstance(zero_transport_allow, list):
+        err("allow_zero_transport_cost_for_routes must be a list")
     if route_search_cfg is not None and not isinstance(route_search_cfg, dict):
         err("route_search must be an object")
     elif isinstance(route_search_cfg, dict):
@@ -926,6 +929,11 @@ def validate_config(cfg: dict) -> dict:
                 err("route_search.max_routes must be a positive integer")
         if "allowed_pairs" in route_search_cfg and not isinstance(route_search_cfg.get("allowed_pairs"), list):
             err("route_search.allowed_pairs must be a list")
+        if (
+            "allow_zero_transport_cost_for_routes" in route_search_cfg
+            and not isinstance(route_search_cfg.get("allow_zero_transport_cost_for_routes"), list)
+        ):
+            err("route_search.allow_zero_transport_cost_for_routes must be a list")
 
     allowed_modes = {"instant", "fast_sell", "planned_sell"}
     for fkey in ("filters_forward", "filters_return"):

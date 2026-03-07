@@ -5,6 +5,84 @@ from shipping import (
 from location_utils import label_to_slug, normalize_location_label
 
 
+def _confidence_to_score(label: str) -> float:
+    txt = str(label or "").strip().lower()
+    if txt in ("blocked", "none"):
+        return 0.0
+    if txt in ("exception", "low"):
+        return 0.55 if txt == "exception" else 0.35
+    return 1.0
+
+
+def _route_pick_expected_profit(pick: dict) -> float:
+    return float(pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0)
+
+
+def summarize_route_for_ranking(route: dict) -> dict:
+    picks = list(route.get("picks", []) or [])
+    expected_realized_profit = float(route.get("expected_realized_profit_total", 0.0) or 0.0)
+    if expected_realized_profit <= 0.0 and picks:
+        expected_realized_profit = sum(_route_pick_expected_profit(p) for p in picks)
+    full_sell_profit = float(route.get("full_sell_profit_total", route.get("profit_total", 0.0)) or 0.0)
+    expected_days = [
+        float(p.get("expected_days_to_sell", 0.0) or 0.0)
+        for p in picks
+        if float(p.get("expected_days_to_sell", 0.0) or 0.0) > 0.0
+    ]
+    avg_days = (sum(expected_days) / len(expected_days)) if expected_days else 0.0
+    pick_confidences = [
+        max(0.0, min(1.0, float(p.get("overall_confidence", p.get("strict_confidence_score", p.get("fill_probability", 0.0))) or 0.0)))
+        for p in picks
+    ]
+    avg_pick_conf = (sum(pick_confidences) / len(pick_confidences)) if pick_confidences else 0.0
+    transport_conf = _confidence_to_score(route.get("cost_model_confidence", "normal"))
+    route_blocked = bool(route.get("route_blocked_due_to_transport", False))
+    prune_reason = str(route.get("route_prune_reason", "") or "")
+    actionable = bool(not route_blocked and picks)
+    profits = sorted([max(0.0, _route_pick_expected_profit(p)) for p in picks], reverse=True)
+    total_expected = max(1e-9, float(expected_realized_profit))
+    top_share = (profits[0] / total_expected) if profits else 0.0
+    concentration_penalty = max(0.0, top_share - 0.40)
+    liquidation_speed = 1.0 / (1.0 + (avg_days / 45.0)) if avg_days > 0.0 else 1.0
+    route_confidence = max(0.0, min(1.0, min(avg_pick_conf if picks else 0.0, transport_conf)))
+    capital_lock_risk = max(0.0, min(1.0, (avg_days / 90.0) + concentration_penalty))
+    risk_adjusted_score = (
+        float(expected_realized_profit)
+        * max(0.0, route_confidence)
+        * max(0.0, liquidation_speed)
+        * max(0.0, 1.0 - (concentration_penalty * 0.75))
+        * max(0.0, transport_conf)
+    )
+    if route_blocked:
+        risk_adjusted_score = -1.0
+    return {
+        "actionable": bool(actionable),
+        "route_confidence": float(route_confidence),
+        "transport_confidence": float(transport_conf),
+        "total_expected_realized_profit": float(expected_realized_profit),
+        "total_full_sell_profit": float(full_sell_profit),
+        "average_expected_days_to_sell": float(avg_days),
+        "capital_lock_risk": float(capital_lock_risk),
+        "concentration_penalty": float(concentration_penalty),
+        "risk_adjusted_score": float(risk_adjusted_score),
+        "route_prune_reason": prune_reason,
+    }
+
+
+def route_ranking_value(route: dict, metric: str) -> float:
+    summary = summarize_route_for_ranking(route)
+    m = str(metric or "risk_adjusted_expected_profit").strip().lower()
+    if m in ("profit_total", "full_sell_profit"):
+        return float(summary["total_full_sell_profit"])
+    if m in ("expected_profit", "expected_realized_profit", "expected_realized_profit_90d"):
+        return float(summary["total_expected_realized_profit"])
+    if m in ("confidence", "route_confidence"):
+        return float(summary["route_confidence"])
+    if m in ("liquidation_speed", "speed"):
+        return 1.0 / max(1e-9, 1.0 + float(summary["average_expected_days_to_sell"]))
+    return float(summary["risk_adjusted_score"])
+
+
 def _resolve_route_search_cfg(cfg: dict) -> dict:
     raw = cfg.get("route_search", {})
     if not isinstance(raw, dict):
@@ -12,7 +90,7 @@ def _resolve_route_search_cfg(cfg: dict) -> dict:
     return {
         "enabled": bool(raw.get("enabled", False)),
         "max_routes": max(1, int(raw.get("max_routes", 10) or 10)),
-        "ranking_metric": str(raw.get("ranking_metric", "profit_total") or "profit_total").strip().lower(),
+        "ranking_metric": str(raw.get("ranking_metric", "risk_adjusted_expected_profit") or "risk_adjusted_expected_profit").strip().lower(),
         "allow_all_structures_internal": bool(raw.get("allow_all_structures_internal", True)),
         "allow_shipping_lanes": bool(raw.get("allow_shipping_lanes", True)),
         "allowed_pairs": list(raw.get("allowed_pairs", [])) if isinstance(raw.get("allowed_pairs", []), list) else [],

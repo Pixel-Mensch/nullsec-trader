@@ -1,0 +1,1583 @@
+from __future__ import annotations
+
+import os
+import sys
+import time
+
+from candidate_engine import compute_candidates, compute_route_wide_candidates_for_source
+from config_loader import (
+    _prepare_trade_filters,
+    _resolve_strict_mode_cfg,
+    _resolve_structure_region_map,
+    ensure_dirs,
+    fail_on_invalid_config,
+    load_config,
+    load_json,
+    save_json,
+    validate_config,
+)
+from execution_plan import write_execution_plan_profiles, write_route_leaderboard
+from location_utils import label_to_slug, normalize_location_label
+from market_fetch import _fetch_orders_for_node
+from market_normalization import make_snapshot_payload, normalize_replay_snapshot
+from models import FilterFunnel, TradeCandidate
+from portfolio_builder import (
+    build_portfolio,
+    choose_portfolio_for_route,
+    sort_picks_for_output,
+    try_cargo_fill,
+)
+from route_search import _resolve_route_search_cfg, build_route_search_profiles
+from shipping import apply_route_costs_and_prune, build_jita_split_price_map, build_route_context
+from startup_helpers import (
+    _build_structure_context,
+    _node_source_dest_info,
+    _normalize_route_mode,
+    _resolve_chain_runtime,
+    _resolve_node_catalog,
+    _resolve_primary_structure_ids,
+)
+
+from runtime_clients import ESIClient, ReplayESIClient
+from runtime_common import (
+    CONFIG_PATH,
+    HTTP_CACHE_PATH,
+    TYPE_CACHE_PATH,
+    _has_live_esi_credentials,
+    die,
+    input_with_default,
+    parse_cli_args,
+    parse_isk,
+)
+from runtime_reports import (
+    fmt_isk,
+    pick_total_fees_taxes,
+    write_chain_summary,
+    write_csv,
+    write_enhanced_summary,
+    write_execution_plan_chain,
+    write_top_candidate_dump,
+)
+
+
+def run_snapshot_only(cfg: dict, structure_ids: list[int], snapshot_out: str | None = None) -> None:
+    if not _has_live_esi_credentials(cfg):
+        die("Fehlende ESI-Credentials. Setze ESI_CLIENT_ID/ESI_CLIENT_SECRET oder nutze config.local.json.")
+    esi = ESIClient(cfg)
+    wanted = [int(s) for s in structure_ids]
+    print("Snapshot-Only Modus aktiv.")
+    print("Fuehre ESI-Preflight durch...")
+    for sid in wanted:
+        esi.preflight_structure_request(int(sid))
+    structure_orders_by_id: dict[int, list[dict]] = {}
+    print("Lade Marktorders...")
+    for sid in wanted:
+        print(f"  -> Lade Structure ({sid})...")
+        orders = esi.fetch_structure_orders(int(sid))
+        structure_orders_by_id[int(sid)] = orders if isinstance(orders, list) else []
+        print(f"    {len(structure_orders_by_id[int(sid)])} Orders geladen")
+
+    merged_type_cache = {}
+    cached_types_from_disk = load_json(TYPE_CACHE_PATH, {})
+    live_type_cache = getattr(esi, "type_cache", {})
+    if isinstance(cached_types_from_disk, dict):
+        merged_type_cache.update(cached_types_from_disk)
+    if isinstance(live_type_cache, dict):
+        merged_type_cache.update(live_type_cache)
+
+    payload = make_snapshot_payload(structure_orders_by_id, merged_type_cache)
+    out_dir = os.path.dirname(__file__)
+    if snapshot_out:
+        out_path = snapshot_out
+        if not os.path.isabs(out_path):
+            out_path = os.path.join(out_dir, out_path)
+    else:
+        ts = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+        out_path = os.path.join(out_dir, f"snapshot_{ts}.json")
+    save_json(out_path, payload)
+    print(f"Snapshot geschrieben: {out_path}")
+
+
+def evaluate_leg_disabled(leg_result: dict, budget_util_min_pct: float) -> tuple[bool, str]:
+    if int(leg_result.get("items_count", 0)) <= 0:
+        return True, "no_items"
+    if float(leg_result.get("budget_util_pct", 0.0)) < float(budget_util_min_pct):
+        return True, f"low_budget_util<{budget_util_min_pct:.2f}%"
+    return False, ""
+
+
+def _resolve_capital_flow_cfg(cfg: dict) -> dict:
+    cap = cfg.get("capital_flow", {})
+    if not isinstance(cap, dict):
+        cap = {}
+    strict_cfg = cfg.get("strict_mode", {})
+    strict_enabled = isinstance(strict_cfg, dict) and bool(strict_cfg.get("enabled", False))
+    strict_release_fast = bool(strict_cfg.get("fast_sell_allowed_for_capital_release", False)) if strict_enabled else None
+    release_fast_default = bool(cap.get("release_on_fast_sell", False))
+    release_fast = strict_release_fast if strict_release_fast is not None else release_fast_default
+    return {
+        "enabled": bool(cap.get("enabled", False)),
+        "release_on_instant": bool(cap.get("release_on_instant", True)),
+        "release_on_fast_sell": bool(release_fast),
+        "fast_sell_release_ratio": max(0.0, min(1.0, float(cap.get("fast_sell_release_ratio", 1.0)))),
+    }
+
+
+def _resolve_budget_split_cfg(port_cfg: dict) -> dict:
+    if "instant_budget_ratio" in port_cfg or "planned_budget_ratio" in port_cfg:
+        inst = float(port_cfg.get("instant_budget_ratio", 1.0) or 1.0)
+        planned = float(port_cfg.get("planned_budget_ratio", 0.0) or 0.0)
+        total = inst + planned
+        if total <= 0:
+            return {"instant": 1.0, "planned_sell": 0.0, "enabled": False}
+        if abs(total - 1.0) > 1e-6:
+            inst = inst / total
+            planned = planned / total
+        return {"instant": max(0.0, inst), "planned_sell": max(0.0, planned), "enabled": True}
+
+    raw = port_cfg.get("instant_planned_budget_split", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    inst = float(raw.get("instant", 1.0) or 1.0)
+    planned = float(raw.get("planned_sell", 0.0) or 0.0)
+    total = inst + planned
+    if total <= 0:
+        return {"instant": 1.0, "planned_sell": 0.0, "enabled": False}
+    if abs(total - 1.0) > 1e-6:
+        inst = inst / total
+        planned = planned / total
+    enabled = bool(raw.get("enabled", False))
+    return {"instant": max(0.0, inst), "planned_sell": max(0.0, planned), "enabled": enabled}
+
+
+def _compute_chain_leg_budget(
+    capital_available: float,
+    start_budget_isk: float,
+    cap_cfg: dict,
+    strict_cfg: dict,
+) -> tuple[float, bool]:
+    base_budget = float(capital_available) if bool(cap_cfg.get("enabled", False)) else float(start_budget_isk)
+    strict_enabled = bool(strict_cfg.get("enabled", False))
+    max_share = float(strict_cfg.get("chain_leg_max_budget_share", 1.0)) if strict_enabled else 1.0
+    if strict_enabled and 0.0 < max_share < 1.0:
+        cap_budget = float(capital_available) * max_share if bool(cap_cfg.get("enabled", False)) else float(start_budget_isk) * max_share
+        capped_budget = min(base_budget, cap_budget)
+        return float(max(0.0, capped_budget)), bool(capped_budget + 1e-6 < base_budget)
+    return float(max(0.0, base_budget)), False
+
+
+def _apply_capital_flow_to_leg(
+    leg: dict,
+    mode: str,
+    capital_before: float,
+    cap_cfg: dict,
+    current_leg_index: int | None = None,
+    pending_releases: dict[int, float] | None = None,
+) -> float:
+    enabled = bool(cap_cfg.get("enabled", False))
+    spent = float(leg.get("isk_used", 0.0))
+    released = 0.0
+    release_rule = "none"
+    if enabled:
+        picks = leg.get("picks", []) or []
+        release_instant = bool(cap_cfg.get("release_on_instant", True))
+        release_fast = bool(cap_cfg.get("release_on_fast_sell", False))
+        fast_ratio = float(cap_cfg.get("fast_sell_release_ratio", 1.0))
+
+        if pending_releases is not None and current_leg_index is not None:
+            for p in picks:
+                p_mode = str(p.get("mode", "")).strip().lower()
+                if not p_mode:
+                    p_mode = "instant" if bool(p.get("instant", False)) else str(mode).lower()
+                rev = float(p.get("revenue_net", 0.0) or 0.0)
+                if p_mode == "instant" and release_instant:
+                    ridx = int(p.get("release_leg_index", current_leg_index))
+                    pending_releases[ridx] = float(pending_releases.get(ridx, 0.0)) + rev
+                elif p_mode == "fast_sell" and release_fast:
+                    ridx = int(p.get("release_leg_index", current_leg_index))
+                    pending_releases[ridx] = float(pending_releases.get(ridx, 0.0)) + (rev * fast_ratio)
+            released = float(pending_releases.pop(int(current_leg_index), 0.0))
+            if released > 0.0:
+                release_rule = "route_exit_schedule"
+        else:
+            for p in picks:
+                p_mode = str(p.get("mode", "")).strip().lower()
+                if not p_mode:
+                    p_mode = "instant" if bool(p.get("instant", False)) else str(mode).lower()
+                rev = float(p.get("revenue_net", 0.0) or 0.0)
+                if p_mode == "instant" and release_instant:
+                    released += rev
+                elif p_mode == "fast_sell" and release_fast:
+                    released += rev * fast_ratio
+            if released > 0.0:
+                parts = []
+                if release_instant:
+                    parts.append("instant_revenue_net")
+                if release_fast:
+                    parts.append(f"fast_sell_revenue_net_x{fast_ratio:.2f}")
+                release_rule = "+".join(parts) if parts else "none"
+        capital_after = max(0.0, float(capital_before) - spent + released)
+    else:
+        capital_after = float(capital_before)
+
+    leg["capital_flow_enabled"] = bool(enabled)
+    leg["capital_available_before"] = float(capital_before)
+    leg["capital_committed"] = float(spent)
+    leg["capital_released"] = float(released)
+    leg["capital_available_after"] = float(capital_after)
+    leg["capital_release_rule"] = release_rule
+    if pending_releases is not None:
+        leg["capital_locked_future_release"] = float(sum(float(v) for v in pending_releases.values()))
+    return float(capital_after)
+
+
+def build_adjacent_pairs(chain_nodes: list[dict], reverse: bool = False) -> list[tuple[dict, dict]]:
+    nodes = list(chain_nodes)
+    if reverse:
+        nodes = list(reversed(nodes))
+    return [(nodes[i], nodes[i + 1]) for i in range(max(0, len(nodes) - 1))]
+
+
+def build_route_wide_pairs(chain_nodes: list[dict], reverse: bool = False, max_hops: int = 99) -> list[dict]:
+    nodes = list(chain_nodes)
+    if reverse:
+        nodes = list(reversed(nodes))
+    out: list[dict] = []
+    n = len(nodes)
+    hop_cap = max(1, int(max_hops))
+    for src_idx in range(n - 1):
+        src = nodes[src_idx]
+        for dst_idx in range(src_idx + 1, n):
+            dst = nodes[dst_idx]
+            hop_count = int(dst_idx - src_idx)
+            if hop_count > hop_cap:
+                break
+            out.append(
+                {
+                    "src_idx": int(src_idx),
+                    "dst_idx": int(dst_idx),
+                    "src_id": int(src["id"]),
+                    "dst_id": int(dst["id"]),
+                    "src_label": str(src["label"]),
+                    "dst_label": str(dst["label"]),
+                    "hop_count": int(hop_count),
+                }
+            )
+    return out
+
+
+def _resolve_route_profiles_cfg(cfg: dict) -> dict:
+    raw = cfg.get("route_profiles", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "enabled": bool(raw.get("enabled", True)),
+        "include_forward_pairs": bool(raw.get("include_forward_pairs", True)),
+        "include_reverse_pairs": bool(raw.get("include_reverse_pairs", True)),
+        "max_hops": int(raw.get("max_hops", 99)),
+        "routes": list(raw.get("routes", [])) if isinstance(raw.get("routes", []), list) else [],
+    }
+
+
+def build_route_profiles(chain_nodes: list[dict], cfg: dict) -> list[dict]:
+    rp_cfg = _resolve_route_profiles_cfg(cfg)
+    if not bool(rp_cfg.get("enabled", True)):
+        return []
+    explicit = rp_cfg.get("routes", [])
+    profiles: list[dict] = []
+    if explicit:
+        for i, route in enumerate(explicit, start=1):
+            if not isinstance(route, dict):
+                continue
+            src_raw = str(route.get("from", "")).strip()
+            dst_raw = str(route.get("to", "")).strip()
+            if not src_raw or not dst_raw:
+                continue
+            profiles.append(
+                {
+                    "id": str(route.get("id", f"profile_{i}")),
+                    "from": src_raw,
+                    "to": dst_raw,
+                    "mode": str(route.get("mode", "") or ""),
+                    "shipping_lane_id": str(route.get("shipping_lane_id", route.get("shipping_lane", "")) or ""),
+                }
+            )
+        return profiles
+
+    nodes = list(chain_nodes or [])
+    if len(nodes) < 2:
+        return profiles
+    max_hops = max(1, int(rp_cfg.get("max_hops", 99)))
+    include_fwd = bool(rp_cfg.get("include_forward_pairs", True))
+    include_rev = bool(rp_cfg.get("include_reverse_pairs", True))
+    for i in range(len(nodes) - 1):
+        src = nodes[i]
+        for j in range(i + 1, len(nodes)):
+            hop_count = int(j - i)
+            if hop_count > max_hops:
+                break
+            dst = nodes[j]
+            if include_fwd:
+                profiles.append(
+                    {
+                        "id": f"{label_to_slug(str(src['label']))}_to_{label_to_slug(str(dst['label']))}",
+                        "from": str(src["label"]),
+                        "to": str(dst["label"]),
+                        "mode": "",
+                        "shipping_lane_id": "",
+                    }
+                )
+            if include_rev:
+                profiles.append(
+                    {
+                        "id": f"{label_to_slug(str(dst['label']))}_to_{label_to_slug(str(src['label']))}",
+                        "from": str(dst["label"]),
+                        "to": str(src["label"]),
+                        "mode": "",
+                        "shipping_lane_id": "",
+                    }
+                )
+    seen = set()
+    out: list[dict] = []
+    for p in profiles:
+        key = (normalize_location_label(p.get("from", "")), normalize_location_label(p.get("to", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def enforce_route_destination(picks: list[dict], expected_dest_label: str) -> list[dict]:
+    expected = normalize_location_label(expected_dest_label)
+    out: list[dict] = []
+    for p in list(picks or []):
+        sell_at_raw = str(p.get("sell_at", "") or "").strip()
+        if not sell_at_raw:
+            out.append(p)
+            continue
+        if normalize_location_label(sell_at_raw) == expected:
+            out.append(p)
+    return out
+
+
+def _resolve_route_wide_scan_cfg(cfg: dict) -> dict:
+    rw = cfg.get("route_wide_scan", {})
+    if not isinstance(rw, dict):
+        rw = {}
+    return {
+        "enabled": bool(rw.get("enabled", False)),
+        "max_hops_forward": int(rw.get("max_hops_forward", 99)),
+        "max_hops_return": int(rw.get("max_hops_return", 99)),
+        "prefer_nearer_exit_if_profit_close_pct": float(rw.get("prefer_nearer_exit_if_profit_close_pct", 0.10)),
+        "cargo_penalty_per_extra_leg": float(rw.get("cargo_penalty_per_extra_leg", 0.05)),
+        "capital_lock_penalty_per_extra_leg": float(rw.get("capital_lock_penalty_per_extra_leg", 0.07)),
+        "allow_mixed_destinations_within_leg": bool(rw.get("allow_mixed_destinations_within_leg", True)),
+        "score_weight_density": float(rw.get("score_weight_density", 0.36)),
+        "score_weight_margin": float(rw.get("score_weight_margin", 0.27)),
+        "score_weight_absolute": float(rw.get("score_weight_absolute", 0.17)),
+        "score_weight_liquidity": float(rw.get("score_weight_liquidity", 0.12)),
+        "score_weight_plausibility": float(rw.get("score_weight_plausibility", 0.08)),
+    }
+
+
+def make_skipped_chain_leg(
+    src_label: str,
+    dst_label: str,
+    reason: str,
+    mode: str,
+    filters_used: dict,
+    budget_isk: float,
+    cargo_m3: float,
+) -> dict:
+    return {
+        "route_label": f"{src_label} -> {dst_label}",
+        "leg_disabled": True,
+        "leg_disabled_reason": reason,
+        "mode": mode,
+        "selected_mode": "skipped",
+        "filters_used": filters_used,
+        "total_candidates": 0,
+        "passed_all_filters": 0,
+        "why_out_summary": {},
+        "items_count": 0,
+        "m3_used": 0.0,
+        "cargo_total": cargo_m3,
+        "cargo_util_pct": 0.0,
+        "isk_used": 0.0,
+        "budget_total": budget_isk,
+        "budget_util_pct": 0.0,
+        "profit_total": 0.0,
+        "picks": [],
+    }
+
+
+def _choose_portfolio_from_candidates_only(
+    route_label: str,
+    candidates: list[TradeCandidate],
+    filters_used: dict,
+    budget_isk: float,
+    cargo_m3: float,
+    fees: dict,
+    port_cfg: dict,
+    cfg: dict,
+) -> tuple[list[dict], float, float, float, str]:
+    def build_from_candidates(cands, f_used):
+        inst = [c for c in cands if bool(getattr(c, "instant", False))]
+        if inst:
+            p, c, pr, m = build_portfolio(inst, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
+            md = "instant"
+        else:
+            p, c, pr, m = build_portfolio(cands, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
+            md = "fallback"
+        p.sort(key=lambda x: x["profit"], reverse=True)
+        return p, c, pr, m, md
+
+    picks, cost, profit, m3, mode = build_from_candidates(candidates, filters_used)
+    cargo_fill_enabled = bool(port_cfg.get("cargo_fill_enabled", False))
+    cargo_fill_trigger_gap = float(port_cfg.get("cargo_fill_trigger_gap", 0.20))
+    cargo_fill_profit_floor_ratio = float(port_cfg.get("cargo_fill_profit_floor_ratio", 0.90))
+    target_cargo_util = float(port_cfg.get("target_cargo_utilization", 0.0))
+    cargo_util = (m3 / cargo_m3) if cargo_m3 > 0 else 1.0
+    cargo_gap = target_cargo_util - cargo_util
+    if (
+        cargo_fill_enabled
+        and target_cargo_util > 0.0
+        and cargo_m3 > 0.0
+        and cargo_gap >= cargo_fill_trigger_gap
+        and cost < budget_isk
+        and m3 < cargo_m3
+    ):
+        print(
+            f"    Hinweis: {route_label} nutzt nur {cargo_util*100:.1f}% Cargo "
+            f"(Ziel {target_cargo_util*100:.1f}%), starte Cargo-Fill..."
+        )
+        f_picks, f_cost, f_profit, f_m3, added = try_cargo_fill(
+            picks, candidates, budget_isk, cargo_m3, fees, filters_used, port_cfg
+        )
+        min_allowed_profit = float(profit) * max(0.0, cargo_fill_profit_floor_ratio)
+        if added > 0 and f_m3 > (m3 + 1e-6) and f_profit >= min_allowed_profit:
+            print("    Cargo-Fill uebernommen.")
+            picks, cost, profit, m3 = f_picks, f_cost, f_profit, f_m3
+        else:
+            print("    Cargo-Fill verworfen.")
+    return picks, cost, profit, m3, mode
+
+
+def _finalize_route_result(
+    *,
+    route_tag: str,
+    route_label: str,
+    source_id: int,
+    dest_id: int,
+    source_label: str,
+    dest_label: str,
+    filters_used: dict,
+    mode: str,
+    selected_mode: str,
+    candidates: list[TradeCandidate],
+    picks: list[dict],
+    budget_isk: float,
+    cargo_m3: float,
+    transport_summary: dict,
+    timestamp: str,
+    out_dir: str,
+    explain: dict,
+    source_node_meta: dict | None = None,
+    dest_node_meta: dict | None = None,
+    funnel: FilterFunnel | None = None,
+) -> dict:
+    warn_msg = str(transport_summary.get("cost_model_warning", "") or "")
+    if bool(transport_summary.get("route_blocked_due_to_transport", False)):
+        if warn_msg:
+            print(f"    BLOCKED: {route_label}: {warn_msg}")
+    elif bool(transport_summary.get("transport_cost_assumed_zero", False)) and warn_msg:
+        print(f"    WARN: {route_label}: {warn_msg}")
+
+    total_cost = sum(float(p.get("cost", 0.0)) for p in picks)
+    total_revenue = sum(float(p.get("revenue_net", 0.0)) for p in picks)
+    total_profit = sum(float(p.get("profit", 0.0)) for p in picks)
+    total_fees_taxes = sum(pick_total_fees_taxes(p) for p in picks)
+    total_m3 = sum(float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0)) for p in picks)
+    sort_picks_for_output(picks, filters_used)
+
+    csv_name = f"{label_to_slug(source_label)}_to_{label_to_slug(dest_label)}_{timestamp}.csv"
+    csv_path = os.path.join(out_dir, csv_name)
+    write_csv(csv_path, picks)
+
+    dump_name = f"{route_tag}_top_candidates_{timestamp}.txt"
+    dump_path = os.path.join(out_dir, dump_name)
+    write_top_candidate_dump(dump_path, candidates, route_label, filters_used, explain)
+
+    reason_counts = dict(explain.get("reason_counts", {}))
+    passed_all = int(reason_counts.get("passed_all_filters", 0))
+    budget_util_pct = (float(total_cost) / float(budget_isk) * 100.0) if float(budget_isk) > 0 else 0.0
+    cargo_util_pct = (float(total_m3) / float(cargo_m3) * 100.0) if float(cargo_m3) > 0 else 0.0
+    budget_left_reason = ""
+    if float(budget_isk) > 0 and (float(budget_isk) - float(total_cost)) / float(budget_isk) >= 0.05:
+        budget_left_reason = "Keine weiteren Picks erfuellen Profit-Floors nach Gebuehren und Routenkosten."
+
+    expected_realized_total = sum(
+        float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", 0.0)) or 0.0) for p in picks
+    )
+    full_sell_total = sum(float(p.get("gross_profit_if_full_sell", p.get("profit", 0.0)) or 0.0) for p in picks)
+    route_blocked_due_to_transport = bool(transport_summary.get("route_blocked_due_to_transport", False))
+    route_actionable = bool(not route_blocked_due_to_transport and picks)
+    route_prune_reason = str(transport_summary.get("route_prune_reason", "")) or ("no_picks" if not picks else "")
+    return {
+        "route_tag": route_tag,
+        "route_label": route_label,
+        "source_structure_id": int(source_id),
+        "dest_structure_id": int(dest_id),
+        "source_node_info": _node_source_dest_info(
+            source_node_meta or {"label": source_label, "id": int(source_id), "kind": "structure", "structure_id": int(source_id)}
+        ),
+        "dest_node_info": _node_source_dest_info(
+            dest_node_meta or {"label": dest_label, "id": int(dest_id), "kind": "structure", "structure_id": int(dest_id)}
+        ),
+        "source_label": source_label,
+        "dest_label": dest_label,
+        "filters_used": filters_used,
+        "mode": mode,
+        "selected_mode": selected_mode,
+        "candidates": candidates,
+        "picks": picks,
+        "csv_path": csv_path,
+        "dump_path": dump_path,
+        "items_count": len(picks),
+        "m3_used": float(total_m3),
+        "cargo_total": float(cargo_m3),
+        "cargo_util_pct": float(cargo_util_pct),
+        "isk_used": float(total_cost),
+        "net_revenue_total": float(total_revenue),
+        "total_fees_taxes": float(total_fees_taxes),
+        "budget_total": float(budget_isk),
+        "budget_util_pct": float(budget_util_pct),
+        "budget_left_reason": budget_left_reason,
+        "profit_total": float(total_profit),
+        "expected_realized_profit_total": float(expected_realized_total),
+        "full_sell_profit_total": float(full_sell_total),
+        "total_shipping_cost": float(transport_summary.get("total_shipping_cost", 0.0)),
+        "shipping_cost_total": float(transport_summary.get("total_shipping_cost", 0.0)),
+        "total_route_cost": float(transport_summary.get("total_route_cost", 0.0)),
+        "total_transport_cost": float(transport_summary.get("total_transport_cost", 0.0)),
+        "shipping_lane_id": str(transport_summary.get("shipping_lane_id", "")),
+        "shipping_pricing_model": str(transport_summary.get("shipping_pricing_model", "")),
+        "shipping_provider": str(transport_summary.get("shipping_provider", "")),
+        "shipping_contracts_used": int(transport_summary.get("shipping_contracts_used", 0) or 0),
+        "shipping_split_reason": str(transport_summary.get("shipping_split_reason", "")),
+        "estimated_collateral_isk": float(transport_summary.get("estimated_collateral_isk", 0.0)),
+        "shipping_lane_params": dict(transport_summary.get("shipping_lane_params", {})),
+        "total_route_m3": float(transport_summary.get("total_route_m3", total_m3)),
+        "route_cost_is_explicit": bool(transport_summary.get("route_cost_is_explicit", False)),
+        "cost_model_status": str(transport_summary.get("cost_model_status", "configured")),
+        "cost_model_confidence": str(transport_summary.get("cost_model_confidence", "normal")),
+        "transport_cost_assumed_zero": bool(transport_summary.get("transport_cost_assumed_zero", False)),
+        "cost_model_warning": str(transport_summary.get("cost_model_warning", "")),
+        "zero_transport_exception": bool(transport_summary.get("zero_transport_exception", False)),
+        "route_blocked_due_to_transport": bool(route_blocked_due_to_transport),
+        "route_actionable": bool(route_actionable),
+        "route_prune_reason": str(route_prune_reason),
+        "total_candidates": len(candidates),
+        "why_out_summary": reason_counts,
+        "passed_all_filters": passed_all,
+        "funnel": funnel or FilterFunnel(),
+        "explain": explain,
+    }
+
+
+def run_route_wide_leg(
+    esi,
+    route_tag: str,
+    source_node: dict,
+    immediate_dest_node: dict,
+    source_index: int,
+    chain_nodes_ordered: list[dict],
+    max_hops: int,
+    scan_cfg: dict,
+    structure_orders_by_id: dict[int, list[dict]],
+    filters: dict,
+    portfolio_cfg: dict,
+    fees: dict,
+    mode: str,
+    budget_isk: float,
+    cargo_m3: float,
+    cfg: dict,
+    timestamp: str,
+    out_dir: str,
+) -> dict:
+    route_label = f"{source_node['label']} -> {immediate_dest_node['label']}"
+    print(f"Berechne {route_label} (route-wide)...")
+    filters_used = dict(filters)
+    filters_used["mode"] = mode
+
+    destination_nodes: list[dict] = []
+    max_hops_i = max(1, int(max_hops))
+    for j in range(source_index + 1, len(chain_nodes_ordered)):
+        hop_count = int(j - source_index)
+        if hop_count > max_hops_i:
+            break
+        n = dict(chain_nodes_ordered[j])
+        n["route_index"] = int(j)
+        n["hop_count"] = int(hop_count)
+        destination_nodes.append(n)
+
+    candidates: list[TradeCandidate] = []
+    explain: dict = {"reason_counts": {}}
+    if str(mode).lower() == "instant_first":
+        budget_split = _resolve_budget_split_cfg(portfolio_cfg)
+        instant_budget = float(budget_isk)
+        planned_budget_cap = float(budget_isk)
+        if bool(budget_split.get("enabled", False)):
+            instant_budget = min(float(budget_isk), float(budget_isk) * float(budget_split.get("instant", 1.0)))
+            planned_budget_cap = max(0.0, float(budget_isk) * float(budget_split.get("planned_sell", 0.0)))
+        instant_filters = dict(filters_used)
+        instant_filters["mode"] = "instant"
+        instant_candidates, instant_explain = compute_route_wide_candidates_for_source(
+            esi=esi,
+            source_node=source_node,
+            source_index=source_index,
+            destination_nodes=destination_nodes,
+            chain_nodes_ordered=chain_nodes_ordered,
+            structure_orders_by_id=structure_orders_by_id,
+            fees=fees,
+            filters=instant_filters,
+            scan_cfg=scan_cfg,
+            cfg=cfg,
+        )
+        for k, v in dict(instant_explain.get("reason_counts", {})).items():
+            explain["reason_counts"][k] = int(explain["reason_counts"].get(k, 0)) + int(v)
+        candidates.extend(instant_candidates)
+
+        remaining_budget = float(budget_isk)
+        remaining_cargo = float(cargo_m3)
+        picks, total_cost, total_profit, total_m3, selected_mode = _choose_portfolio_from_candidates_only(
+            route_label=route_label,
+            candidates=instant_candidates,
+            filters_used=instant_filters,
+            budget_isk=instant_budget,
+            cargo_m3=remaining_cargo,
+            fees=fees,
+            port_cfg=portfolio_cfg,
+            cfg=cfg,
+        )
+        remaining_budget = max(0.0, remaining_budget - float(total_cost))
+        remaining_cargo = max(0.0, remaining_cargo - float(total_m3))
+
+        planned_filters = dict(filters_used)
+        planned_filters["mode"] = "planned_sell"
+        planned_candidates, planned_explain = compute_route_wide_candidates_for_source(
+            esi=esi,
+            source_node=source_node,
+            source_index=source_index,
+            destination_nodes=destination_nodes,
+            chain_nodes_ordered=chain_nodes_ordered,
+            structure_orders_by_id=structure_orders_by_id,
+            fees=fees,
+            filters=planned_filters,
+            scan_cfg=scan_cfg,
+            cfg=cfg,
+        )
+        for k, v in dict(planned_explain.get("reason_counts", {})).items():
+            explain["reason_counts"][k] = int(explain["reason_counts"].get(k, 0)) + int(v)
+        picked_ids = {int(p.get("type_id", 0)) for p in picks}
+        planned_candidates = [c for c in planned_candidates if int(c.type_id) not in picked_ids]
+        candidates.extend(planned_candidates)
+        if planned_candidates and remaining_budget > 1e-6 and remaining_cargo > 1e-6:
+            planned_budget = remaining_budget
+            if bool(budget_split.get("enabled", False)):
+                planned_budget = min(planned_budget, planned_budget_cap)
+            p2, c2, pr2, m2, _ = _choose_portfolio_from_candidates_only(
+                route_label=route_label,
+                candidates=planned_candidates,
+                filters_used=planned_filters,
+                budget_isk=planned_budget,
+                cargo_m3=remaining_cargo,
+                fees=fees,
+                port_cfg=portfolio_cfg,
+                cfg=cfg,
+            )
+            if p2:
+                picks.extend(p2)
+                total_cost += float(c2)
+                total_profit += float(pr2)
+                total_m3 += float(m2)
+                selected_mode = "instant_first/mixed"
+    else:
+        candidates, explain = compute_route_wide_candidates_for_source(
+            esi=esi,
+            source_node=source_node,
+            source_index=source_index,
+            destination_nodes=destination_nodes,
+            chain_nodes_ordered=chain_nodes_ordered,
+            structure_orders_by_id=structure_orders_by_id,
+            fees=fees,
+            filters=filters_used,
+            scan_cfg=scan_cfg,
+            cfg=cfg,
+        )
+        picks, total_cost, total_profit, total_m3, selected_mode = _choose_portfolio_from_candidates_only(
+            route_label=route_label,
+            candidates=candidates,
+            filters_used=filters_used,
+            budget_isk=budget_isk,
+            cargo_m3=cargo_m3,
+            fees=fees,
+            port_cfg=portfolio_cfg,
+            cfg=cfg,
+        )
+
+    for p in picks:
+        if not p.get("buy_at"):
+            p["buy_at"] = str(source_node["label"])
+        if not p.get("sell_at"):
+            p["sell_at"] = str(immediate_dest_node["label"])
+        p["route_hops"] = int(p.get("route_hops", max(1, int(p.get("route_dst_index", source_index + 1)) - int(source_index))))
+        p["carried_through_legs"] = int(p.get("carried_through_legs", p["route_hops"]))
+        if "release_leg_index" not in p:
+            dst_idx = int(p.get("route_dst_index", source_index + 1))
+            p["release_leg_index"] = max(0, dst_idx - 1)
+
+    if not bool(scan_cfg.get("allow_mixed_destinations_within_leg", True)) and picks:
+        by_sell: dict[str, float] = {}
+        for p in picks:
+            dst = str(p.get("sell_at", ""))
+            by_sell[dst] = float(by_sell.get(dst, 0.0)) + float(p.get("profit", 0.0))
+        dominant_sell = max(by_sell.items(), key=lambda x: x[1])[0] if by_sell else ""
+        picks = [p for p in picks if str(p.get("sell_at", "")) == dominant_sell]
+
+    route_context = build_route_context(
+        cfg,
+        route_tag,
+        str(source_node["label"]),
+        str(immediate_dest_node["label"]),
+        source_id=int(source_node.get("id", 0) or 0),
+        dest_id=int(immediate_dest_node.get("id", 0) or 0),
+    )
+    picks, transport_summary = apply_route_costs_and_prune(picks, route_context, filters_used)
+    return _finalize_route_result(
+        route_tag=route_tag,
+        route_label=route_label,
+        source_id=int(source_node["id"]),
+        dest_id=int(immediate_dest_node["id"]),
+        source_label=str(source_node["label"]),
+        dest_label=str(immediate_dest_node["label"]),
+        filters_used=filters_used,
+        mode=mode,
+        selected_mode=selected_mode,
+        candidates=candidates,
+        picks=picks,
+        budget_isk=budget_isk,
+        cargo_m3=cargo_m3,
+        transport_summary=transport_summary,
+        timestamp=timestamp,
+        out_dir=out_dir,
+        explain=explain,
+        funnel=FilterFunnel(),
+    )
+
+
+def run_route(
+    esi,
+    source_structure_id: int,
+    dest_structure_id: int,
+    route_tag: str,
+    source_label: str,
+    dest_label: str,
+    filters: dict,
+    portfolio_cfg: dict,
+    fees: dict,
+    mode: str,
+    replay_cfg: dict,
+    replay_snapshot: dict | None,
+    structure_orders_by_id: dict[int, list[dict]],
+    budget_isk: float,
+    cargo_m3: float,
+    cfg: dict,
+    timestamp: str,
+    out_dir: str,
+    source_node_meta: dict | None = None,
+    dest_node_meta: dict | None = None,
+    preferred_shipping_lane_id: str | None = None,
+) -> dict:
+    filters_used = dict(filters)
+    filters_used["mode"] = mode
+    source_orders = structure_orders_by_id.get(int(source_structure_id), [])
+    dest_orders = structure_orders_by_id.get(int(dest_structure_id), [])
+    route_context = build_route_context(
+        cfg,
+        route_tag,
+        source_label,
+        dest_label,
+        source_id=int(source_structure_id),
+        dest_id=int(dest_structure_id),
+        preferred_shipping_lane_id=preferred_shipping_lane_id,
+    )
+    src_norm = normalize_location_label(source_label)
+    dst_norm = normalize_location_label(dest_label)
+    jita_orders_for_split: list[dict] = []
+    if src_norm == "jita":
+        jita_orders_for_split = source_orders
+    elif dst_norm == "jita":
+        jita_orders_for_split = dest_orders
+    route_context["jita_split_prices"] = build_jita_split_price_map(jita_orders_for_split)
+
+    funnel = FilterFunnel()
+    explain = {}
+    route_label = f"{source_label} -> {dest_label}"
+    print(f"Berechne {route_label}...")
+    candidates: list[TradeCandidate] = []
+    picks: list[dict] = []
+    selected_mode = "fallback"
+
+    if str(mode).lower() == "instant_first":
+        def merge_reason_counts(dst: dict, src: dict) -> None:
+            for k, v in src.items():
+                dst[k] = int(dst.get(k, 0)) + int(v)
+
+        combined_reason_counts: dict[str, int] = {}
+        budget_split = _resolve_budget_split_cfg(portfolio_cfg)
+        instant_budget = float(budget_isk)
+        planned_budget_cap = float(budget_isk)
+        if bool(budget_split.get("enabled", False)):
+            instant_budget = min(float(budget_isk), float(budget_isk) * float(budget_split.get("instant", 1.0)))
+            planned_budget_cap = max(0.0, float(budget_isk) * float(budget_split.get("planned_sell", 0.0)))
+
+        instant_filters = dict(filters_used)
+        instant_filters["mode"] = "instant"
+        instant_funnel = FilterFunnel()
+        instant_explain = {}
+        instant_candidates = compute_candidates(
+            esi,
+            source_orders,
+            dest_orders,
+            fees,
+            instant_filters,
+            dest_structure_id=dest_structure_id,
+            route_context=route_context,
+            funnel=instant_funnel,
+            explain=instant_explain,
+        )
+        merge_reason_counts(combined_reason_counts, dict(instant_explain.get("reason_counts", {})))
+        print(f"Baue {route_label} Portfolio (Instant-Phase)...")
+        instant_picks, total_cost, total_profit, total_m3, instant_selected = choose_portfolio_for_route(
+            esi,
+            route_label,
+            source_orders,
+            dest_orders,
+            instant_candidates,
+            instant_filters,
+            dest_structure_id,
+            instant_budget,
+            cargo_m3,
+            fees,
+            portfolio_cfg,
+            cfg,
+        )
+        candidates.extend(instant_candidates)
+        picks = list(instant_picks)
+        selected_mode = f"instant_first/instant:{instant_selected}"
+
+        remaining_budget = max(0.0, float(budget_isk) - total_cost)
+        remaining_cargo = max(0.0, float(cargo_m3) - total_m3)
+        if remaining_budget > 1e-6 and remaining_cargo > 1e-6:
+            planned_filters = dict(filters_used)
+            planned_filters["mode"] = "planned_sell"
+            planned_funnel = FilterFunnel()
+            planned_explain = {}
+            planned_candidates = compute_candidates(
+                esi,
+                source_orders,
+                dest_orders,
+                fees,
+                planned_filters,
+                dest_structure_id=dest_structure_id,
+                route_context=route_context,
+                funnel=planned_funnel,
+                explain=planned_explain,
+            )
+            merge_reason_counts(combined_reason_counts, dict(planned_explain.get("reason_counts", {})))
+            instant_type_ids = {int(p.get("type_id")) for p in picks if p.get("type_id") is not None}
+            planned_candidates_filtered = [c for c in planned_candidates if int(c.type_id) not in instant_type_ids]
+            candidates.extend(planned_candidates_filtered)
+            if planned_candidates_filtered:
+                print(f"Baue {route_label} Portfolio (Planned-Sell-Ergaenzung)...")
+                planned_budget = remaining_budget
+                if bool(budget_split.get("enabled", False)):
+                    planned_budget = min(planned_budget, planned_budget_cap)
+                planned_picks, planned_cost, planned_profit, planned_m3, planned_selected = choose_portfolio_for_route(
+                    esi,
+                    route_label,
+                    source_orders,
+                    dest_orders,
+                    planned_candidates_filtered,
+                    planned_filters,
+                    dest_structure_id,
+                    planned_budget,
+                    remaining_cargo,
+                    fees,
+                    portfolio_cfg,
+                    cfg,
+                )
+                if planned_picks:
+                    picks.extend(planned_picks)
+                    selected_mode = f"instant_first/mixed:{planned_selected}"
+            for k, v in planned_funnel.stage_stats.items():
+                if k in instant_funnel.stage_stats:
+                    instant_funnel.stage_stats[k] += int(v)
+            instant_funnel.rejections.extend(planned_funnel.rejections)
+        explain = {"reason_counts": combined_reason_counts}
+        funnel = instant_funnel
+    else:
+        candidates = compute_candidates(
+            esi,
+            source_orders,
+            dest_orders,
+            fees,
+            filters_used,
+            dest_structure_id=dest_structure_id,
+            route_context=route_context,
+            funnel=funnel,
+            explain=explain,
+        )
+        print(f"Baue {route_label} Portfolio...")
+        picks, _, _, _, selected_mode = choose_portfolio_for_route(
+            esi,
+            route_label,
+            source_orders,
+            dest_orders,
+            candidates,
+            filters_used,
+            dest_structure_id,
+            budget_isk,
+            cargo_m3,
+            fees,
+            portfolio_cfg,
+            cfg,
+        )
+    if selected_mode == "fallback":
+        print("    * Hinweis: es wurden keine passenden Kaufauftraege gefunden, Vorschlaege basieren auf Verkaufsorder-Preisen.")
+
+    picks, transport_summary = apply_route_costs_and_prune(picks, route_context, filters_used)
+    return _finalize_route_result(
+        route_tag=route_tag,
+        route_label=route_label,
+        source_id=int(source_structure_id),
+        dest_id=int(dest_structure_id),
+        source_label=source_label,
+        dest_label=dest_label,
+        filters_used=filters_used,
+        mode=mode,
+        selected_mode=selected_mode,
+        candidates=candidates,
+        picks=picks,
+        budget_isk=budget_isk,
+        cargo_m3=cargo_m3,
+        transport_summary=transport_summary,
+        timestamp=timestamp,
+        out_dir=out_dir,
+        explain=explain,
+        source_node_meta=source_node_meta,
+        dest_node_meta=dest_node_meta,
+        funnel=funnel,
+    )
+
+
+def run_cli() -> None:
+    ensure_dirs()
+    cli = parse_cli_args(sys.argv[1:])
+    cfg = load_config(CONFIG_PATH)
+    if not cfg:
+        die("config.json fehlt oder ist unlesbar.")
+    validation_result = validate_config(cfg)
+    fail_on_invalid_config(validation_result)
+
+    replay_cfg = cfg.get("replay", {})
+    replay_enabled = bool(replay_cfg.get("enabled", False))
+
+    o4t_id, cj6_id = _resolve_primary_structure_ids(cfg)
+    route_mode = _normalize_route_mode(cfg.get("route_mode", "roundtrip"))
+    chain_runtime = _resolve_chain_runtime(cfg, o4t_id, cj6_id)
+    chain_enabled = bool(chain_runtime["chain_enabled"])
+    chain_nodes = list(chain_runtime["chain_nodes"])
+    fallback_to_non_chain_on_middle_failure = bool(chain_runtime["fallback_to_non_chain_on_middle_failure"])
+    chain_leg_budget_util_min_pct = float(chain_runtime["chain_leg_budget_util_min_pct"])
+    chain_return_mode = str(chain_runtime["chain_return_mode"])
+    chain_return_overrides = dict(chain_runtime["chain_return_overrides"])
+
+    if cli.get("snapshot_only"):
+        snap_structs = cli.get("structures")
+        if snap_structs is None:
+            snap_structs = [int(o4t_id), int(cj6_id)]
+            if chain_enabled:
+                snap_structs = [int(n["id"]) for n in chain_nodes]
+        run_snapshot_only(cfg, snap_structs, snapshot_out=cli.get("snapshot_out"))
+        return
+
+    if not replay_enabled and not _has_live_esi_credentials(cfg):
+        die("Fehlende ESI-Credentials. Setze ESI_CLIENT_ID/ESI_CLIENT_SECRET oder nutze config.local.json.")
+
+    defaults = cfg["defaults"]
+    cargo_default = str(defaults["cargo_m3"])
+    budget_default = fmt_isk(defaults["budget_isk"])
+
+    cargo_cli = cli.get("cargo_m3", None)
+    budget_cli = cli.get("budget_isk", None)
+    if cargo_cli is None:
+        cargo_s = input_with_default("Gib freien Cargo in m3 ein", cargo_default)
+        try:
+            cargo_m3 = float(cargo_s)
+        except Exception:
+            die("Eingabe ungueltig. Beispiel Cargo 10000 und Budget 500m oder 2.5b")
+    else:
+        cargo_m3 = float(cargo_cli)
+
+    if budget_cli is None:
+        budget_s = input_with_default("Gib Trading Budget in ISK ein", budget_default)
+        try:
+            budget_isk = parse_isk(budget_s)
+        except Exception:
+            die("Eingabe ungueltig. Beispiel Cargo 10000 und Budget 500m oder 2.5b")
+    else:
+        budget_isk = int(budget_cli)
+
+    if cargo_m3 <= 0 or budget_isk <= 0:
+        die("Cargo und Budget muessen positiv sein.")
+
+    structure_labels, required_structure_ids = _build_structure_context(o4t_id, cj6_id, chain_enabled, chain_nodes)
+    node_catalog = _resolve_node_catalog(cfg, chain_nodes)
+    route_search_cfg = _resolve_route_search_cfg(cfg)
+    route_profiles_cfg = _resolve_route_profiles_cfg(cfg)
+    if bool(route_search_cfg.get("enabled", False)):
+        route_profiles = build_route_search_profiles(node_catalog, cfg)
+    else:
+        route_profiles = build_route_profiles(chain_nodes, cfg) if bool(route_profiles_cfg.get("enabled", True)) else []
+
+    default_replay_path = os.path.join(os.path.dirname(__file__), "replay_snapshot.json")
+    replay_snapshot = None
+    structure_orders_by_id: dict[int, list[dict]] = {}
+    replay_structs: dict | None = None
+    if replay_enabled:
+        replay_path = str(replay_cfg.get("snapshot_path", default_replay_path))
+        replay_raw = load_json(replay_path, None)
+        if not isinstance(replay_raw, dict):
+            die(f"Replay aktiviert, aber Snapshot fehlt/ungueltig: {replay_path}")
+        replay_snapshot = normalize_replay_snapshot(replay_raw, o4t_id, cj6_id)
+        replay_type_cache = replay_snapshot.get("type_cache", {})
+        if not isinstance(replay_type_cache, dict) or not replay_type_cache:
+            replay_type_cache = load_json(TYPE_CACHE_PATH, {})
+        esi = ReplayESIClient(replay_type_cache if isinstance(replay_type_cache, dict) else {})
+        print(f"Replay-Mode aktiv. Nutze Snapshot: {replay_path}")
+        snap_structs = replay_snapshot.get("structures", {})
+        replay_structs = snap_structs if isinstance(snap_structs, dict) else {}
+        if chain_enabled:
+            missing_chain_nodes = []
+            for n in chain_nodes:
+                sid = int(n["id"])
+                entry = snap_structs.get(str(sid), {})
+                orders = entry.get("orders", []) if isinstance(entry, dict) else []
+                if not (isinstance(orders, list) and len(orders) > 0):
+                    missing_chain_nodes.append((sid, str(n["label"])))
+            if missing_chain_nodes:
+                missing_msg = ", ".join(f"{lbl} ({sid})" for sid, lbl in missing_chain_nodes)
+                msg = f"Replay-Snapshot enthaelt keine Orders fuer Chain-Station(en): {missing_msg}"
+                if fallback_to_non_chain_on_middle_failure:
+                    print(f"WARN: {msg}. Fallback auf non-chain (O4T <-> CJ6).")
+                    chain_enabled = False
+                    chain_nodes = []
+                    structure_labels, required_structure_ids = _build_structure_context(o4t_id, cj6_id, chain_enabled, chain_nodes)
+                else:
+                    die(msg)
+        for sid in required_structure_ids:
+            entry = snap_structs.get(str(int(sid)), {})
+            orders = entry.get("orders", []) if isinstance(entry, dict) else []
+            if not isinstance(orders, list):
+                orders = []
+            structure_orders_by_id[int(sid)] = orders
+            print(f"  -> {structure_labels.get(int(sid), f'SID_{sid}')} Orders aus Snapshot: {len(orders)}")
+        missing = [sid for sid in required_structure_ids if not structure_orders_by_id.get(int(sid))]
+        if missing:
+            missing_s = ", ".join(str(x) for x in sorted(missing))
+            die(f"Replay-Snapshot enthaelt keine Orders fuer benoetigte Strukturen: {missing_s}")
+    else:
+        esi = ESIClient(cfg)
+        print("Fuehre ESI-Preflight durch...")
+        try:
+            for sid in sorted(required_structure_ids):
+                esi.preflight_structure_request(int(sid))
+        except SystemExit:
+            if chain_enabled and fallback_to_non_chain_on_middle_failure:
+                print("WARN: Kein Zugriff auf mindestens eine Chain-Structure. Fallback auf non-chain (O4T <-> CJ6).")
+                chain_enabled = False
+                chain_nodes = []
+                structure_labels, required_structure_ids = _build_structure_context(o4t_id, cj6_id, chain_enabled, chain_nodes)
+                for sid in sorted(required_structure_ids):
+                    esi.preflight_structure_request(int(sid))
+            else:
+                raise
+
+        print("Lade Marktorders. Das kann beim ersten Mal etwas dauern.")
+        for sid in sorted(required_structure_ids):
+            lbl = structure_labels.get(int(sid), f"SID_{sid}")
+            print(f"  -> Lade {lbl} Structure ({sid})...")
+            orders = esi.fetch_structure_orders(int(sid))
+            structure_orders_by_id[int(sid)] = orders if isinstance(orders, list) else []
+            print(f"    {len(structure_orders_by_id[int(sid)])} Orders geladen")
+
+    if route_profiles:
+        used_labels = set()
+        for p in route_profiles:
+            used_labels.add(normalize_location_label(str(p.get("from", ""))))
+            used_labels.add(normalize_location_label(str(p.get("to", ""))))
+        for lbl in sorted(used_labels):
+            node = node_catalog.get(lbl)
+            if not isinstance(node, dict):
+                continue
+            nid = int(node.get("id", 0) or 0)
+            if nid <= 0 or nid in structure_orders_by_id:
+                continue
+            orders = _fetch_orders_for_node(esi=esi, node=node, replay_enabled=replay_enabled, replay_structs=replay_structs)
+            structure_orders_by_id[nid] = orders if isinstance(orders, list) else []
+            kind = str(node.get("kind", "structure"))
+            if kind == "location":
+                print(
+                    f"  -> Lade {node.get('label', 'location')} "
+                    f"(location_id {nid}, region {int(node.get('region_id', 0) or 0)}): "
+                    f"{len(structure_orders_by_id[nid])} Orders"
+                )
+            else:
+                print(f"  -> Lade {node.get('label', 'structure')} Structure ({nid}): {len(structure_orders_by_id[nid])} Orders")
+
+    snapshot = {
+        "timestamp": int(time.time()),
+        "structures": {str(int(sid)): {"orders_count": len(structure_orders_by_id.get(int(sid), []))} for sid in sorted(required_structure_ids)},
+    }
+    save_json(os.path.join(os.path.dirname(__file__), "market_snapshot.json"), snapshot)
+    if not replay_enabled and bool(replay_cfg.get("write_snapshot_after_fetch", True)):
+        replay_path = str(replay_cfg.get("snapshot_path", default_replay_path))
+        cached_types_from_disk = load_json(TYPE_CACHE_PATH, {})
+        live_type_cache = getattr(esi, "type_cache", {})
+        merged_type_cache = {}
+        if isinstance(cached_types_from_disk, dict):
+            merged_type_cache.update(cached_types_from_disk)
+        if isinstance(live_type_cache, dict):
+            merged_type_cache.update(live_type_cache)
+        replay_payload = make_snapshot_payload(structure_orders_by_id, merged_type_cache)
+        save_json(replay_path, replay_payload)
+        print(f"Replay-Snapshot geschrieben: {replay_path}")
+
+    fees = cfg["fees"]
+    port_cfg = cfg["portfolio"]
+    capital_flow_cfg = _resolve_capital_flow_cfg(cfg)
+    strict_mode_cfg = _resolve_strict_mode_cfg(cfg)
+    route_wide_scan_cfg = _resolve_route_wide_scan_cfg(cfg)
+    forward_filters, return_filters, forward_mode, return_mode = _prepare_trade_filters(cfg)
+    structure_region_map = _resolve_structure_region_map(cfg, emit_info=True)
+    if structure_region_map and hasattr(esi, "type_cache") and isinstance(getattr(esi, "type_cache", None), dict):
+        esi.type_cache["_structure_region_map"] = {str(int(k)): int(v) for k, v in structure_region_map.items()}
+        for sid, rid in structure_region_map.items():
+            esi.type_cache[f"_sid_region_{int(sid)}"] = int(rid)
+    if hasattr(esi, "structure_region_map"):
+        try:
+            esi.structure_region_map = {int(k): int(v) for k, v in structure_region_map.items()}
+        except Exception:
+            pass
+
+    print("")
+    print("=== BERECHNE TRADE-KANDIDATEN ===")
+    out_dir = os.path.dirname(__file__)
+    from datetime import datetime
+
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    created_files = []
+    route_profiles_active = False
+
+    if route_profiles:
+        route_results: list[dict] = []
+        for i, profile in enumerate(route_profiles, start=1):
+            src_norm = normalize_location_label(profile.get("from", ""))
+            dst_norm = normalize_location_label(profile.get("to", ""))
+            src_node = node_catalog.get(src_norm)
+            dst_node = node_catalog.get(dst_norm)
+            if not src_node or not dst_node:
+                continue
+            p_mode = str(profile.get("mode", "")).strip().lower()
+            active_mode = p_mode if p_mode in ("instant", "fast_sell", "planned_sell", "instant_first") else forward_mode
+            route_id = str(profile.get("id", f"profile_{i}"))
+            result = run_route(
+                esi=esi,
+                source_structure_id=int(src_node["id"]),
+                dest_structure_id=int(dst_node["id"]),
+                route_tag=route_id,
+                source_label=str(src_node["label"]),
+                dest_label=str(dst_node["label"]),
+                filters=forward_filters,
+                portfolio_cfg=port_cfg,
+                fees=fees,
+                mode=active_mode,
+                replay_cfg=replay_cfg,
+                replay_snapshot=replay_snapshot,
+                structure_orders_by_id=structure_orders_by_id,
+                budget_isk=float(budget_isk),
+                cargo_m3=float(cargo_m3),
+                cfg=cfg,
+                timestamp=timestamp,
+                out_dir=out_dir,
+                source_node_meta=src_node,
+                dest_node_meta=dst_node,
+                preferred_shipping_lane_id=str(profile.get("shipping_lane_id", "") or ""),
+            )
+            filtered_picks = enforce_route_destination(list(result.get("picks", [])), str(dst_node.get("label", "")))
+            if len(filtered_picks) != len(list(result.get("picks", []))):
+                result["picks"] = filtered_picks
+                isk_used = sum(float(p.get("cost", 0.0)) for p in filtered_picks)
+                profit_total = sum(float(p.get("profit", 0.0)) for p in filtered_picks)
+                m3_used = sum(float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0)) for p in filtered_picks)
+                net_revenue_total = sum(float(p.get("revenue_net", 0.0)) for p in filtered_picks)
+                total_fees_taxes = sum(pick_total_fees_taxes(p) for p in filtered_picks)
+                expected_realized_total = sum(float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", 0.0)) or 0.0) for p in filtered_picks)
+                full_sell_total = sum(float(p.get("gross_profit_if_full_sell", p.get("profit", 0.0)) or 0.0) for p in filtered_picks)
+                budget_total = float(result.get("budget_total", budget_isk))
+                cargo_total = float(result.get("cargo_total", cargo_m3))
+                result["items_count"] = int(len(filtered_picks))
+                result["isk_used"] = float(isk_used)
+                result["profit_total"] = float(profit_total)
+                result["expected_realized_profit_total"] = float(expected_realized_total)
+                result["full_sell_profit_total"] = float(full_sell_total)
+                result["m3_used"] = float(m3_used)
+                result["net_revenue_total"] = float(net_revenue_total)
+                result["total_fees_taxes"] = float(total_fees_taxes)
+                result["budget_util_pct"] = (float(isk_used) / budget_total * 100.0) if budget_total > 0 else 0.0
+                result["cargo_util_pct"] = (float(m3_used) / cargo_total * 100.0) if cargo_total > 0 else 0.0
+                result["route_actionable"] = bool(filtered_picks and not bool(result.get("route_blocked_due_to_transport", False)))
+                result["route_prune_reason"] = str(result.get("route_prune_reason", "")) or ("no_picks" if not filtered_picks else "")
+            route_results.append(result)
+            if "csv_path" in result:
+                created_files.append(result["csv_path"])
+            if "dump_path" in result:
+                created_files.append(result["dump_path"])
+
+        if route_results:
+            route_profiles_active = True
+            execution_plan_path = os.path.join(out_dir, f"execution_plan_{timestamp}.txt")
+            write_execution_plan_profiles(execution_plan_path, timestamp, route_results)
+            created_files.append(execution_plan_path)
+            if bool(route_search_cfg.get("enabled", False)):
+                leaderboard_path = os.path.join(out_dir, f"route_leaderboard_{timestamp}.txt")
+                write_route_leaderboard(
+                    path=leaderboard_path,
+                    timestamp=timestamp,
+                    route_results=route_results,
+                    ranking_metric=str(route_search_cfg.get("ranking_metric", "risk_adjusted_expected_profit")),
+                    max_routes=int(route_search_cfg.get("max_routes", 10)),
+                )
+                created_files.append(leaderboard_path)
+
+    if route_profiles_active:
+        pass
+    elif chain_enabled:
+        forward_pairs = build_adjacent_pairs(chain_nodes, reverse=False)
+        return_pairs = build_adjacent_pairs(chain_nodes, reverse=True)
+        ordered_forward_nodes = list(chain_nodes)
+        ordered_return_nodes = list(reversed(chain_nodes))
+        forward_legs_for_summary: list[dict] = []
+        emitted_legs: list[dict] = []
+        capital_available = float(budget_isk)
+        pending_releases_forward: dict[int, float] = {}
+        pending_releases_return: dict[int, float] = {}
+        route_wide_enabled = bool(route_wide_scan_cfg.get("enabled", False))
+
+        for idx, (src_node, dst_node) in enumerate(forward_pairs, start=1):
+            leg_idx0 = idx - 1
+            leg_budget_isk, leg_budget_capped = _compute_chain_leg_budget(capital_available, float(budget_isk), capital_flow_cfg, strict_mode_cfg)
+            if route_wide_enabled:
+                leg = run_route_wide_leg(
+                    esi=esi,
+                    route_tag=f"forward_leg{idx}",
+                    source_node=src_node,
+                    immediate_dest_node=dst_node,
+                    source_index=leg_idx0,
+                    chain_nodes_ordered=ordered_forward_nodes,
+                    max_hops=int(route_wide_scan_cfg.get("max_hops_forward", 99)),
+                    scan_cfg=route_wide_scan_cfg,
+                    structure_orders_by_id=structure_orders_by_id,
+                    filters=forward_filters,
+                    portfolio_cfg=port_cfg,
+                    fees=fees,
+                    mode=forward_mode,
+                    budget_isk=leg_budget_isk,
+                    cargo_m3=cargo_m3,
+                    cfg=cfg,
+                    timestamp=timestamp,
+                    out_dir=out_dir,
+                )
+            else:
+                leg = run_route(
+                    esi,
+                    int(src_node["id"]),
+                    int(dst_node["id"]),
+                    f"forward_leg{idx}",
+                    str(src_node["label"]),
+                    str(dst_node["label"]),
+                    forward_filters,
+                    port_cfg,
+                    fees,
+                    forward_mode,
+                    replay_cfg,
+                    replay_snapshot,
+                    structure_orders_by_id,
+                    leg_budget_isk,
+                    cargo_m3,
+                    cfg,
+                    timestamp,
+                    out_dir,
+                )
+            if leg_budget_capped:
+                why = leg.setdefault("why_out_summary", {})
+                why["strict_leg_budget_cap"] = int(why.get("strict_leg_budget_cap", 0)) + 1
+            capital_available = _apply_capital_flow_to_leg(
+                leg,
+                forward_mode,
+                capital_available,
+                capital_flow_cfg,
+                current_leg_index=leg_idx0 if route_wide_enabled else None,
+                pending_releases=pending_releases_forward if route_wide_enabled else None,
+            )
+            disabled, reason = evaluate_leg_disabled(leg, chain_leg_budget_util_min_pct)
+            leg["leg_disabled"] = disabled
+            leg["leg_disabled_reason"] = reason
+            forward_legs_for_summary.append(leg)
+            emitted_legs.append(leg)
+
+        forward_active = any(not bool(leg.get("leg_disabled", False)) for leg in forward_legs_for_summary)
+        forward_chain_summary = os.path.join(out_dir, f"forward_chain_summary_{timestamp}.txt")
+        return_chain_summary = os.path.join(out_dir, f"return_chain_summary_{timestamp}.txt")
+        write_chain_summary(forward_chain_summary, "Forward", timestamp, forward_legs_for_summary)
+
+        chain_return_filters = dict(return_filters)
+        chain_return_filters.update(chain_return_overrides)
+        chain_return_filters["mode"] = chain_return_mode
+        return_legs_for_summary: list[dict] = []
+
+        if route_mode == "forward_only":
+            print("route_mode=forward_only -> Return-Legs werden im Chain-Mode uebersprungen.")
+            skip_reason = "route_mode_forward_only"
+            for idx, (src_node, dst_node) in enumerate(return_pairs, start=1):
+                leg_idx0 = idx - 1
+                leg_budget_isk, _ = _compute_chain_leg_budget(capital_available, float(budget_isk), capital_flow_cfg, strict_mode_cfg)
+                skipped = make_skipped_chain_leg(str(src_node["label"]), str(dst_node["label"]), skip_reason, chain_return_mode, chain_return_filters, leg_budget_isk, cargo_m3)
+                capital_available = _apply_capital_flow_to_leg(
+                    skipped,
+                    chain_return_mode,
+                    capital_available,
+                    capital_flow_cfg,
+                    current_leg_index=leg_idx0 if route_wide_enabled else None,
+                    pending_releases=pending_releases_return if route_wide_enabled else None,
+                )
+                return_legs_for_summary.append(skipped)
+        elif chain_return_mode == "off":
+            print("chain_return_mode=off -> Return-Legs werden im Chain-Mode uebersprungen.")
+            skip_reason = "chain_return_mode_off"
+            for idx, (src_node, dst_node) in enumerate(return_pairs, start=1):
+                leg_idx0 = idx - 1
+                leg_budget_isk, _ = _compute_chain_leg_budget(capital_available, float(budget_isk), capital_flow_cfg, strict_mode_cfg)
+                skipped = make_skipped_chain_leg(str(src_node["label"]), str(dst_node["label"]), skip_reason, chain_return_mode, chain_return_filters, leg_budget_isk, cargo_m3)
+                capital_available = _apply_capital_flow_to_leg(
+                    skipped,
+                    chain_return_mode,
+                    capital_available,
+                    capital_flow_cfg,
+                    current_leg_index=leg_idx0 if route_wide_enabled else None,
+                    pending_releases=pending_releases_return if route_wide_enabled else None,
+                )
+                return_legs_for_summary.append(skipped)
+        elif not forward_active:
+            print("Keine aktive Forward-Leg -> Return-Legs werden im Chain-Mode uebersprungen.")
+            skip_reason = "no_active_forward_leg"
+            for idx, (src_node, dst_node) in enumerate(return_pairs, start=1):
+                leg_idx0 = idx - 1
+                leg_budget_isk, _ = _compute_chain_leg_budget(capital_available, float(budget_isk), capital_flow_cfg, strict_mode_cfg)
+                skipped = make_skipped_chain_leg(str(src_node["label"]), str(dst_node["label"]), skip_reason, chain_return_mode, chain_return_filters, leg_budget_isk, cargo_m3)
+                capital_available = _apply_capital_flow_to_leg(
+                    skipped,
+                    chain_return_mode,
+                    capital_available,
+                    capital_flow_cfg,
+                    current_leg_index=leg_idx0 if route_wide_enabled else None,
+                    pending_releases=pending_releases_return if route_wide_enabled else None,
+                )
+                return_legs_for_summary.append(skipped)
+        else:
+            for idx, (src_node, dst_node) in enumerate(return_pairs, start=1):
+                leg_idx0 = idx - 1
+                leg_budget_isk, leg_budget_capped = _compute_chain_leg_budget(capital_available, float(budget_isk), capital_flow_cfg, strict_mode_cfg)
+                if route_wide_enabled:
+                    leg = run_route_wide_leg(
+                        esi=esi,
+                        route_tag=f"return_leg{idx}",
+                        source_node=src_node,
+                        immediate_dest_node=dst_node,
+                        source_index=leg_idx0,
+                        chain_nodes_ordered=ordered_return_nodes,
+                        max_hops=int(route_wide_scan_cfg.get("max_hops_return", 99)),
+                        scan_cfg=route_wide_scan_cfg,
+                        structure_orders_by_id=structure_orders_by_id,
+                        filters=chain_return_filters,
+                        portfolio_cfg=port_cfg,
+                        fees=fees,
+                        mode=chain_return_mode,
+                        budget_isk=leg_budget_isk,
+                        cargo_m3=cargo_m3,
+                        cfg=cfg,
+                        timestamp=timestamp,
+                        out_dir=out_dir,
+                    )
+                else:
+                    leg = run_route(
+                        esi,
+                        int(src_node["id"]),
+                        int(dst_node["id"]),
+                        f"return_leg{idx}",
+                        str(src_node["label"]),
+                        str(dst_node["label"]),
+                        chain_return_filters,
+                        port_cfg,
+                        fees,
+                        chain_return_mode,
+                        replay_cfg,
+                        replay_snapshot,
+                        structure_orders_by_id,
+                        leg_budget_isk,
+                        cargo_m3,
+                        cfg,
+                        timestamp,
+                        out_dir,
+                    )
+                if leg_budget_capped:
+                    why = leg.setdefault("why_out_summary", {})
+                    why["strict_leg_budget_cap"] = int(why.get("strict_leg_budget_cap", 0)) + 1
+                capital_available = _apply_capital_flow_to_leg(
+                    leg,
+                    chain_return_mode,
+                    capital_available,
+                    capital_flow_cfg,
+                    current_leg_index=leg_idx0 if route_wide_enabled else None,
+                    pending_releases=pending_releases_return if route_wide_enabled else None,
+                )
+                disabled, reason = evaluate_leg_disabled(leg, chain_leg_budget_util_min_pct)
+                leg["leg_disabled"] = disabled
+                leg["leg_disabled_reason"] = reason
+                return_legs_for_summary.append(leg)
+                emitted_legs.append(leg)
+
+        write_chain_summary(return_chain_summary, "Return", timestamp, return_legs_for_summary)
+        execution_plan_path = os.path.join(out_dir, f"execution_plan_{timestamp}.txt")
+        write_execution_plan_chain(execution_plan_path, timestamp, forward_legs_for_summary, return_legs_for_summary)
+        for leg in emitted_legs:
+            if "csv_path" in leg:
+                created_files.append(leg["csv_path"])
+            if "dump_path" in leg:
+                created_files.append(leg["dump_path"])
+        created_files.extend([forward_chain_summary, return_chain_summary, execution_plan_path])
+    else:
+        capital_available = float(budget_isk)
+        forward_budget_isk = capital_available if bool(capital_flow_cfg.get("enabled", False)) else float(budget_isk)
+        forward_result = run_route(
+            esi,
+            o4t_id,
+            cj6_id,
+            "forward",
+            structure_labels[o4t_id],
+            structure_labels[cj6_id],
+            forward_filters,
+            port_cfg,
+            fees,
+            forward_mode,
+            replay_cfg,
+            replay_snapshot,
+            structure_orders_by_id,
+            forward_budget_isk,
+            cargo_m3,
+            cfg,
+            timestamp,
+            out_dir,
+        )
+        capital_available = _apply_capital_flow_to_leg(forward_result, forward_mode, capital_available, capital_flow_cfg)
+        if route_mode == "forward_only":
+            print("route_mode=forward_only -> Return-Route wird uebersprungen.")
+            return_result = {"picks": [], "isk_used": 0.0, "profit_total": 0.0, "funnel": None}
+        else:
+            return_budget_isk = capital_available if bool(capital_flow_cfg.get("enabled", False)) else float(budget_isk)
+            return_result = run_route(
+                esi,
+                cj6_id,
+                o4t_id,
+                "return",
+                structure_labels[cj6_id],
+                structure_labels[o4t_id],
+                return_filters,
+                port_cfg,
+                fees,
+                return_mode,
+                replay_cfg,
+                replay_snapshot,
+                structure_orders_by_id,
+                return_budget_isk,
+                cargo_m3,
+                cfg,
+                timestamp,
+                out_dir,
+            )
+            capital_available = _apply_capital_flow_to_leg(return_result, return_mode, capital_available, capital_flow_cfg)
+
+        summary_path = os.path.join(out_dir, f"roundtrip_plan_{timestamp}.txt")
+        write_enhanced_summary(
+            summary_path,
+            forward_result["picks"],
+            float(forward_result["isk_used"]),
+            float(forward_result["profit_total"]),
+            return_result["picks"],
+            float(return_result["isk_used"]),
+            float(return_result["profit_total"]),
+            cargo_m3,
+            budget_isk,
+            forward_funnel=forward_result.get("funnel"),
+            return_funnel=return_result.get("funnel"),
+            run_uuid="",
+        )
+        created_files.append(summary_path)
+        created_files.append(forward_result["csv_path"])
+        created_files.append(forward_result["dump_path"])
+        if route_mode != "forward_only":
+            created_files.append(return_result["csv_path"])
+            created_files.append(return_result["dump_path"])
+
+    if hasattr(esi, "_type_cache_dirty") and int(getattr(esi, "_type_cache_dirty", 0)) > 0:
+        try:
+            save_json(TYPE_CACHE_PATH, getattr(esi, "type_cache", {}))
+            save_json(HTTP_CACHE_PATH, getattr(esi, "_http_cache", {}))
+            setattr(esi, "_type_cache_dirty", 0)
+        except Exception:
+            pass
+
+    print("")
+    if hasattr(esi, "get_performance_summary_lines"):
+        try:
+            for l in esi.get_performance_summary_lines():
+                print(l)
+        except Exception:
+            pass
+        print("")
+    print("Fertig!")
+    print("=== ERSTELLTE DATEIEN ===")
+    for p in created_files:
+        print(p)
+    print("market_snapshot.json erstellt.")
+    print("")
+
+
+def main() -> None:
+    run_cli()
+
+
+__all__ = [name for name in globals() if not name.startswith("__")]

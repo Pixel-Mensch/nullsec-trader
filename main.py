@@ -2,9 +2,9 @@
 
 
 def main() -> None:
-    import nullsectrader as core
+    from runtime_runner import run_cli
 
-    core._legacy_main()
+    run_cli()
 
 
 if __name__ == "__main__":

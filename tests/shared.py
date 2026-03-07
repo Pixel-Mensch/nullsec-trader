@@ -219,6 +219,7 @@ def _simple_orders(tid: int = 42, dest_price: float = 300.0) -> tuple[list[dict]
     ]
     dest_orders = [
         {"type_id": tid, "is_buy_order": False, "price": float(dest_price), "volume_remain": 10},
+        {"type_id": tid, "is_buy_order": False, "price": float(dest_price) * 1.01, "volume_remain": 20},
     ]
     return source_orders, dest_orders
 

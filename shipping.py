@@ -362,6 +362,43 @@ def resolve_route_cost_cfg(cfg: dict, route_id: str, src_label: str, dst_label: 
     }
 
 
+def _resolve_zero_transport_allowlist(cfg: dict) -> list:
+    root_allow = cfg.get("allow_zero_transport_cost_for_routes", [])
+    if isinstance(root_allow, list) and root_allow:
+        return list(root_allow)
+    route_search_cfg = cfg.get("route_search", {})
+    if isinstance(route_search_cfg, dict) and isinstance(route_search_cfg.get("allow_zero_transport_cost_for_routes", []), list):
+        return list(route_search_cfg.get("allow_zero_transport_cost_for_routes", []))
+    return []
+
+
+def _route_matches_zero_transport_exception(route_context: dict) -> bool:
+    allowlist = route_context.get("allow_zero_transport_cost_for_routes", [])
+    if not isinstance(allowlist, list) or not allowlist:
+        return False
+    route_id = str(route_context.get("route_id", "") or "").strip().lower()
+    src = normalize_location_label(str(route_context.get("source_label", "") or ""))
+    dst = normalize_location_label(str(route_context.get("dest_label", "") or ""))
+    pair_token = f"{src}->{dst}" if src and dst else ""
+    alt_pair_token = f"{src}_{dst}" if src and dst else ""
+    for raw in allowlist:
+        if isinstance(raw, str):
+            token = str(raw).strip().lower()
+            if token and token in (route_id, pair_token, alt_pair_token):
+                return True
+            continue
+        if not isinstance(raw, dict):
+            continue
+        from_token = normalize_location_label(str(raw.get("from", "")))
+        to_token = normalize_location_label(str(raw.get("to", "")))
+        route_token = str(raw.get("route_id", raw.get("route", "")) or "").strip().lower()
+        if route_token and route_token == route_id:
+            return True
+        if from_token and to_token and from_token == src and to_token == dst:
+            return True
+    return False
+
+
 def build_route_context(
     cfg: dict,
     route_id: str,
@@ -388,6 +425,7 @@ def build_route_context(
     shipping_defaults = cfg.get("shipping_defaults", {})
     if not isinstance(shipping_defaults, dict):
         shipping_defaults = {}
+    zero_transport_allowlist = _resolve_zero_transport_allowlist(cfg)
     return {
         "route_id": str(route_id or ""),
         "source_label": str(source_label or ""),
@@ -404,6 +442,7 @@ def build_route_context(
         "preferred_shipping_lane_id": str(preferred_shipping_lane_id or ""),
         "shipping_defaults": shipping_defaults,
         "route_cost_cfg": route_cost_cfg,
+        "allow_zero_transport_cost_for_routes": list(zero_transport_allowlist),
     }
 
 
@@ -430,17 +469,30 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
         if not isinstance(route_cfg, dict):
             route_cfg = {}
         route_cost_is_explicit = bool(route_cfg.get("is_explicit", False))
+        zero_transport_exception = _route_matches_zero_transport_exception(route_context)
         missing_cost_model = (
             route_context.get("shipping_lane_cfg") is None
             and not list(route_context.get("shipping_lane_candidates", []) or [])
             and not route_cost_is_explicit
         )
-        cost_model_confidence = "low" if missing_cost_model else "normal"
-        cost_model_status = "assumed_zero_transport" if missing_cost_model else "configured"
+        route_blocked = bool(missing_cost_model and not zero_transport_exception)
+        if route_blocked:
+            cost_model_confidence = "blocked"
+            cost_model_status = "missing_transport_model_blocked"
+        elif missing_cost_model:
+            cost_model_confidence = "exception"
+            cost_model_status = "allowed_zero_transport_exception"
+        else:
+            cost_model_confidence = "normal"
+            cost_model_status = "configured"
         cost_model_warning = ""
-        if missing_cost_model:
+        if route_blocked:
             cost_model_warning = (
-                "No shipping lane or explicit route_costs matched this route; transport cost is assumed as 0 ISK."
+                "No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled."
+            )
+        elif missing_cost_model:
+            cost_model_warning = (
+                "No shipping lane or explicit route_costs matched this route; zero transport cost is only used because this route is explicitly allowlisted."
             )
         return {
             "total_shipping_cost": 0.0,
@@ -452,6 +504,10 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
             "cost_model_confidence": cost_model_confidence,
             "transport_cost_assumed_zero": bool(missing_cost_model),
             "cost_model_warning": cost_model_warning,
+            "zero_transport_exception": bool(zero_transport_exception),
+            "route_blocked_due_to_transport": bool(route_blocked),
+            "route_actionable": bool(not route_blocked),
+            "route_prune_reason": "missing_transport_cost_model" if route_blocked else "",
         }
     total_volume = sum(max(0.0, float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0))) for p in picks)
     if total_volume <= 0:
@@ -549,17 +605,30 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
     route_cost_is_explicit = bool(route_cfg.get("is_explicit", False))
     route_total = route_fixed + (route_per_m3 * total_volume)
     transport_total = shipping_total + route_total
+    zero_transport_exception = _route_matches_zero_transport_exception(route_context)
     missing_cost_model = (
         selected_lane_cfg is None
         and not lane_candidates
         and not route_cost_is_explicit
     )
-    cost_model_confidence = "low" if missing_cost_model else "normal"
-    cost_model_status = "assumed_zero_transport" if missing_cost_model else "configured"
+    route_blocked = bool(missing_cost_model and not zero_transport_exception)
+    if route_blocked:
+        cost_model_confidence = "blocked"
+        cost_model_status = "missing_transport_model_blocked"
+    elif missing_cost_model:
+        cost_model_confidence = "exception"
+        cost_model_status = "allowed_zero_transport_exception"
+    else:
+        cost_model_confidence = "normal"
+        cost_model_status = "configured"
     cost_model_warning = ""
-    if missing_cost_model:
+    if route_blocked:
         cost_model_warning = (
-            "No shipping lane or explicit route_costs matched this route; transport cost is assumed as 0 ISK."
+            "No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled."
+        )
+    elif missing_cost_model:
+        cost_model_warning = (
+            "No shipping lane or explicit route_costs matched this route; zero transport cost is only used because this route is explicitly allowlisted."
         )
 
     if transport_total > 0.0 and total_volume > 0.0:
@@ -582,6 +651,16 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
             p["transport_cost_confidence"] = cost_model_confidence
             if cost_model_warning:
                 p["transport_cost_warning"] = cost_model_warning
+            estimated_transport = float(p.get("estimated_transport_cost", 0.0) or 0.0)
+            transport_delta = float(pick_transport) - float(estimated_transport)
+            p["gross_profit_if_full_sell"] = float(p.get("gross_profit_if_full_sell", p.get("profit", 0.0))) - float(transport_delta)
+            p["expected_realized_profit_90d"] = float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", 0.0))) - float(transport_delta)
+            p["expected_profit_90d"] = float(p["expected_realized_profit_90d"])
+            qty = max(1.0, float(p.get("qty", 0)))
+            total_pick_m3 = max(1.0, float(p.get("unit_volume", 0.0)) * qty)
+            p["expected_realized_profit_per_m3_90d"] = float(p["expected_realized_profit_90d"]) / total_pick_m3
+            p["expected_profit_per_m3_90d"] = float(p["expected_realized_profit_per_m3_90d"])
+            p["estimated_transport_cost"] = float(pick_transport)
     else:
         for p in picks:
             p.setdefault("shipping_cost", 0.0)
@@ -590,6 +669,12 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
             p["transport_cost_confidence"] = cost_model_confidence
             if cost_model_warning:
                 p["transport_cost_warning"] = cost_model_warning
+            p.setdefault("gross_profit_if_full_sell", float(p.get("profit", 0.0)))
+            p.setdefault("expected_realized_profit_90d", float(p.get("expected_profit_90d", 0.0)))
+            p.setdefault("expected_profit_90d", float(p.get("expected_realized_profit_90d", 0.0)))
+            p.setdefault("expected_realized_profit_per_m3_90d", float(p.get("expected_profit_per_m3_90d", 0.0)))
+            p.setdefault("expected_profit_per_m3_90d", float(p.get("expected_realized_profit_per_m3_90d", 0.0)))
+            p.setdefault("estimated_transport_cost", 0.0)
 
     return {
         "total_shipping_cost": float(shipping_total),
@@ -608,6 +693,10 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
         "cost_model_confidence": cost_model_confidence,
         "transport_cost_assumed_zero": bool(missing_cost_model),
         "cost_model_warning": cost_model_warning,
+        "zero_transport_exception": bool(zero_transport_exception),
+        "route_blocked_due_to_transport": bool(route_blocked),
+        "route_actionable": bool(not route_blocked),
+        "route_prune_reason": "missing_transport_cost_model" if route_blocked else "",
     }
 
 
@@ -634,6 +723,8 @@ def _pick_passes_profit_floors(p: dict, filters_used: dict) -> bool:
 def apply_route_costs_and_prune(picks: list[dict], route_context: dict, filters_used: dict) -> tuple[list[dict], dict]:
     work = list(picks)
     summary = apply_route_costs_to_picks(work, route_context)
+    if bool(summary.get("route_blocked_due_to_transport", False)):
+        return [], summary
     changed = True
     while changed:
         changed = False
@@ -641,5 +732,7 @@ def apply_route_costs_and_prune(picks: list[dict], route_context: dict, filters_
         if len(kept) < len(work):
             work = kept
             summary = apply_route_costs_to_picks(work, route_context)
+            if bool(summary.get("route_blocked_due_to_transport", False)):
+                return [], summary
             changed = True
     return work, summary

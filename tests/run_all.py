@@ -1,8 +1,14 @@
 """Lightweight test runner for split test modules."""
 
+import os
+import sys
 from importlib import import_module
 
-MODULES = ['test_core', 'test_portfolio', 'test_config', 'test_shipping', 'test_route_search', 'test_integration']
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+MODULES = ['test_core', 'test_portfolio', 'test_config', 'test_shipping', 'test_route_search', 'test_integration', 'test_architecture']
 
 def _iter_tests(module):
     for name, obj in module.__dict__.items():

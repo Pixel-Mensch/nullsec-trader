@@ -11,8 +11,10 @@ import sys
 MODULES = [
     "main.py",
     "nullsectrader.py",
-    "legacy_core.py",
-    "legacy_runtime.py",
+    "runtime_common.py",
+    "runtime_clients.py",
+    "runtime_reports.py",
+    "runtime_runner.py",
     "startup_helpers.py",
     "config_loader.py",
     "shipping.py",
@@ -24,8 +26,6 @@ MODULES = [
     "fee_engine.py",
     "market_fetch.py",
     "market_normalization.py",
-    "transport_allocation.py",
-    "route_costs.py",
     "scoring.py",
     "models.py",
     "location_utils.py",
@@ -41,6 +41,7 @@ TEST_MODULES = [
     "tests/test_shipping.py",
     "tests/test_route_search.py",
     "tests/test_integration.py",
+    "tests/test_architecture.py",
 ]
 
 

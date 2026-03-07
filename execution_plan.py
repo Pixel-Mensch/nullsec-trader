@@ -1,13 +1,8 @@
+from route_search import route_ranking_value, summarize_route_for_ranking
+
+
 def _route_ranking_value(route: dict, metric: str) -> float:
-    m = str(metric or "profit_total").strip().lower()
-    profit = float(route.get("profit_total", 0.0) or 0.0)
-    isk_used = float(route.get("isk_used", 0.0) or 0.0)
-    m3_used = float(route.get("m3_used", 0.0) or 0.0)
-    if m in ("profit_per_m3", "isk_per_m3"):
-        return profit / max(1e-9, m3_used)
-    if m in ("profit_pct", "profit_per_isk"):
-        return profit / max(1e-9, isk_used)
-    return profit
+    return float(route_ranking_value(route, metric))
 
 
 def _profit_dominance(route: dict) -> tuple[float, float, bool]:
@@ -70,7 +65,12 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
 
     for idx, leg in enumerate(route_results, start=1):
         picks = list(leg.get("picks", []) or [])
-        lines.append(f"PLAN {idx}: {leg.get('route_label', '')}")
+        route_summary = summarize_route_for_ranking(leg)
+        actionable = bool(route_summary.get("actionable", False))
+        plan_title = f"PLAN {idx}: {leg.get('route_label', '')}"
+        if not actionable:
+            plan_title += " [NOT ACTIONABLE]"
+        lines.append(plan_title)
         lines.append("-" * max(8, len(lines[-1])))
         src_info = leg.get("source_node_info", {}) if isinstance(leg.get("source_node_info", {}), dict) else {}
         dst_info = leg.get("dest_node_info", {}) if isinstance(leg.get("dest_node_info", {}), dict) else {}
@@ -137,9 +137,13 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             warn_msg = str(leg.get("cost_model_warning", "") or "")
             if warn_msg:
                 lines.append(f"transport_cost_warning: {warn_msg}")
+        route_prune_reason = str(leg.get("route_prune_reason", route_summary.get("route_prune_reason", "")) or "")
+        if route_prune_reason:
+            lines.append(f"route_prune_reason: {route_prune_reason}")
         leg_cost = float(leg.get("isk_used", 0.0))
         leg_revenue = sum(float(p.get("revenue_net", 0.0)) for p in picks)
-        leg_profit = float(leg.get("profit_total", 0.0))
+        leg_profit = float(route_summary.get("total_expected_realized_profit", leg.get("profit_total", 0.0)))
+        leg_full_sell_profit = float(route_summary.get("total_full_sell_profit", leg.get("profit_total", 0.0)))
         leg_fees_taxes = sum(_pick_total_fees_taxes(p) for p in picks)
         leg_route_costs = float(leg.get("total_transport_cost", 0.0))
         leg_shipping_costs = float(leg.get("total_shipping_cost", 0.0))
@@ -151,7 +155,11 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         total_route_costs += leg_route_costs
         lines.append(f"Total Cost: {fmt_isk_de(leg_cost)}")
         lines.append(f"Total Net Revenue: {fmt_isk_de(leg_revenue)}")
-        lines.append(f"Total Expected Net Profit: {fmt_isk_de(leg_profit)}")
+        lines.append(f"Total Expected Realized Profit: {fmt_isk_de(leg_profit)}")
+        lines.append(f"Total Full Sell Profit: {fmt_isk_de(leg_full_sell_profit)}")
+        lines.append(f"route_confidence: {float(route_summary.get('route_confidence', 0.0)):.2f}")
+        lines.append(f"transport_confidence: {float(route_summary.get('transport_confidence', 0.0)):.2f}")
+        lines.append(f"capital_lock_risk: {float(route_summary.get('capital_lock_risk', 0.0)):.2f}")
         lines.append(f"Total Fees and Taxes: {fmt_isk_de(leg_fees_taxes)}")
         lines.append(f"Total Route Costs: {fmt_isk_de(leg_route_costs)}")
         lines.append(f"total_route_m3: {float(leg.get('total_route_m3', leg.get('m3_used', 0.0)) or 0.0):.2f} m3")
@@ -176,12 +184,15 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             sell_total = sell_unit * qty
             duration = int(float(p.get("order_duration_days", 0) or 0))
             is_instant = bool(p.get("instant", False)) or str(p.get("mode", "")).lower() == "instant"
+            exit_type = str(p.get("exit_type", "instant" if is_instant else "speculative") or "speculative")
             exp_days = float(p.get("expected_days_to_sell", 0.0) or 0.0)
             fill_prob = float(p.get("fill_probability", 0.0) or 0.0) * 100.0
-            profit = float(p.get("profit", 0.0) or 0.0)
+            profit = float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0)
+            full_sell_profit = float(p.get("gross_profit_if_full_sell", p.get("profit", 0.0)) or 0.0)
             pick_m3 = float(p.get("unit_volume", 0.0) or 0.0) * float(qty)
             unit_m3 = float(p.get("unit_volume", 0.0) or 0.0)
             lines.append(f"{p_i}. {p.get('name', '')} (type_id {int(p.get('type_id', 0))})")
+            lines.append(f"   Exit Type: {exit_type}")
             lines.append(
                 f"   BUY  [{p.get('buy_at') or leg.get('source_label', 'SOURCE')}] qty={qty} @ {fmt_isk_de(buy_avg)} "
                 f"(Total {fmt_isk_de(buy_total)})"
@@ -197,7 +208,13 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
                     f"(Total {fmt_isk_de(sell_total)}) | Laufzeit {duration}d"
                 )
             lines.append(f"   Erwartet: {exp_days:.1f}d bis Verkauf | Fill {fill_prob:.1f}%")
-            lines.append(f"   Erwarteter Net Profit: {fmt_isk_de(profit)}")
+            lines.append(f"   Expected Realized Profit: {fmt_isk_de(profit)}")
+            lines.append(f"   Full Sell Profit: {fmt_isk_de(full_sell_profit)}")
+            lines.append(f"   Expected Units Sold: {float(p.get('expected_units_sold_90d', 0.0) or 0.0):.2f}")
+            lines.append(f"   Expected Units Unsold: {float(p.get('expected_units_unsold_90d', 0.0) or 0.0):.2f}")
+            lines.append(f"   liquidity_confidence: {float(p.get('liquidity_confidence', p.get('fill_probability', 0.0)) or 0.0):.2f}")
+            lines.append(f"   transport_confidence: {str(p.get('transport_cost_confidence', leg.get('cost_model_confidence', 'normal')) or 'normal')}")
+            lines.append(f"   overall_confidence: {float(p.get('overall_confidence', p.get('strict_confidence_score', p.get('fill_probability', 0.0))) or 0.0):.2f}")
             fee_components = _pick_fee_components(p)
             lines.append(f"   Fees+Taxes: {fmt_isk_de(_pick_total_fees_taxes(p))}")
             lines.append(f"   sales_tax_isk: {fmt_isk_de(fee_components['sales_tax_isk'])}")
@@ -209,13 +226,13 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             lines.append(f"   Cargo fuer diesen Pick: {pick_m3:.2f} m3")
             lines.append("")
         if not ordered:
-            lines.append("Keine Picks fuer diese Route.")
+            lines.append("Keine Picks fuer diese Route. Route ist nicht actionable.")
             lines.append("")
 
     lines.append("=" * 70)
     lines.append(f"TOTAL COST: {fmt_isk_de(total_cost)}")
     lines.append(f"TOTAL NET REVENUE: {fmt_isk_de(total_revenue)}")
-    lines.append(f"TOTAL EXPECTED NET PROFIT: {fmt_isk_de(total_profit)}")
+    lines.append(f"TOTAL EXPECTED REALIZED PROFIT: {fmt_isk_de(total_profit)}")
     lines.append(f"TOTAL FEES AND TAXES: {fmt_isk_de(total_fees_taxes)}")
     if total_shipping_cost > 0.0:
         lines.append(f"TOTAL SHIPPING COST: {fmt_isk_de(total_shipping_cost)}")
@@ -227,11 +244,17 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
 
 
 def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict], ranking_metric: str, max_routes: int) -> None:
-    metric = str(ranking_metric or "profit_total").strip().lower()
+    metric = str(ranking_metric or "risk_adjusted_expected_profit").strip().lower()
+    route_summaries = [(r, summarize_route_for_ranking(r)) for r in list(route_results or [])]
+    actionable = [entry for entry in route_summaries if bool(entry[1].get("actionable", False))]
+    pruned = [entry for entry in route_summaries if not bool(entry[1].get("actionable", False))]
     ranked = sorted(
-        list(route_results or []),
-        key=lambda r: (_route_ranking_value(r, metric), float(r.get("profit_total", 0.0))),
-        reverse=True
+        actionable,
+        key=lambda entry: (
+            _route_ranking_value(entry[0], metric),
+            float(entry[1].get("total_expected_realized_profit", 0.0)),
+        ),
+        reverse=True,
     )[: max(1, int(max_routes or 10))]
 
     def fmt_isk_de(x: float) -> str:
@@ -246,12 +269,15 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
     lines.append(f"Timestamp: {timestamp}")
     lines.append(f"ranking_metric: {metric}")
     lines.append(f"routes_considered: {len(list(route_results or []))}")
+    lines.append(f"actionable_routes: {len(actionable)}")
+    lines.append(f"pruned_routes: {len(pruned)}")
     lines.append(f"top_n: {len(ranked)}")
     lines.append("")
     if not ranked:
         lines.append("Keine Routen mit Picks gefunden.")
-    for idx, r in enumerate(ranked, start=1):
-        profit = float(r.get("profit_total", 0.0) or 0.0)
+    for idx, (r, summary) in enumerate(ranked, start=1):
+        profit = float(summary.get("total_expected_realized_profit", 0.0) or 0.0)
+        full_sell_profit = float(summary.get("total_full_sell_profit", r.get("profit_total", 0.0)) or 0.0)
         isk_used = float(r.get("isk_used", 0.0) or 0.0)
         m3_used = float(r.get("m3_used", 0.0) or 0.0)
         top3_ratio, top5_ratio, dominant = _profit_dominance(r)
@@ -259,6 +285,9 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Start: {r.get('source_label', '')}")
         lines.append(f"   Ziel: {r.get('dest_label', '')}")
         lines.append(f"   provider: {str(r.get('shipping_provider', '') or '')}")
+        lines.append(f"   route_confidence: {float(summary.get('route_confidence', 0.0)):.2f}")
+        lines.append(f"   transport_confidence: {float(summary.get('transport_confidence', 0.0)):.2f}")
+        lines.append(f"   capital_lock_risk: {float(summary.get('capital_lock_risk', 0.0)):.2f}")
         cost_model_confidence = str(r.get("cost_model_confidence", "normal") or "normal")
         if cost_model_confidence != "normal":
             lines.append(f"   transport_cost_confidence: {cost_model_confidence}")
@@ -267,7 +296,8 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
                 lines.append(f"   transport_cost_warning: {warn_msg}")
         lines.append(f"   Total Cost: {fmt_isk_de(isk_used)}")
         lines.append(f"   Total Net Revenue: {fmt_isk_de(float(r.get('net_revenue_total', 0.0) or 0.0))}")
-        lines.append(f"   Total Expected Net Profit: {fmt_isk_de(profit)}")
+        lines.append(f"   Total Expected Realized Profit: {fmt_isk_de(profit)}")
+        lines.append(f"   Total Full Sell Profit: {fmt_isk_de(full_sell_profit)}")
         lines.append(f"   Total Fees and Taxes: {fmt_isk_de(float(r.get('total_fees_taxes', 0.0) or 0.0))}")
         lines.append(f"   Total Route Costs: {fmt_isk_de(float(r.get('total_route_cost', 0.0) or 0.0))}")
         lines.append(f"   Total Shipping Cost: {fmt_isk_de(float(r.get('shipping_cost_total', 0.0) or 0.0))}")
@@ -280,6 +310,13 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Top3 Profit Share: {top3_ratio*100.0:.2f}%")
         lines.append(f"   Top5 Profit Share: {top5_ratio*100.0:.2f}%")
         lines.append(f"   Dominance Flag (>60%): {'YES' if dominant else 'NO'}")
+        lines.append("")
+    if pruned:
+        lines.append("PRUNED / NOT ACTIONABLE")
+        lines.append("-" * 24)
+        for r, summary in pruned:
+            reason = str(summary.get("route_prune_reason", r.get("route_prune_reason", "no_picks")) or "no_picks")
+            lines.append(f"- {r.get('route_label', '')}: {reason}")
         lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

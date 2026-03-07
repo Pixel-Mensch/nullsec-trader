@@ -1,0 +1,84 @@
+{
+  "meta": {
+    "timestamp": 1772803200,
+    "scenario": "profitable_jita_o4t"
+  },
+  "structures": {
+    "60003760": {
+      "orders": [
+        {
+          "type_id": 34,
+          "price": 5.0,
+          "volume_remain": 200000,
+          "is_buy_order": false,
+          "location_id": 60003760
+        },
+        {
+          "type_id": 34,
+          "price": 4.8,
+          "volume_remain": 150000,
+          "is_buy_order": true,
+          "location_id": 60003760
+        },
+        {
+          "type_id": 35,
+          "price": 8.0,
+          "volume_remain": 50000,
+          "is_buy_order": false,
+          "location_id": 60003760
+        }
+      ],
+      "meta": {
+        "label": "Jita IV Moon 4 Caldari Navy Assembly Plant"
+      }
+    },
+    "1040804972352": {
+      "orders": [
+        {
+          "type_id": 34,
+          "price": 7.2,
+          "volume_remain": 120000,
+          "is_buy_order": false
+        },
+        {
+          "type_id": 34,
+          "price": 7.25,
+          "volume_remain": 90000,
+          "is_buy_order": false
+        },
+        {
+          "type_id": 34,
+          "price": 6.7,
+          "volume_remain": 45000,
+          "is_buy_order": true
+        }
+      ],
+      "meta": {
+        "label": "O4T-Z5"
+      }
+    },
+    "1049588174021": {
+      "orders": [
+        {
+          "type_id": 34,
+          "price": 6.0,
+          "volume_remain": 25000,
+          "is_buy_order": false
+        }
+      ],
+      "meta": {
+        "label": "C-J6MT"
+      }
+    }
+  },
+  "type_cache": {
+    "34": {
+      "name": "Tritanium",
+      "volume": 0.01
+    },
+    "35": {
+      "name": "Pyerite",
+      "volume": 0.01
+    }
+  }
+}

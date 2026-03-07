@@ -202,3 +202,36 @@ def test_route_leaderboard_top_n_sorted() -> None:
     assert "Top3 Profit Share" in content
     assert "Dominance Flag (>60%): YES" in content
 
+def test_route_leaderboard_prunes_blocked_route_from_ranked_section() -> None:
+    routes = [
+        {
+            "route_label": "GOOD",
+            "source_label": "A",
+            "dest_label": "B",
+            "shipping_provider": "ITL",
+            "expected_realized_profit_total": 10_000_000.0,
+            "full_sell_profit_total": 12_000_000.0,
+            "isk_used": 50_000_000.0,
+            "m3_used": 1000.0,
+            "picks": [{"expected_realized_profit_90d": 10_000_000.0, "overall_confidence": 0.8, "expected_days_to_sell": 10.0}],
+            "cost_model_confidence": "normal",
+        },
+        {
+            "route_label": "BLOCKED",
+            "source_label": "C",
+            "dest_label": "D",
+            "route_blocked_due_to_transport": True,
+            "route_prune_reason": "missing_transport_cost_model",
+            "cost_model_confidence": "blocked",
+            "picks": [],
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-05_00-00-00", routes, ranking_metric="risk_adjusted_expected_profit", max_routes=5)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "GOOD" in content
+    assert "PRUNED / NOT ACTIONABLE" in content
+    assert "- BLOCKED: missing_transport_cost_model" in content
+

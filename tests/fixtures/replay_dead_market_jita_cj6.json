@@ -1,0 +1,60 @@
+{
+  "meta": {
+    "timestamp": 1772806800,
+    "scenario": "dead_market_jita_cj6"
+  },
+  "structures": {
+    "60003760": {
+      "orders": [
+        {
+          "type_id": 44992,
+          "price": 900000.0,
+          "volume_remain": 50,
+          "is_buy_order": false,
+          "location_id": 60003760
+        }
+      ],
+      "meta": {
+        "label": "Jita IV Moon 4 Caldari Navy Assembly Plant"
+      }
+    },
+    "1049588174021": {
+      "orders": [
+        {
+          "type_id": 44992,
+          "price": 2200000.0,
+          "volume_remain": 1,
+          "is_buy_order": false
+        },
+        {
+          "type_id": 44992,
+          "price": 3300000.0,
+          "volume_remain": 80,
+          "is_buy_order": false
+        }
+      ],
+      "meta": {
+        "label": "C-J6MT"
+      }
+    },
+    "1040804972352": {
+      "orders": [
+        {
+          "type_id": 44992,
+          "price": 1800000.0,
+          "volume_remain": 5,
+          "is_buy_order": false
+        }
+      ],
+      "meta": {
+        "label": "O4T-Z5"
+      }
+    }
+  },
+  "type_cache": {
+    "44992": {
+      "name": "Raitaru Blueprint Cache",
+      "volume": 500.0
+    }
+  }
+}

@@ -46,12 +46,26 @@ class TradeCandidate:
     profit_per_m3: float = 0.0
     profit_per_m3_per_day: float = 0.0
     mode: str = "instant"
+    exit_type: str = ""
     target_sell_price: float = 0.0
+    target_price_basis: str = ""
+    target_price_confidence: float = 0.0
+    has_reliable_price_basis: bool = False
+    estimated_transport_cost: float = 0.0
     avg_daily_volume_30d: float = 0.0
     avg_daily_volume_7d: float = 0.0
+    estimated_sellable_units_90d: float = 0.0
     expected_days_to_sell: float = 0.0
     sell_through_ratio_90d: float = 0.0
     risk_score: float = 0.0
+    gross_profit_if_full_sell: float = 0.0
+    expected_units_sold_90d: float = 0.0
+    expected_units_unsold_90d: float = 0.0
+    expected_realized_profit_90d: float = 0.0
+    expected_realized_profit_per_m3_90d: float = 0.0
+    exit_confidence: float = 0.0
+    liquidity_confidence: float = 0.0
+    overall_confidence: float = 0.0
     expected_profit_90d: float = 0.0
     expected_profit_per_m3_90d: float = 0.0
     used_volume_fallback: bool = False
@@ -74,6 +88,56 @@ class TradeCandidate:
     carried_through_legs: int = 1
     route_adjusted_score: float = 0.0
     jita_split_price: float = 0.0
+
+    def __post_init__(self) -> None:
+        if not self.exit_type:
+            mode = str(self.mode or "").strip().lower()
+            if bool(self.instant) or mode == "instant":
+                self.exit_type = "instant"
+            elif mode == "planned_sell":
+                self.exit_type = "planned"
+            else:
+                self.exit_type = "speculative"
+        if self.gross_profit_if_full_sell <= 0.0 and self.max_units > 0 and self.profit_per_unit > 0.0:
+            self.gross_profit_if_full_sell = float(self.profit_per_unit) * float(self.max_units)
+        if self.expected_realized_profit_90d <= 0.0 and self.expected_profit_90d > 0.0:
+            self.expected_realized_profit_90d = float(self.expected_profit_90d)
+        if self.expected_profit_90d <= 0.0 and self.expected_realized_profit_90d > 0.0:
+            self.expected_profit_90d = float(self.expected_realized_profit_90d)
+        if self.expected_realized_profit_per_m3_90d <= 0.0 and self.expected_profit_per_m3_90d > 0.0:
+            self.expected_realized_profit_per_m3_90d = float(self.expected_profit_per_m3_90d)
+        if self.expected_profit_per_m3_90d <= 0.0 and self.expected_realized_profit_per_m3_90d > 0.0:
+            self.expected_profit_per_m3_90d = float(self.expected_realized_profit_per_m3_90d)
+        if self.expected_units_sold_90d <= 0.0 and self.max_units > 0:
+            self.expected_units_sold_90d = float(self.max_units if self.instant else 0.0)
+        if self.expected_units_unsold_90d <= 0.0 and self.max_units > 0:
+            self.expected_units_unsold_90d = max(0.0, float(self.max_units) - float(self.expected_units_sold_90d))
+        if self.estimated_sellable_units_90d <= 0.0:
+            self.estimated_sellable_units_90d = float(self.expected_units_sold_90d)
+        if self.target_price_confidence <= 0.0 and self.has_reliable_price_basis:
+            self.target_price_confidence = 1.0
+        if self.liquidity_confidence <= 0.0:
+            self.liquidity_confidence = max(0.0, min(1.0, float(self.fill_probability)))
+        if self.exit_confidence <= 0.0:
+            self.exit_confidence = max(
+                0.0,
+                min(
+                    1.0,
+                    float(self.strict_confidence_score)
+                    if self.strict_confidence_score > 0.0
+                    else float(self.liquidity_confidence),
+                ),
+            )
+        if self.overall_confidence <= 0.0:
+            self.overall_confidence = max(
+                0.0,
+                min(
+                    1.0,
+                    float(self.strict_confidence_score)
+                    if self.strict_confidence_score > 0.0
+                    else min(float(self.exit_confidence), float(self.liquidity_confidence)),
+                ),
+            )
 
 
 class FilterFunnel:

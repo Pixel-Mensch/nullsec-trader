@@ -102,6 +102,8 @@
     "portfolio": {
         "max_item_share_of_budget": 0.5,
         "max_items": 50,
+        "max_liquidation_days_per_position": 45,
+        "max_share_of_estimated_demand_per_position": 0.5,
         "target_budget_utilization": 0.9,
         "target_cargo_utilization": 0.9,
         "cargo_fill_enabled": true,
@@ -132,9 +134,10 @@
     "route_search": {
         "enabled": true,
         "max_routes": 5,
-        "ranking_metric": "profit_total",
+        "ranking_metric": "risk_adjusted_expected_profit",
         "allow_all_structures_internal": true,
         "allow_shipping_lanes": true,
+        "allow_zero_transport_cost_for_routes": [],
         "allowed_pairs": [
             {
                 "from": "jita_44",

@@ -19,8 +19,10 @@ nullsec-trader = "main:main"
 py-modules = [
   "main",
   "nullsectrader",
-  "legacy_core",
-  "legacy_runtime",
+  "runtime_common",
+  "runtime_clients",
+  "runtime_reports",
+  "runtime_runner",
   "startup_helpers",
   "candidate_engine",
   "config_loader",
@@ -32,9 +34,7 @@ py-modules = [
   "market_normalization",
   "models",
   "portfolio_builder",
-  "route_costs",
   "route_search",
   "scoring",
   "shipping",
-  "transport_allocation",
 ]

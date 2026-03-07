@@ -80,6 +80,103 @@ def get_structure_micro_liquidity(structure_orders: list[dict], type_id: int) ->
         "competition_density_near_best": int(competition_density_near_best),
     }
 
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def _derive_planned_sell_price(
+    dst_sell_lv: list[OrderLevel],
+    undercut_pct: float,
+    competition_band_pct: float,
+    min_top_level_units: int,
+    min_supported_levels: int,
+    max_isolated_top_gap_pct: float,
+    reactive_queue_ratio: float,
+) -> dict:
+    import math
+
+    if not dst_sell_lv:
+        return {"valid": False, "reason": "planned_price_no_sell_levels"}
+
+    best_level = dst_sell_lv[0]
+    best_price = float(best_level.price)
+    best_units = int(best_level.volume)
+    second_price = float(dst_sell_lv[1].price) if len(dst_sell_lv) > 1 else 0.0
+    band_pct = max(float(competition_band_pct), 0.002)
+    band_cutoff = best_price * (1.0 + band_pct)
+    band_levels = [lv for lv in dst_sell_lv if float(lv.price) <= band_cutoff]
+    band_units = int(sum(int(lv.volume) for lv in band_levels))
+    band_level_count = int(len(band_levels))
+    top_gap_pct = ((second_price - best_price) / best_price) if best_price > 0.0 and second_price > 0.0 else 1.0
+
+    min_supported = max(2, int(min_supported_levels))
+    min_best_units = max(1, int(min_top_level_units))
+    has_supported_top = (
+        best_price > 0.0
+        and best_units >= min_best_units
+        and band_level_count >= min_supported
+        and top_gap_pct <= max(0.0, float(max_isolated_top_gap_pct))
+    )
+    if not has_supported_top:
+        return {
+            "valid": False,
+            "reason": "planned_price_unreliable_orderbook",
+            "best_price": float(best_price),
+            "best_level_units": int(best_units),
+            "band_level_count": int(band_level_count),
+            "band_units": int(band_units),
+            "top_gap_pct": float(top_gap_pct),
+        }
+
+    undercut = max(0.0, float(undercut_pct))
+    target_sell_price = best_price * (1.0 - undercut)
+    target_sell_price = max(0.01, float(target_sell_price))
+    queue_at_or_below_target = int(sum(int(lv.volume) for lv in dst_sell_lv if float(lv.price) <= target_sell_price + 1e-9))
+    reactive_queue_units = max(0, band_units - queue_at_or_below_target)
+    queue_shadow_units = int(math.ceil(float(reactive_queue_units) * max(0.0, float(reactive_queue_ratio))))
+    queue_ahead_units = max(queue_at_or_below_target, queue_shadow_units)
+
+    price_conf = 0.45
+    price_conf += min(0.20, float(best_units) / max(1.0, float(min_best_units)) * 0.10)
+    price_conf += min(0.20, float(band_level_count) / max(1.0, float(min_supported)) * 0.10)
+    price_conf += min(0.15, (1.0 - _clamp01(top_gap_pct / max(1e-9, float(max_isolated_top_gap_pct)))) * 0.15)
+    if queue_ahead_units <= 0:
+        price_conf += 0.10
+
+    return {
+        "valid": True,
+        "target_sell_price": float(target_sell_price),
+        "price_basis": "best_ask_undercut" if undercut > 0.0 else "best_ask_match",
+        "target_price_confidence": _clamp01(price_conf),
+        "has_reliable_price_basis": True,
+        "queue_ahead_units": int(queue_ahead_units),
+        "competition_price_levels_near_best": int(band_level_count),
+        "visible_band_units": int(band_units),
+        "best_visible_sell_price": float(best_price),
+        "best_level_units": int(best_units),
+        "top_gap_pct": float(top_gap_pct),
+    }
+
+
+def _planned_structure_liquidity_confidence(
+    depth_within_2pct_sell: int,
+    min_depth_within_2pct_sell: int,
+    competition_density_near_best: int,
+    min_competition_density_near_best: int,
+    max_competition_density_near_best: int,
+    price_basis_confidence: float,
+) -> float:
+    depth_floor = max(1, int(min_depth_within_2pct_sell))
+    min_density = max(1, int(min_competition_density_near_best))
+    max_density = max(min_density, int(max_competition_density_near_best))
+    depth_score = _clamp01(float(depth_within_2pct_sell) / float(depth_floor * 2))
+    density_score = _clamp01(float(competition_density_near_best) / float(max(1, min_density + 1)))
+    if competition_density_near_best > max_density:
+        over = float(competition_density_near_best - max_density)
+        density_score *= max(0.0, 1.0 - min(0.75, over / max(1.0, float(max_density))))
+    return _clamp01((depth_score * 0.45) + (density_score * 0.35) + (_clamp01(price_basis_confidence) * 0.20))
+
 def depth_slice(
     levels: list[OrderLevel],
     is_buy: bool,
@@ -227,7 +324,27 @@ def compute_candidates(
     relist_budget_isk = float(filters.get("relist_budget_isk", fees.get("relist_budget_isk", 0.0)))
     min_history_order_count = int(filters.get("min_market_history_order_count", 1))
     min_depth_within_2pct_sell = int(filters.get("min_depth_within_2pct_sell", 1))
+    min_competition_density_near_best = int(filters.get("min_competition_density_near_best", 2))
     max_competition_density_near_best = int(filters.get("max_competition_density_near_best", 8))
+    planned_min_supported_sell_levels = int(filters.get("planned_min_supported_sell_levels", 2))
+    planned_max_isolated_top_gap_pct = float(
+        filters.get("planned_max_isolated_top_gap_pct", max(competition_band_pct, 0.02))
+    )
+    planned_reactive_queue_ratio = float(filters.get("planned_reactive_queue_ratio", 0.50))
+    planned_market_capture_pct = float(filters.get("planned_market_capture_pct", 0.35))
+    planned_fallback_market_capture_pct = float(filters.get("planned_fallback_market_capture_pct", 0.10))
+    planned_history_only_expectation_penalty = float(filters.get("planned_history_only_expectation_penalty", 0.75))
+    planned_history_only_confidence_penalty = float(filters.get("planned_history_only_confidence_penalty", 0.20))
+    planned_history_only_position_cap = float(filters.get("planned_history_only_position_cap", 0.35))
+    planned_min_liquidity_confidence = float(filters.get("planned_min_liquidity_confidence", 0.45))
+    planned_min_exit_confidence = float(filters.get("planned_min_exit_confidence", 0.40))
+    planned_max_queue_to_demand_ratio = float(filters.get("planned_max_queue_to_demand_ratio", 1.25))
+    planned_max_share_of_estimated_demand = float(
+        filters.get(
+            "max_share_of_estimated_demand_per_position",
+            filters.get("planned_max_share_of_estimated_demand_per_position", 0.50),
+        )
+    )
     reference_cfg = filters.get("reference_price", {})
     if not isinstance(reference_cfg, dict):
         reference_cfg = {}
@@ -506,6 +623,11 @@ def compute_candidates(
         sell_sugg = None
 
         target_sell_price = 0.0
+        target_price_basis = ""
+        target_price_confidence = 0.0
+        has_reliable_price_basis = False
+        queue_ahead_units = 0
+        competition_price_levels_near_best = 0
         if mode == "instant":
             dst_lv = build_levels(dest_buy_by_type.get(tid, []), is_buy=True)
             if not src_lv or not dst_lv:
@@ -564,11 +686,40 @@ def compute_candidates(
                 outlier_window_levels=outlier_window_levels,
                 min_top_level_units=min_top_level_units
             )
-            target_sell_price = float(dst_sell_lv[0].price)
+            price_eval = _derive_planned_sell_price(
+                dst_sell_lv=dst_sell_lv,
+                undercut_pct=undercut_pct,
+                competition_band_pct=competition_band_pct,
+                min_top_level_units=min_top_level_units,
+                min_supported_levels=planned_min_supported_sell_levels,
+                max_isolated_top_gap_pct=planned_max_isolated_top_gap_pct,
+                reactive_queue_ratio=planned_reactive_queue_ratio,
+            )
+            if not bool(price_eval.get("valid", False)):
+                record_explain(
+                    "rejected",
+                    tid,
+                    names.get(tid, f"type_{tid}"),
+                    str(price_eval.get("reason", "planned_price_unreliable_orderbook")),
+                    {
+                        "best_price": float(price_eval.get("best_price", 0.0) or 0.0),
+                        "best_level_units": int(price_eval.get("best_level_units", 0) or 0),
+                        "band_level_count": int(price_eval.get("band_level_count", 0) or 0),
+                        "band_units": int(price_eval.get("band_units", 0) or 0),
+                        "top_gap_pct": float(price_eval.get("top_gap_pct", 0.0) or 0.0),
+                    }
+                )
+                continue
+            target_sell_price = float(price_eval.get("target_sell_price", 0.0) or 0.0)
             sell_avg = target_sell_price
             sell_qty = int(buy_qty)
             instant_flag = False
             sell_sugg = target_sell_price
+            target_price_basis = str(price_eval.get("price_basis", "") or "")
+            target_price_confidence = float(price_eval.get("target_price_confidence", 0.0) or 0.0)
+            has_reliable_price_basis = bool(price_eval.get("has_reliable_price_basis", False))
+            queue_ahead_units = int(price_eval.get("queue_ahead_units", 0) or 0)
+            competition_price_levels_near_best = int(price_eval.get("competition_price_levels_near_best", 0) or 0)
 
         max_units = min(buy_qty, sell_qty)
         if buy_avg < min_source_sell_price_isk:
@@ -753,14 +904,24 @@ def compute_candidates(
                 {"dest_buy_depth_units": int(dest_buy_depth_units), "min_dest_buy_depth_units": int(min_dest_buy_depth_units)}
             )
             continue
-        # Heuristic competition and queue-ahead model. For fast_sell this estimates
-        # how crowded the top of the destination sell book is.
-        competition_price_levels_near_best = 0
-        queue_ahead_units = 0
         fill_probability = 1.0 if instant_flag else 0.0
+        gross_profit_if_full_sell = 0.0
+        expected_units_sold_90d = 0.0
+        expected_units_unsold_90d = 0.0
+        expected_realized_profit_90d = 0.0
+        expected_realized_profit_per_m3_90d = 0.0
+        estimated_sellable_units_90d = 0.0
+        liquidity_confidence = 0.0
+        exit_confidence = 0.0
+        overall_confidence = 0.0
+        estimated_transport_cost = 0.0
         expected_days_to_sell = 0.0
         sell_through_ratio_90d = 0.0
         risk_score = 0.0
+        expected_profit_90d = 0.0
+        expected_profit_per_m3_90d = 0.0
+        trade_profit_per_unit_before_transport = float(profit_per_unit)
+        gross_profit_if_full_sell = float(trade_profit_per_unit_before_transport) * float(max_units)
         expected_profit_90d = 0.0
         expected_profit_per_m3_90d = 0.0
         split_px = 0.0
@@ -772,6 +933,18 @@ def compute_candidates(
                 fill_probability = 1.0
             else:
                 fill_probability = min(0.99, max(0.0, coverage))
+            expected_units_sold_90d = float(max_units) * float(fill_probability)
+            expected_units_unsold_90d = max(0.0, float(max_units) - float(expected_units_sold_90d))
+            expected_realized_profit_90d = float(trade_profit_per_unit_before_transport) * float(expected_units_sold_90d)
+            expected_realized_profit_per_m3_90d = (
+                expected_realized_profit_90d / max(1.0, float(max_units) * float(unit_vol))
+            ) if unit_vol > 0 else 0.0
+            estimated_sellable_units_90d = float(dest_buy_depth_units)
+            liquidity_confidence = _clamp01(0.50 + (float(fill_probability) * 0.50))
+            exit_confidence = liquidity_confidence
+            overall_confidence = liquidity_confidence
+            expected_profit_90d = expected_realized_profit_90d
+            expected_profit_per_m3_90d = expected_realized_profit_per_m3_90d
         elif mode == "planned_sell":
             if avg_daily_volume_30d <= 0:
                 record_explain(
@@ -837,8 +1010,11 @@ def compute_candidates(
                 )
                 continue
             depth_ok = depth_within_2pct_sell >= min_depth_within_2pct_sell
-            competition_ok = competition_density_near_best <= max_competition_density_near_best
-            if not (depth_ok or competition_ok):
+            density_ok = (
+                competition_density_near_best >= min_competition_density_near_best
+                and competition_density_near_best <= max_competition_density_near_best
+            )
+            if not (depth_ok and density_ok and has_reliable_price_basis):
                 record_explain(
                     "rejected",
                     tid,
@@ -848,27 +1024,141 @@ def compute_candidates(
                         "depth_within_2pct_sell": int(depth_within_2pct_sell),
                         "min_depth_within_2pct_sell": int(min_depth_within_2pct_sell),
                         "competition_density_near_best": int(competition_density_near_best),
+                        "min_competition_density_near_best": int(min_competition_density_near_best),
                         "max_competition_density_near_best": int(max_competition_density_near_best),
+                        "has_reliable_price_basis": bool(has_reliable_price_basis),
+                        "target_price_confidence": float(target_price_confidence),
                     }
                 )
                 continue
-            expected_days_to_sell = float(max_units) / max(avg_daily_volume_30d, 1e-9)
-            sell_through_ratio_90d = min(1.0, (avg_daily_volume_30d * float(horizon_days)) / max(1.0, float(max_units)))
-            risk_score = min(1.0, max(0.0, 1.0 - sell_through_ratio_90d))
-            expected_profit_90d = float(profit_per_unit) * float(max_units)
-            expected_profit_per_m3_90d = expected_profit_90d / max(1.0, float(max_units) * float(unit_vol))
-            fill_probability = min(0.85, sell_through_ratio_90d)
+            structure_confidence = _planned_structure_liquidity_confidence(
+                depth_within_2pct_sell=depth_within_2pct_sell,
+                min_depth_within_2pct_sell=min_depth_within_2pct_sell,
+                competition_density_near_best=competition_density_near_best,
+                min_competition_density_near_best=min_competition_density_near_best,
+                max_competition_density_near_best=max_competition_density_near_best,
+                price_basis_confidence=target_price_confidence,
+            )
+            history_confidence = 0.30 if used_volume_fallback else 0.55
+            history_confidence += min(0.15, max(0.0, avg_daily_volume_30d) * 0.01)
+            if strict_min_avg_daily_volume_7d > 0.0:
+                history_confidence += min(
+                    0.15,
+                    max(0.0, avg_daily_volume_7d / max(1e-9, strict_min_avg_daily_volume_7d)) * 0.15,
+                )
+            elif avg_daily_volume_7d > 0.0:
+                history_confidence += min(0.10, float(avg_daily_volume_7d) * 0.01)
+            history_confidence = _clamp01(history_confidence - planned_history_only_confidence_penalty)
+
+            conservative_market_capture_pct = planned_fallback_market_capture_pct if used_volume_fallback else planned_market_capture_pct
+            effective_daily_sellable = float(avg_daily_volume_30d) * max(0.01, float(conservative_market_capture_pct))
+            effective_daily_sellable *= max(0.35, float(structure_confidence))
+            effective_daily_sellable *= max(0.35, float(target_price_confidence))
+            effective_daily_sellable *= max(0.25, 1.0 - max(0.0, float(reference_price_penalty)))
+            effective_daily_sellable *= max(0.25, float(planned_history_only_expectation_penalty))
+
+            queue_to_demand_ratio = float(queue_ahead_units) / max(1.0, float(avg_daily_volume_30d) * float(horizon_days))
+            if queue_to_demand_ratio > planned_max_queue_to_demand_ratio:
+                record_explain(
+                    "rejected",
+                    tid,
+                    name,
+                    "planned_queue_ahead_too_heavy",
+                    {
+                        "queue_ahead_units": int(queue_ahead_units),
+                        "avg_daily_volume_30d": float(avg_daily_volume_30d),
+                        "horizon_days": int(horizon_days),
+                        "queue_to_demand_ratio": float(queue_to_demand_ratio),
+                        "planned_max_queue_to_demand_ratio": float(planned_max_queue_to_demand_ratio),
+                    }
+                )
+                continue
+
+            estimated_sellable_units_90d = max(
+                0.0,
+                (float(effective_daily_sellable) * float(horizon_days)) - float(queue_ahead_units),
+            )
+            position_cap_share = min(
+                max(0.05, float(planned_max_share_of_estimated_demand)),
+                max(0.05, float(planned_history_only_position_cap)),
+            )
+            demand_limited_units = int(math.floor(float(estimated_sellable_units_90d) * float(position_cap_share)))
             if used_volume_fallback:
-                fill_probability = min(fill_probability, fallback_fill_probability_cap)
-                sell_through_ratio_90d = min(sell_through_ratio_90d, fallback_fill_probability_cap)
-                risk_score = max(risk_score, 1.0 - fallback_fill_probability_cap)
-                expected_profit_90d *= fallback_fill_probability_cap
-                expected_profit_per_m3_90d *= fallback_fill_probability_cap
-            if reference_price_penalty > 0.0:
-                penalty_factor = max(0.0, 1.0 - reference_price_penalty)
-                expected_profit_90d *= penalty_factor
-                expected_profit_per_m3_90d *= penalty_factor
-                risk_score = max(risk_score, reference_price_penalty)
+                demand_limited_units = min(
+                    demand_limited_units if demand_limited_units > 0 else 0,
+                    max(1, int(math.floor(float(fallback_max_units_cap) * 0.75))) if fallback_max_units_cap > 0 else 0,
+                )
+            if demand_limited_units <= 0:
+                record_explain(
+                    "rejected",
+                    tid,
+                    name,
+                    "planned_demand_cap_zero",
+                    {
+                        "estimated_sellable_units_90d": float(estimated_sellable_units_90d),
+                        "position_cap_share": float(position_cap_share),
+                    }
+                )
+                continue
+            max_units = min(max_units, demand_limited_units)
+            if strict_enabled and strict_planned_max_units_cap > 0:
+                max_units = min(max_units, strict_planned_max_units_cap)
+            if max_units < min_depth_units:
+                record_explain(
+                    "rejected",
+                    tid,
+                    name,
+                    "planned_demand_cap_too_low",
+                    {
+                        "max_units": int(max_units),
+                        "min_depth_units": int(min_depth_units),
+                        "estimated_sellable_units_90d": float(estimated_sellable_units_90d),
+                    }
+                )
+                continue
+
+            expected_days_to_sell = float(queue_ahead_units + max_units) / max(float(effective_daily_sellable), 1e-9)
+            liquidity_confidence = _clamp01(
+                (float(structure_confidence) * 0.40)
+                + (float(history_confidence) * 0.30)
+                + (_clamp01(float(estimated_sellable_units_90d) / max(1.0, float(max_units))) * 0.30)
+            )
+            exit_confidence = _clamp01(
+                (float(target_price_confidence) * 0.45)
+                + (float(liquidity_confidence) * 0.35)
+                + ((1.0 - max(0.0, float(reference_price_penalty))) * 0.20)
+                - float(planned_history_only_confidence_penalty)
+            )
+            overall_confidence = min(liquidity_confidence, exit_confidence)
+            if liquidity_confidence < planned_min_liquidity_confidence or exit_confidence < planned_min_exit_confidence:
+                record_explain(
+                    "rejected",
+                    tid,
+                    name,
+                    "planned_low_confidence",
+                    {
+                        "liquidity_confidence": float(liquidity_confidence),
+                        "planned_min_liquidity_confidence": float(planned_min_liquidity_confidence),
+                        "exit_confidence": float(exit_confidence),
+                        "planned_min_exit_confidence": float(planned_min_exit_confidence),
+                    }
+                )
+                continue
+
+            expected_sell_ratio = min(0.90, max(0.10, 0.20 + (float(overall_confidence) * 0.70)))
+            if used_volume_fallback:
+                expected_sell_ratio = min(expected_sell_ratio, fallback_fill_probability_cap)
+            expected_units_sold_90d = float(max_units) * float(expected_sell_ratio)
+            expected_units_unsold_90d = max(0.0, float(max_units) - float(expected_units_sold_90d))
+            fill_probability = _clamp01(expected_sell_ratio)
+            sell_through_ratio_90d = float(expected_units_sold_90d) / max(1.0, float(max_units))
+            risk_score = _clamp01(1.0 - float(overall_confidence))
+            expected_realized_profit_90d = float(trade_profit_per_unit_before_transport) * float(expected_units_sold_90d)
+            expected_realized_profit_per_m3_90d = (
+                expected_realized_profit_90d / max(1.0, float(max_units) * float(unit_vol))
+            ) if unit_vol > 0 else 0.0
+            expected_profit_90d = expected_realized_profit_90d
+            expected_profit_per_m3_90d = expected_realized_profit_per_m3_90d
             if strict_enabled and expected_days_to_sell > max_expected_days_to_sell:
                 record_explain(
                     "rejected",
@@ -911,13 +1201,16 @@ def compute_candidates(
                     {"sell_through_ratio_90d": float(sell_through_ratio_90d), "min_sell_through_ratio_90d": float(min_sell_through_ratio_90d)}
                 )
                 continue
-            if expected_profit_90d < min_expected_profit_isk:
+            if expected_realized_profit_90d < min_expected_profit_isk:
                 record_explain(
                     "rejected",
                     tid,
                     name,
                     "expected_profit_too_low",
-                    {"expected_profit_90d": float(expected_profit_90d), "min_expected_profit_isk": float(min_expected_profit_isk)}
+                    {
+                        "expected_realized_profit_90d": float(expected_realized_profit_90d),
+                        "min_expected_profit_isk": float(min_expected_profit_isk),
+                    }
                 )
                 continue
         elif not instant_flag:
@@ -929,6 +1222,18 @@ def compute_candidates(
                 queue_ahead_units = sum(lv.volume for lv in dst_sell_lv if lv.price <= band_cutoff)
                 denom = max(1.0, float(queue_ahead_units + max_units))
                 fill_probability = min(1.0, daily_vol / denom) if daily_vol > 0 else 0.0
+            expected_units_sold_90d = float(max_units) * float(fill_probability)
+            expected_units_unsold_90d = max(0.0, float(max_units) - float(expected_units_sold_90d))
+            expected_realized_profit_90d = float(trade_profit_per_unit_before_transport) * float(expected_units_sold_90d)
+            expected_realized_profit_per_m3_90d = (
+                expected_realized_profit_90d / max(1.0, float(max_units) * float(unit_vol))
+            ) if unit_vol > 0 else 0.0
+            estimated_sellable_units_90d = float(daily_vol) * float(horizon_days)
+            liquidity_confidence = _clamp01(float(fill_probability))
+            exit_confidence = liquidity_confidence
+            overall_confidence = liquidity_confidence
+            expected_profit_90d = expected_realized_profit_90d
+            expected_profit_per_m3_90d = expected_realized_profit_per_m3_90d
 
         if shipping_lane_cfg is not None and max_units > 0:
             ship_defaults = route_context.get("shipping_defaults", {})
@@ -953,13 +1258,16 @@ def compute_candidates(
                 total_volume_m3=float(unit_vol) * float(max_units),
                 total_collateral_isk=conservative_collateral
             ).get("total_cost", 0.0))
+            estimated_transport_cost = float(est_shipping_total)
             est_shipping_per_unit = est_shipping_total / max(1.0, float(max_units))
             profit_per_unit -= est_shipping_per_unit
-            if mode == "planned_sell":
-                expected_profit_90d = max(0.0, expected_profit_90d - est_shipping_total * max(0.0, float(fill_probability)))
-                expected_profit_per_m3_90d = (
-                    expected_profit_90d / max(1.0, float(max_units) * float(unit_vol))
-                ) if unit_vol > 0 else 0.0
+            gross_profit_if_full_sell = float(trade_profit_per_unit_before_transport) * float(max_units) - float(est_shipping_total)
+            expected_realized_profit_90d = float(trade_profit_per_unit_before_transport) * float(expected_units_sold_90d) - float(est_shipping_total)
+            expected_realized_profit_per_m3_90d = (
+                expected_realized_profit_90d / max(1.0, float(max_units) * float(unit_vol))
+            ) if unit_vol > 0 else 0.0
+            expected_profit_90d = expected_realized_profit_90d
+            expected_profit_per_m3_90d = expected_realized_profit_per_m3_90d
             if profit_per_unit <= 0.0:
                 record_explain(
                     "rejected",
@@ -979,6 +1287,19 @@ def compute_candidates(
                     {"profit_pct": float(profit_pct), "min_profit_pct": float(min_profit_pct)}
                 )
                 continue
+            if mode == "planned_sell" and expected_realized_profit_90d < min_expected_profit_isk:
+                record_explain(
+                    "rejected",
+                    tid,
+                    name,
+                    "expected_profit_too_low_after_shipping",
+                    {
+                        "expected_realized_profit_90d": float(expected_realized_profit_90d),
+                        "min_expected_profit_isk": float(min_expected_profit_isk),
+                        "estimated_shipping_total": float(est_shipping_total),
+                    }
+                )
+                continue
         if mode != "planned_sell" and fill_probability < min_fill_probability:
             record_explain(
                 "rejected",
@@ -995,7 +1316,7 @@ def compute_candidates(
             # Candidate-stage proxy for instant mode; true fill ratio is computed on final portfolio qty.
             turnover_factor = 1.0
         elif mode == "planned_sell":
-            turnover_factor = sell_through_ratio_90d
+            turnover_factor = min(max_turnover_factor, max(0.0, float(expected_units_sold_90d) / max(1.0, float(max_units))))
         else:
             effective_daily_vol = daily_vol if daily_vol > 0 else fallback_daily_volume
             turnover_factor = (effective_daily_vol / max(1.0, float(max_units))) if max_units > 0 else 0.0
@@ -1003,21 +1324,12 @@ def compute_candidates(
         profit_per_m3 = (profit_per_unit / unit_vol) if unit_vol > 0 else 0.0
         profit_per_m3_per_day = profit_per_m3 * turnover_factor
         if mode == "planned_sell":
-            # Conservative confidence proxy for diagnostics and optional ranking sanity checks.
-            conf = 0.0
-            conf += 0.15 if not used_volume_fallback else 0.0
-            conf += min(0.20, max(0.0, avg_daily_volume_30d / max(1e-9, min_avg_daily_volume)) * 0.20)
-            if strict_min_avg_daily_volume_7d > 0:
-                conf += min(0.20, max(0.0, avg_daily_volume_7d / max(1e-9, strict_min_avg_daily_volume_7d)) * 0.20)
-            else:
-                conf += min(0.10, max(0.0, avg_daily_volume_7d) * 0.01)
-            conf += min(0.20, max(0.0, sell_through_ratio_90d) * 0.20)
-            conf += min(0.15, max(0.0, 1.0 - min(1.0, expected_days_to_sell / max(1e-9, max_expected_days_to_sell))) * 0.15)
-            if reference_price > 0:
-                conf += min(0.10, max(0.0, 1.0 - max(0.0, sell_markup_vs_ref)) * 0.10)
-            strict_confidence_score = max(0.0, min(1.0, conf))
+            strict_confidence_score = _clamp01(float(overall_confidence))
         else:
-            strict_confidence_score = max(0.0, min(1.0, float(fill_probability)))
+            liquidity_confidence = max(liquidity_confidence, _clamp01(float(fill_probability)))
+            exit_confidence = max(exit_confidence, liquidity_confidence)
+            overall_confidence = max(overall_confidence, min(exit_confidence, liquidity_confidence))
+            strict_confidence_score = _clamp01(float(overall_confidence if overall_confidence > 0.0 else fill_probability))
 
         if mode in ("fast_sell", "planned_sell"):
             print(f"    Hinweis: {name} (type_id {tid}) benoetigt Verkaufsauftrag @ {sell_sugg:.2f} fuer {order_duration}d")
@@ -1051,12 +1363,26 @@ def compute_candidates(
                 profit_per_m3=profit_per_m3,
                 profit_per_m3_per_day=profit_per_m3_per_day,
                 mode=mode,
+                exit_type=("instant" if instant_flag else ("planned" if mode == "planned_sell" else "speculative")),
                 target_sell_price=float(target_sell_price if target_sell_price > 0 else (sell_sugg or 0.0)),
+                target_price_basis=str(target_price_basis),
+                target_price_confidence=float(target_price_confidence),
+                has_reliable_price_basis=bool(has_reliable_price_basis),
+                estimated_transport_cost=float(estimated_transport_cost),
                 avg_daily_volume_30d=float(avg_daily_volume_30d),
                 avg_daily_volume_7d=float(avg_daily_volume_7d),
+                estimated_sellable_units_90d=float(estimated_sellable_units_90d),
                 expected_days_to_sell=float(expected_days_to_sell),
                 sell_through_ratio_90d=float(sell_through_ratio_90d),
                 risk_score=float(risk_score),
+                gross_profit_if_full_sell=float(gross_profit_if_full_sell),
+                expected_units_sold_90d=float(expected_units_sold_90d),
+                expected_units_unsold_90d=float(expected_units_unsold_90d),
+                expected_realized_profit_90d=float(expected_realized_profit_90d),
+                expected_realized_profit_per_m3_90d=float(expected_realized_profit_per_m3_90d),
+                exit_confidence=float(exit_confidence),
+                liquidity_confidence=float(liquidity_confidence),
+                overall_confidence=float(overall_confidence if overall_confidence > 0.0 else strict_confidence_score),
                 expected_profit_90d=float(expected_profit_90d),
                 expected_profit_per_m3_90d=float(expected_profit_per_m3_90d),
                 used_volume_fallback=bool(used_volume_fallback),
@@ -1076,7 +1402,12 @@ def compute_candidates(
     ranking_metric = str(filters.get("ranking_metric", "profit_per_m3_per_day")).lower()
     if ranking_metric == "expected_profit_per_m3_90d":
         candidates.sort(
-            key=lambda c: (c.expected_profit_per_m3_90d, -c.expected_days_to_sell, -c.risk_score),
+            key=lambda c: (
+                c.expected_realized_profit_per_m3_90d,
+                c.expected_realized_profit_90d,
+                -c.expected_days_to_sell,
+                c.overall_confidence,
+            ),
             reverse=True
         )
     elif ranking_metric == "profit_per_m3":
@@ -1088,7 +1419,7 @@ def compute_candidates(
 
     filtered = []
     for c in candidates:
-        max_profit_total = c.expected_profit_90d if mode == "planned_sell" else (c.profit_per_unit * c.max_units)
+        max_profit_total = c.expected_realized_profit_90d if mode == "planned_sell" else (c.profit_per_unit * c.max_units)
         if max_profit_total >= min_profit_total:
             filtered.append(c)
             kept_metrics = {
@@ -1112,10 +1443,14 @@ def compute_candidates(
                 kept_metrics["max_expected_days_to_sell"] = float(max_expected_days_to_sell)
                 kept_metrics["sell_through_ratio_90d"] = float(c.sell_through_ratio_90d)
                 kept_metrics["min_sell_through_ratio_90d"] = float(min_sell_through_ratio_90d)
-                kept_metrics["expected_profit_90d"] = float(c.expected_profit_90d)
+                kept_metrics["gross_profit_if_full_sell"] = float(c.gross_profit_if_full_sell)
+                kept_metrics["expected_units_sold_90d"] = float(c.expected_units_sold_90d)
+                kept_metrics["expected_units_unsold_90d"] = float(c.expected_units_unsold_90d)
+                kept_metrics["expected_realized_profit_90d"] = float(c.expected_realized_profit_90d)
                 kept_metrics["min_expected_profit_isk"] = float(min_expected_profit_isk)
                 kept_metrics["avg_daily_volume_30d"] = float(c.avg_daily_volume_30d)
                 kept_metrics["avg_daily_volume_7d"] = float(c.avg_daily_volume_7d)
+                kept_metrics["estimated_sellable_units_90d"] = float(c.estimated_sellable_units_90d)
                 kept_metrics["history_order_count_30d"] = int(c.history_order_count_30d)
                 kept_metrics["min_avg_daily_volume"] = float(min_avg_daily_volume)
                 kept_metrics["used_volume_fallback"] = bool(c.used_volume_fallback)
@@ -1124,6 +1459,12 @@ def compute_candidates(
                 kept_metrics["buy_discount_vs_ref"] = float(c.buy_discount_vs_ref)
                 kept_metrics["sell_markup_vs_ref"] = float(c.sell_markup_vs_ref)
                 kept_metrics["reference_price_penalty"] = float(c.reference_price_penalty)
+                kept_metrics["target_price_basis"] = str(c.target_price_basis)
+                kept_metrics["target_price_confidence"] = float(c.target_price_confidence)
+                kept_metrics["queue_ahead_units"] = int(c.queue_ahead_units)
+                kept_metrics["liquidity_confidence"] = float(c.liquidity_confidence)
+                kept_metrics["exit_confidence"] = float(c.exit_confidence)
+                kept_metrics["overall_confidence"] = float(c.overall_confidence)
                 kept_metrics["strict_confidence_score"] = float(c.strict_confidence_score)
                 kept_metrics["strict_mode_enabled"] = bool(c.strict_mode_enabled)
                 kept_metrics["spread_pct"] = float(c.spread_pct)
@@ -1165,16 +1506,18 @@ def _route_adjusted_candidate_score(c: "TradeCandidate", hop_count: int, scan_cf
 
     mode = str(getattr(c, "mode", "instant")).lower()
     if mode == "planned_sell":
-        density = max(0.0, float(getattr(c, "expected_profit_per_m3_90d", 0.0)))
-        absolute = max(0.0, float(getattr(c, "expected_profit_90d", 0.0)))
+        density = max(0.0, float(getattr(c, "expected_realized_profit_per_m3_90d", getattr(c, "expected_profit_per_m3_90d", 0.0))))
+        absolute = max(0.0, float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", 0.0))))
     else:
         density = max(0.0, float(getattr(c, "profit_per_m3_per_day", 0.0)))
         absolute = max(0.0, float(getattr(c, "profit_per_unit", 0.0) * getattr(c, "max_units", 0)))
 
     margin = max(0.0, float(getattr(c, "profit_pct", 0.0)))
-    fill_prob = max(0.0, min(1.0, float(getattr(c, "fill_probability", 0.0))))
+    fill_prob = max(0.0, min(1.0, float(getattr(c, "overall_confidence", getattr(c, "fill_probability", 0.0)))))
     instant_ratio = max(0.0, min(1.0, float(getattr(c, "instant_fill_ratio", 1.0))))
-    liquidity = max(0.0, min(1.0, 0.6 * fill_prob + 0.4 * instant_ratio))
+    liquidity_conf = max(0.0, min(1.0, float(getattr(c, "liquidity_confidence", fill_prob))))
+    exit_conf = max(0.0, min(1.0, float(getattr(c, "exit_confidence", fill_prob))))
+    liquidity = max(0.0, min(1.0, 0.35 * fill_prob + 0.25 * instant_ratio + 0.20 * liquidity_conf + 0.20 * exit_conf))
     plaus = max(0.0, min(1.0, 1.0 - float(getattr(c, "reference_price_penalty", 0.0))))
 
     density_sig = density / (density + 5000.0) if density > 0 else 0.0
@@ -1291,7 +1634,14 @@ def compute_route_wide_candidates_for_source(
     best = list(best_by_type.values())
     ranking_metric = str(filters.get("ranking_metric", "profit_per_m3_per_day")).lower()
     if ranking_metric == "expected_profit_per_m3_90d":
-        best.sort(key=lambda c: (float(getattr(c, "route_adjusted_score", 0.0)), float(c.expected_profit_per_m3_90d)), reverse=True)
+        best.sort(
+            key=lambda c: (
+                float(getattr(c, "route_adjusted_score", 0.0)),
+                float(getattr(c, "expected_realized_profit_per_m3_90d", getattr(c, "expected_profit_per_m3_90d", 0.0))),
+                float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", 0.0))),
+            ),
+            reverse=True,
+        )
     elif ranking_metric == "profit":
         best.sort(key=lambda c: (float(getattr(c, "route_adjusted_score", 0.0)), float(c.profit_per_unit * c.max_units)), reverse=True)
     elif ranking_metric == "profit_per_m3":

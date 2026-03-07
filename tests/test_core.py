@@ -141,7 +141,10 @@ def test_route_wide_prefers_nearer_exit_if_profit_close() -> None:
 def test_planned_sell_rejects_if_micro_liquidity_bad() -> None:
     esi = _FakeESI(history_30=500, history_7=100, reference_price=100.0)
     source_orders = [{"type_id": 42, "is_buy_order": False, "price": 90.0, "volume_remain": 20}]
-    dest_orders = [{"type_id": 42, "is_buy_order": False, "price": 130.0, "volume_remain": 50}]
+    dest_orders = [
+        {"type_id": 42, "is_buy_order": False, "price": 130.0, "volume_remain": 50},
+        {"type_id": 42, "is_buy_order": False, "price": 131.0, "volume_remain": 50},
+    ]
     filters = _strict_filters()
     filters["strict_mode"]["enabled"] = False
     filters["strict_require_reference_price_for_planned"] = False
@@ -159,6 +162,59 @@ def test_planned_sell_rejects_if_micro_liquidity_bad() -> None:
         explain=explain,
     )
     assert int(explain.get("reason_counts", {}).get("planned_structure_micro_liquidity", 0)) >= 1
+
+def test_dead_market_with_paper_margin_is_rejected() -> None:
+    esi = _FakeESI(history_30=1, history_7=1, reference_price=100.0)
+    source_orders = [{"type_id": 42, "is_buy_order": False, "price": 90.0, "volume_remain": 50}]
+    dest_orders = [
+        {"type_id": 42, "is_buy_order": False, "price": 300.0, "volume_remain": 10},
+        {"type_id": 42, "is_buy_order": False, "price": 301.0, "volume_remain": 10},
+    ]
+    filters = _strict_filters()
+    filters["strict_mode"]["enabled"] = False
+    filters["strict_require_reference_price_for_planned"] = False
+    filters["strict_disable_fallback_volume_for_planned"] = False
+    filters["reference_price"]["enabled"] = False
+    explain = {}
+    candidates = nst.compute_candidates(
+        esi=esi,
+        source_orders=source_orders,
+        dest_orders=dest_orders,
+        fees={"buy_broker_fee": 0.0, "sell_broker_fee": 0.03, "sales_tax": 0.036},
+        filters=filters,
+        dest_structure_id=123,
+        explain=explain,
+    )
+    assert candidates == []
+    reason_counts = explain.get("reason_counts", {})
+    assert (
+        int(reason_counts.get("planned_demand_cap_zero", 0)) >= 1
+        or int(reason_counts.get("planned_structure_micro_liquidity", 0)) >= 1
+    )
+
+def test_fake_spread_thin_sell_wall_is_rejected() -> None:
+    esi = _FakeESI(history_30=300, history_7=70, reference_price=100.0)
+    source_orders = [{"type_id": 42, "is_buy_order": False, "price": 90.0, "volume_remain": 50}]
+    dest_orders = [
+        {"type_id": 42, "is_buy_order": False, "price": 300.0, "volume_remain": 1},
+        {"type_id": 42, "is_buy_order": False, "price": 450.0, "volume_remain": 100},
+    ]
+    filters = _strict_filters()
+    filters["strict_mode"]["enabled"] = False
+    filters["strict_require_reference_price_for_planned"] = False
+    filters["strict_disable_fallback_volume_for_planned"] = False
+    explain = {}
+    candidates = nst.compute_candidates(
+        esi=esi,
+        source_orders=source_orders,
+        dest_orders=dest_orders,
+        fees={"buy_broker_fee": 0.0, "sell_broker_fee": 0.03, "sales_tax": 0.036},
+        filters=filters,
+        dest_structure_id=123,
+        explain=explain,
+    )
+    assert candidates == []
+    assert int(explain.get("reason_counts", {}).get("planned_price_unreliable_orderbook", 0)) >= 1
 
 def test_autofill_structure_regions_from_known_labels() -> None:
     cfg = {

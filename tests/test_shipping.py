@@ -295,7 +295,7 @@ def test_apply_route_costs_subtracts_ansiplex_route_cost() -> None:
     assert abs(float(summary["total_route_cost"]) - 6000.0) < 1e-6
     assert abs(float(picks[0]["profit"]) - 14000.0) < 1e-6
 
-def test_apply_route_costs_marks_missing_cost_model_as_low_confidence() -> None:
+def test_apply_route_costs_blocks_missing_cost_model_by_default() -> None:
     picks = [{
         "type_id": 1,
         "name": "X",
@@ -316,9 +316,9 @@ def test_apply_route_costs_marks_missing_cost_model_as_low_confidence() -> None:
     }
     summary = nst.apply_route_costs_to_picks(picks, ctx)
     assert bool(summary.get("transport_cost_assumed_zero", False)) is True
-    assert str(summary.get("cost_model_confidence", "")) == "low"
-    assert "assumed as 0 ISK" in str(summary.get("cost_model_warning", ""))
-    assert str(picks[0].get("transport_cost_confidence", "")) == "low"
+    assert str(summary.get("cost_model_confidence", "")) == "blocked"
+    assert bool(summary.get("route_blocked_due_to_transport", False)) is True
+    assert "route is blocked" in str(summary.get("cost_model_warning", ""))
 
 def test_apply_route_costs_explicit_zero_route_cost_is_not_low_confidence() -> None:
     picks = [{
@@ -342,6 +342,32 @@ def test_apply_route_costs_explicit_zero_route_cost_is_not_low_confidence() -> N
     summary = nst.apply_route_costs_to_picks(picks, ctx)
     assert bool(summary.get("transport_cost_assumed_zero", False)) is False
     assert str(summary.get("cost_model_confidence", "")) == "normal"
+
+def test_apply_route_costs_allowlisted_zero_transport_route_remains_actionable() -> None:
+    picks = [{
+        "type_id": 1,
+        "name": "X",
+        "qty": 5,
+        "unit_volume": 2.0,
+        "cost": 50_000.0,
+        "revenue_net": 65_000.0,
+        "profit": 15_000.0,
+        "turnover_factor": 1.0,
+    }]
+    ctx = {
+        "route_id": "a->b",
+        "source_label": "A",
+        "dest_label": "B",
+        "shipping_lane_id": "",
+        "shipping_lane_cfg": None,
+        "shipping_lane_candidates": [],
+        "allow_zero_transport_cost_for_routes": ["a->b"],
+        "route_cost_cfg": {"fixed_isk": 0.0, "isk_per_m3": 0.0, "is_explicit": False},
+    }
+    summary = nst.apply_route_costs_to_picks(picks, ctx)
+    assert bool(summary.get("route_blocked_due_to_transport", False)) is False
+    assert bool(summary.get("route_actionable", False)) is True
+    assert str(summary.get("cost_model_confidence", "")) == "exception"
 
 def test_pick_level_shipping_allocation_sums_to_route_total() -> None:
     picks = [
@@ -501,6 +527,27 @@ def test_execution_plan_shipping_total_matches_route_result_field() -> None:
     assert "broker_fee_isk:" in content
     assert "scc_surcharge_isk:" in content
     assert "relist_fee_isk:" in content
+
+def test_execution_plan_marks_zero_pick_route_as_not_actionable() -> None:
+    route_results = [{
+        "route_label": "A -> B",
+        "source_label": "A",
+        "dest_label": "B",
+        "route_blocked_due_to_transport": True,
+        "route_prune_reason": "missing_transport_cost_model",
+        "cost_model_confidence": "blocked",
+        "cost_model_warning": "No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled.",
+        "profit_total": 0.0,
+        "picks": [],
+    }]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "execution_plan_test.txt")
+        nst.write_execution_plan_profiles(out_path, "2026-03-05_00-00-00", route_results)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "[NOT ACTIONABLE]" in content
+    assert "route_prune_reason: missing_transport_cost_model" in content
+    assert "Route ist nicht actionable" in content
 
 def test_route_search_allowed_pairs_can_pin_shipping_lane_id() -> None:
     node_catalog = {

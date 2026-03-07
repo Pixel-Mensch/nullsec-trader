@@ -17,9 +17,123 @@ def fmt_isk(x: float) -> str:
     return f"{value:.2f}"
 
 
+def _candidate_expected_realized_profit(c) -> float:
+    return float(
+        getattr(
+            c,
+            "expected_realized_profit_90d",
+            c.get("expected_realized_profit_90d", c.get("expected_profit_90d", c.get("profit", 0.0)))
+            if isinstance(c, dict)
+            else getattr(c, "expected_profit_90d", 0.0),
+        )
+        or 0.0
+    )
+
+
+def _candidate_expected_realized_profit_per_m3(c) -> float:
+    return float(
+        getattr(
+            c,
+            "expected_realized_profit_per_m3_90d",
+            c.get(
+                "expected_realized_profit_per_m3_90d",
+                c.get("expected_profit_per_m3_90d", c.get("profit_per_m3", 0.0)),
+            )
+            if isinstance(c, dict)
+            else getattr(c, "expected_profit_per_m3_90d", 0.0),
+        )
+        or 0.0
+    )
+
+
+def _candidate_confidence(c) -> float:
+    raw = getattr(
+        c,
+        "overall_confidence",
+        c.get("overall_confidence", c.get("strict_confidence_score", c.get("fill_probability", 0.0)))
+        if isinstance(c, dict)
+        else getattr(c, "strict_confidence_score", getattr(c, "fill_probability", 0.0)),
+    )
+    return max(0.0, min(1.0, float(raw or 0.0)))
+
+
+def _candidate_expected_days(c) -> float:
+    return float(
+        getattr(
+            c,
+            "expected_days_to_sell",
+            c.get("expected_days_to_sell", 0.0) if isinstance(c, dict) else 0.0,
+        )
+        or 0.0
+    )
+
+
+def _candidate_estimated_sellable_units(c) -> float:
+    return float(
+        getattr(
+            c,
+            "estimated_sellable_units_90d",
+            c.get("estimated_sellable_units_90d", c.get("expected_units_sold_90d", c.get("max_units", 0)))
+            if isinstance(c, dict)
+            else getattr(c, "expected_units_sold_90d", 0.0),
+        )
+        or 0.0
+    )
+
+
+def _candidate_max_qty_by_demand(c, demand_share_cap: float) -> int:
+    max_units = int(getattr(c, "max_units", c.get("max_units", 0) if isinstance(c, dict) else 0) or 0)
+    sellable_units = _candidate_estimated_sellable_units(c)
+    if sellable_units <= 0.0:
+        return max_units
+    capped = int(sellable_units * max(0.0, float(demand_share_cap)))
+    if capped <= 0:
+        capped = 1
+    return min(max_units, capped)
+
+
+def _candidate_scale_ratio(c, qty: int) -> float:
+    max_units = float(getattr(c, "max_units", c.get("max_units", 0) if isinstance(c, dict) else 0) or 0.0)
+    if max_units <= 0.0:
+        return 0.0
+    return max(0.0, min(1.0, float(qty) / max_units))
+
+
+def _portfolio_expected_realized_profit(picks: list[dict]) -> float:
+    return sum(float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0) for p in picks)
+
+
+def _portfolio_objective(picks: list[dict], budget_isk: float, portfolio_cfg: dict) -> float:
+    total_expected = _portfolio_expected_realized_profit(picks)
+    if not picks:
+        return total_expected
+    max_share = max(0.0, float(portfolio_cfg.get("max_item_share_of_budget", 1.0)))
+    concentration_penalty = 0.0
+    liquidity_penalty = 0.0
+    for p in picks:
+        cost = float(p.get("cost", 0.0) or 0.0)
+        share = (cost / max(1e-9, float(budget_isk))) if float(budget_isk) > 0 else 0.0
+        over = max(0.0, share - (max_share * 0.70))
+        concentration_penalty += over * max(0.0, float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0))
+        liquidity_penalty += max(0.0, float(p.get("expected_days_to_sell", 0.0) or 0.0) - 30.0) * 1000.0
+    return float(total_expected) - float(concentration_penalty * 0.25) - float(liquidity_penalty)
+
+
+def _candidate_selection_score(c, max_liq_days: float) -> float:
+    expected_profit = _candidate_expected_realized_profit(c)
+    confidence = _candidate_confidence(c)
+    expected_days = _candidate_expected_days(c)
+    per_m3 = _candidate_expected_realized_profit_per_m3(c)
+    days_penalty = 1.0 + (max(0.0, expected_days) / max(1.0, float(max_liq_days))) if max_liq_days > 0 else 1.0
+    return ((expected_profit * (0.70 + (0.30 * confidence))) / days_penalty) + (per_m3 * 0.05)
+
+
 def portfolio_stats(picks: list[dict]) -> tuple[float, float, float, dict]:
     total_cost = sum(p["cost"] for p in picks)
-    total_profit = sum(p["profit"] for p in picks)
+    total_profit = sum(
+        float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0)
+        for p in picks
+    )
     total_m3 = sum(p["unit_volume"] * p["qty"] for p in picks)
     spent_by_type: dict = {}
     for p in picks:
@@ -41,8 +155,15 @@ def validate_portfolio(
     if len(picks) > int(portfolio_cfg.get("max_items", len(picks))):
         return False
     max_share = float(portfolio_cfg.get("max_item_share_of_budget", 1.0))
+    max_liq_days = float(portfolio_cfg.get("max_liquidation_days_per_position", 99999.0))
+    demand_share_cap = float(portfolio_cfg.get("max_share_of_estimated_demand_per_position", 1.0))
     for p in picks:
         if p["cost"] > budget_isk * max_share + 1e-6:
+            return False
+        if float(p.get("expected_days_to_sell", 0.0) or 0.0) > max_liq_days + 1e-6:
+            return False
+        est_sellable = float(p.get("estimated_sellable_units_90d", p.get("expected_units_sold_90d", 0.0)) or 0.0)
+        if est_sellable > 0.0 and float(p.get("qty", 0) or 0) > (est_sellable * demand_share_cap) + 1e-6:
             return False
     return True
 
@@ -61,9 +182,16 @@ def local_search_optimize(
     if not initial or not candidates:
         return initial
     best = list(initial)
-    _, best_profit, _, _ = portfolio_stats(best)
+    best_score = _portfolio_objective(best, budget_isk, portfolio_cfg)
     top_k = 50
-    sorted_cands = sorted(candidates, key=lambda c: c.get("profit", 0), reverse=True)[:top_k]
+    sorted_cands = sorted(
+        candidates,
+        key=lambda c: (
+            float(c.get("expected_realized_profit_90d", c.get("expected_profit_90d", c.get("profit", 0.0))) or 0.0),
+            float(c.get("overall_confidence", c.get("strict_confidence_score", c.get("fill_probability", 0.0))) or 0.0),
+        ),
+        reverse=True,
+    )[:top_k]
     picked_type_ids = {p["type_id"] for p in best}
     improved = True
     while improved and time.time() - start_time < max_time_secs:
@@ -75,11 +203,11 @@ def local_search_optimize(
                 trial = best[:i] + [new_cand] + best[i + 1:]
                 if not validate_portfolio(trial, budget_isk, cargo_m3, portfolio_cfg):
                     continue
-                trial_profit = sum(p["profit"] for p in trial)
-                if trial_profit > best_profit + 1e-6:
+                trial_score = _portfolio_objective(trial, budget_isk, portfolio_cfg)
+                if trial_score > best_score + 1e-6:
                     best = trial
                     picked_type_ids = {p["type_id"] for p in best}
-                    best_profit = trial_profit
+                    best_score = trial_score
                     improved = True
                     break
             if improved:
@@ -88,13 +216,14 @@ def local_search_optimize(
 
 
 def sort_picks_for_output(picks: list[dict], filters_used: dict) -> None:
-    ranking_metric = str(filters_used.get("ranking_metric", "profit_per_m3_per_day")).lower()
+    ranking_metric = str(filters_used.get("ranking_metric", "expected_profit_per_m3_90d")).lower()
     if ranking_metric == "expected_profit_per_m3_90d":
         picks.sort(
             key=lambda x: (
-                x.get("expected_profit_per_m3_90d", 0.0),
+                x.get("expected_realized_profit_per_m3_90d", x.get("expected_profit_per_m3_90d", 0.0)),
+                x.get("expected_realized_profit_90d", x.get("expected_profit_90d", 0.0)),
+                x.get("overall_confidence", x.get("strict_confidence_score", 0.0)),
                 -x.get("expected_days_to_sell", 0.0),
-                -x.get("risk_score", 0.0)
             ),
             reverse=True
         )
@@ -106,7 +235,7 @@ def sort_picks_for_output(picks: list[dict], filters_used: dict) -> None:
         picks.sort(key=lambda x: x.get("profit_per_m3_per_day", 0.0), reverse=True)
 
 def _sort_candidates_for_cargo_fill(candidates: list[TradeCandidate], ranking_metric: str) -> list[TradeCandidate]:
-    metric = str(ranking_metric or "profit_per_m3_per_day").lower()
+    metric = str(ranking_metric or "expected_profit_per_m3_90d").lower()
     if metric in ("hybrid", "profit_per_m3_and_isk", "profit_per_m3_plus_isk"):
         def hybrid_score(c: TradeCandidate) -> float:
             density = max(0.0, float(getattr(c, "profit_per_m3", 0.0)))
@@ -125,7 +254,9 @@ def _sort_candidates_for_cargo_fill(candidates: list[TradeCandidate], ranking_me
         return sorted(
             candidates,
             key=lambda c: (
-                float(getattr(c, "expected_profit_per_m3_90d", 0.0)),
+                float(getattr(c, "expected_realized_profit_per_m3_90d", getattr(c, "expected_profit_per_m3_90d", 0.0))),
+                float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", 0.0))),
+                float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", 0.0))),
                 -float(getattr(c, "expected_days_to_sell", 0.0)),
                 -float(getattr(c, "risk_score", 0.0))
             ),
@@ -177,6 +308,8 @@ def try_cargo_fill(
     cargo_fill_min_profit_abs_isk = float(port_cfg.get("cargo_fill_min_profit_abs_isk", 0.0))
     max_extra_items = int(port_cfg.get("cargo_fill_max_extra_items", 8))
     allow_topup_existing = bool(port_cfg.get("cargo_fill_allow_topup_existing", False))
+    max_liq_days = float(port_cfg.get("max_liquidation_days_per_position", 99999.0))
+    demand_share_cap = float(port_cfg.get("max_share_of_estimated_demand_per_position", 1.0))
 
     if max_extra_items <= 0:
         total_cost, total_profit, total_m3, _ = portfolio_stats(base_picks)
@@ -221,6 +354,8 @@ def try_cargo_fill(
             if not allow_topup_existing:
                 break
             continue
+        if float(getattr(c, "expected_days_to_sell", 0.0)) > max_liq_days:
+            continue
 
         unit_cost = float(getattr(c, "buy_avg", 0.0)) * (1.0 + buy_broker)
         unit_vol = float(getattr(c, "unit_volume", 0.0))
@@ -230,7 +365,8 @@ def try_cargo_fill(
         max_budget_for_item = float(budget_isk) * max_share
         already_for_item = float(spent_by_type.get(tid, 0.0))
         existing_qty = int(existing_pick.get("qty", 0)) if is_existing else 0
-        max_candidate_remaining = int(getattr(c, "max_units", 0)) - existing_qty if is_existing else int(getattr(c, "max_units", 0))
+        max_candidate_units = _candidate_max_qty_by_demand(c, demand_share_cap)
+        max_candidate_remaining = max_candidate_units - existing_qty if is_existing else max_candidate_units
         if max_candidate_remaining <= 0:
             continue
         max_by_budget = int(remaining_budget // unit_cost)
@@ -241,6 +377,7 @@ def try_cargo_fill(
             continue
 
         total_qty_after = existing_qty + qty
+        scale_ratio = _candidate_scale_ratio(c, qty)
         if bool(getattr(c, "instant", True)):
             instant_fill_ratio_after = min(1.0, float(getattr(c, "dest_buy_depth_units", 0)) / max(1.0, float(total_qty_after)))
             if instant_fill_ratio_after < min_instant_fill_ratio:
@@ -296,6 +433,41 @@ def try_cargo_fill(
             existing_pick["fill_probability"] = float(fill_probability_after)
             existing_pick["dest_buy_depth_units"] = int(getattr(c, "dest_buy_depth_units", existing_pick.get("dest_buy_depth_units", 0)))
             existing_pick["order_duration_days"] = order_duration
+            existing_pick["gross_profit_if_full_sell"] = float(existing_pick.get("gross_profit_if_full_sell", 0.0)) + (
+                float(getattr(c, "gross_profit_if_full_sell", float(profit))) * float(scale_ratio)
+            )
+            existing_pick["expected_units_sold_90d"] = float(existing_pick.get("expected_units_sold_90d", 0.0)) + (
+                float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability_after))) * float(scale_ratio or 1.0)
+            )
+            existing_pick["expected_units_unsold_90d"] = float(existing_pick.get("expected_units_unsold_90d", 0.0)) + (
+                float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio)
+            )
+            existing_pick["expected_realized_profit_90d"] = float(existing_pick.get("expected_realized_profit_90d", 0.0)) + (
+                float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio)
+            )
+            existing_pick["estimated_sellable_units_90d"] = max(
+                float(existing_pick.get("estimated_sellable_units_90d", 0.0)),
+                float(getattr(c, "estimated_sellable_units_90d", float(total_qty_after))),
+            )
+            existing_pick["exit_confidence"] = float(
+                min(
+                    float(existing_pick.get("exit_confidence", 1.0)),
+                    float(getattr(c, "exit_confidence", fill_probability_after)),
+                )
+            )
+            existing_pick["liquidity_confidence"] = float(
+                min(
+                    float(existing_pick.get("liquidity_confidence", 1.0)),
+                    float(getattr(c, "liquidity_confidence", fill_probability_after)),
+                )
+            )
+            existing_pick["overall_confidence"] = float(
+                min(
+                    float(existing_pick.get("overall_confidence", 1.0)),
+                    float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability_after))),
+                )
+            )
+            existing_pick["expected_profit_90d"] = float(existing_pick.get("expected_realized_profit_90d", 0.0))
             if "buy_at" not in existing_pick:
                 existing_pick["buy_at"] = str(getattr(c, "route_src_label", ""))
             if "sell_at" not in existing_pick:
@@ -316,6 +488,10 @@ def try_cargo_fill(
             existing_pick["profit_pct"] = (total_pick_profit / total_pick_cost) if total_pick_cost > 0 else 0.0
             existing_pick["profit_per_m3"] = (total_pick_profit / total_pick_m3) if total_pick_m3 > 0 else 0.0
             existing_pick["profit_per_m3_per_day"] = float(existing_pick["profit_per_m3"]) * float(turnover_factor_after)
+            existing_pick["expected_realized_profit_per_m3_90d"] = (
+                float(existing_pick.get("expected_realized_profit_90d", 0.0)) / total_pick_m3
+            ) if total_pick_m3 > 0 else 0.0
+            existing_pick["expected_profit_per_m3_90d"] = float(existing_pick["expected_realized_profit_per_m3_90d"])
         else:
             pick_profit_per_m3 = (float(profit) / float(qty) / unit_vol)
             pick_profit_per_m3_per_day = pick_profit_per_m3 * turnover_factor_after
@@ -357,11 +533,25 @@ def try_cargo_fill(
                 "target_sell_price": float(getattr(c, "target_sell_price", 0.0)),
                 "avg_daily_volume_30d": float(getattr(c, "avg_daily_volume_30d", 0.0)),
                 "avg_daily_volume_7d": float(getattr(c, "avg_daily_volume_7d", 0.0)),
-                "expected_days_to_sell": float(getattr(c, "expected_days_to_sell", 0.0)),
+                "expected_days_to_sell": float(getattr(c, "expected_days_to_sell", 0.0)) * float(scale_ratio or 1.0),
                 "sell_through_ratio_90d": float(getattr(c, "sell_through_ratio_90d", 0.0)),
                 "risk_score": float(getattr(c, "risk_score", 0.0)),
-                "expected_profit_90d": float(getattr(c, "expected_profit_90d", 0.0)),
-                "expected_profit_per_m3_90d": float(getattr(c, "expected_profit_per_m3_90d", 0.0)),
+                "gross_profit_if_full_sell": float(getattr(c, "gross_profit_if_full_sell", float(profit))) * float(scale_ratio or 1.0),
+                "expected_units_sold_90d": float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability_after))) * float(scale_ratio or 1.0),
+                "expected_units_unsold_90d": float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio or 1.0),
+                "expected_realized_profit_90d": float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio or 1.0),
+                "expected_realized_profit_per_m3_90d": float(
+                    getattr(c, "expected_realized_profit_90d", float(profit)) * float(scale_ratio or 1.0)
+                ) / max(1e-9, float(qty) * float(unit_vol)),
+                "estimated_sellable_units_90d": float(getattr(c, "estimated_sellable_units_90d", float(qty))),
+                "exit_confidence": float(getattr(c, "exit_confidence", fill_probability_after)),
+                "liquidity_confidence": float(getattr(c, "liquidity_confidence", fill_probability_after)),
+                "overall_confidence": float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability_after))),
+                "expected_profit_90d": float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio or 1.0),
+                "expected_profit_per_m3_90d": float(
+                    (getattr(c, "expected_realized_profit_90d", float(profit)) * float(scale_ratio or 1.0))
+                    / max(1e-9, float(qty) * float(unit_vol))
+                ),
                 "used_volume_fallback": bool(getattr(c, "used_volume_fallback", False)),
                 "reference_price": float(getattr(c, "reference_price", 0.0)),
                 "reference_price_average": float(getattr(c, "reference_price_average", 0.0)),
@@ -373,6 +563,10 @@ def try_cargo_fill(
                 "reference_price_penalty": float(getattr(c, "reference_price_penalty", 0.0)),
                 "strict_confidence_score": float(getattr(c, "strict_confidence_score", 0.0)),
                 "strict_mode_enabled": bool(getattr(c, "strict_mode_enabled", False)),
+                "exit_type": str(getattr(c, "exit_type", "instant" if bool(getattr(c, "instant", True)) else "speculative")),
+                "target_price_basis": str(getattr(c, "target_price_basis", "")),
+                "target_price_confidence": float(getattr(c, "target_price_confidence", 0.0)),
+                "estimated_transport_cost": float(getattr(c, "estimated_transport_cost", 0.0)),
                 "buy_at": str(getattr(c, "route_src_label", "")),
                 "sell_at": str(getattr(c, "route_dst_label", "")),
                 "route_hops": int(getattr(c, "dest_hop_count", 1)),
@@ -389,7 +583,9 @@ def try_cargo_fill(
             added_new_types += 1
 
         total_cost += cost
-        total_profit += profit
+        total_profit += float(
+            getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", profit))
+        ) * float(scale_ratio or 1.0)
         total_m3 += (unit_vol * qty)
         remaining_budget -= cost
         remaining_cargo -= (unit_vol * qty)
@@ -412,6 +608,18 @@ def build_portfolio(
     min_instant_fill_ratio = float(filters.get("min_instant_fill_ratio", 0.0))
     max_share = float(portfolio_cfg["max_item_share_of_budget"])
     max_items = int(portfolio_cfg["max_items"])
+    max_liq_days = float(
+        portfolio_cfg.get(
+            "max_liquidation_days_per_position",
+            filters.get("max_expected_days_to_sell", 99999.0),
+        )
+    )
+    demand_share_cap = float(
+        portfolio_cfg.get(
+            "max_share_of_estimated_demand_per_position",
+            filters.get("max_share_of_estimated_demand_per_position", 1.0),
+        )
+    )
     order_duration = int(filters.get("order_duration_days", 90))
     relist_budget_pct = float(filters.get("relist_budget_pct", fees.get("relist_budget_pct", 0.0)))
     relist_budget_isk = float(filters.get("relist_budget_isk", fees.get("relist_budget_isk", 0.0)))
@@ -430,9 +638,21 @@ def build_portfolio(
         picks = []
         spent_by_type.clear()
 
-        for c in candidates[: max_items * 5]:
+        ordered_candidates = sorted(
+            list(candidates),
+            key=lambda c: (
+                _candidate_selection_score(c, max_liq_days),
+                _candidate_expected_realized_profit(c),
+                _candidate_confidence(c),
+            ),
+            reverse=True,
+        )[: max_items * 8]
+
+        for c in ordered_candidates:
             if remaining_budget <= 0 or remaining_cargo <= 0:
                 break
+            if _candidate_expected_days(c) > max_liq_days:
+                continue
 
             max_budget_for_item = budget_isk * max_share
             already_for_item = spent_by_type.get(c.type_id, 0.0)
@@ -443,7 +663,8 @@ def build_portfolio(
             max_by_budget = int(remaining_budget // unit_cost)
             max_by_share = int((max_budget_for_item - already_for_item) // unit_cost)
             max_by_cargo = int(remaining_cargo // c.unit_volume)
-            qty = min(c.max_units, max_by_budget, max_by_share, max_by_cargo)
+            max_by_demand = _candidate_max_qty_by_demand(c, demand_share_cap)
+            qty = min(max_by_demand, max_by_budget, max_by_share, max_by_cargo)
 
             if qty <= 0:
                 continue
@@ -465,6 +686,13 @@ def build_portfolio(
             if profit <= 0:
                 continue
 
+            scale_ratio = _candidate_scale_ratio(c, qty)
+            scaled_expected_days = float(getattr(c, "expected_days_to_sell", 0.0) or 0.0)
+            if scaled_expected_days > 0.0 and int(getattr(c, "max_units", 0) or 0) > 0:
+                scaled_expected_days *= float(scale_ratio)
+            if scaled_expected_days > max_liq_days:
+                continue
+
             pick_profit_per_m3 = (float(profit) / float(qty) / float(c.unit_volume)) if qty > 0 and c.unit_volume > 0 else 0.0
             if c.instant:
                 instant_fill_ratio = min(1.0, float(c.dest_buy_depth_units) / max(1.0, float(qty)))
@@ -477,8 +705,10 @@ def build_portfolio(
                 turnover_factor = float(c.turnover_factor)
                 fill_probability = float(c.fill_probability)
             pick_profit_per_m3_per_day = pick_profit_per_m3 * turnover_factor
-
-            picks.append({
+            expected_realized_profit = float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", profit))) * float(scale_ratio or 1.0)
+            expected_units_sold = float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability))) * float(scale_ratio or 1.0)
+            expected_units_unsold = float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio or 1.0)
+            new_pick = {
                 "type_id": c.type_id,
                 "name": c.name,
                 "qty": qty,
@@ -519,14 +749,26 @@ def build_portfolio(
                 "profit_per_m3": pick_profit_per_m3,
                 "profit_per_m3_per_day": pick_profit_per_m3_per_day,
                 "mode": getattr(c, "mode", "instant"),
+                "exit_type": str(getattr(c, "exit_type", "instant" if bool(getattr(c, "instant", True)) else "speculative")),
                 "target_sell_price": float(getattr(c, "target_sell_price", 0.0)),
+                "target_price_basis": str(getattr(c, "target_price_basis", "")),
+                "target_price_confidence": float(getattr(c, "target_price_confidence", 0.0)),
                 "avg_daily_volume_30d": float(getattr(c, "avg_daily_volume_30d", 0.0)),
                 "avg_daily_volume_7d": float(getattr(c, "avg_daily_volume_7d", 0.0)),
-                "expected_days_to_sell": float(getattr(c, "expected_days_to_sell", 0.0)),
+                "expected_days_to_sell": float(scaled_expected_days),
                 "sell_through_ratio_90d": float(getattr(c, "sell_through_ratio_90d", 0.0)),
                 "risk_score": float(getattr(c, "risk_score", 0.0)),
-                "expected_profit_90d": float(getattr(c, "expected_profit_90d", 0.0)),
-                "expected_profit_per_m3_90d": float(getattr(c, "expected_profit_per_m3_90d", 0.0)),
+                "gross_profit_if_full_sell": float(getattr(c, "gross_profit_if_full_sell", profit)) * float(scale_ratio or 1.0),
+                "expected_units_sold_90d": float(expected_units_sold),
+                "expected_units_unsold_90d": float(expected_units_unsold),
+                "expected_realized_profit_90d": float(expected_realized_profit),
+                "expected_realized_profit_per_m3_90d": float(expected_realized_profit / max(1e-9, float(qty) * float(c.unit_volume))),
+                "estimated_sellable_units_90d": float(getattr(c, "estimated_sellable_units_90d", float(qty))),
+                "exit_confidence": float(getattr(c, "exit_confidence", fill_probability)),
+                "liquidity_confidence": float(getattr(c, "liquidity_confidence", fill_probability)),
+                "overall_confidence": float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability))),
+                "expected_profit_90d": float(expected_realized_profit),
+                "expected_profit_per_m3_90d": float(expected_realized_profit / max(1e-9, float(qty) * float(c.unit_volume))),
                 "used_volume_fallback": bool(getattr(c, "used_volume_fallback", False)),
                 "reference_price": float(getattr(c, "reference_price", 0.0)),
                 "reference_price_average": float(getattr(c, "reference_price_average", 0.0)),
@@ -538,6 +780,7 @@ def build_portfolio(
                 "reference_price_penalty": float(getattr(c, "reference_price_penalty", 0.0)),
                 "strict_confidence_score": float(getattr(c, "strict_confidence_score", 0.0)),
                 "strict_mode_enabled": bool(getattr(c, "strict_mode_enabled", False)),
+                "estimated_transport_cost": float(getattr(c, "estimated_transport_cost", 0.0)) * float(scale_ratio or 1.0),
                 "buy_at": str(getattr(c, "route_src_label", "")),
                 "sell_at": str(getattr(c, "route_dst_label", "")),
                 "route_hops": int(getattr(c, "dest_hop_count", 1)),
@@ -548,7 +791,11 @@ def build_portfolio(
                 "route_wide_selected": bool(getattr(c, "route_wide_selected", False)),
                 "route_adjusted_score": float(getattr(c, "route_adjusted_score", 0.0)),
                 "release_leg_index": int(getattr(c, "route_dst_index", 0) - 1) if int(getattr(c, "route_dst_index", 0)) > 0 else -1
-            })
+            }
+            if not validate_portfolio(picks + [new_pick], budget_isk, cargo_m3, portfolio_cfg):
+                continue
+
+            picks.append(new_pick)
 
             remaining_budget -= cost
             remaining_cargo -= c.unit_volume * qty
@@ -561,7 +808,7 @@ def build_portfolio(
     run_candidates_loop()
 
     total_cost = sum(p["cost"] for p in picks)
-    total_profit = sum(p["profit"] for p in picks)
+    total_profit = _portfolio_expected_realized_profit(picks)
     total_m3 = sum(p["unit_volume"] * p["qty"] for p in picks)
 
     # attempt local search to improve the portfolio
@@ -581,6 +828,9 @@ def build_portfolio(
             continue
         # guess a reasonable qty for the prototype (bounded by max_units)
         unit_cost = buy_avg * (1.0 + buy_broker) if buy_avg > 0 else 0.0
+        max_units = min(max_units, _candidate_max_qty_by_demand(c, demand_share_cap))
+        if _candidate_expected_days(c) > max_liq_days:
+            continue
         if unit_cost > 0:
             proto_qty = max(1, min(max_units, int(budget_isk // unit_cost)))
         else:
@@ -602,6 +852,8 @@ def build_portfolio(
         )
         revenue_net = float(breakdown.revenue_net)
         profit = float(breakdown.profit)
+        scale_ratio = _candidate_scale_ratio(c, proto_qty)
+        expected_realized_profit = _candidate_expected_realized_profit(c) * float(scale_ratio or 1.0)
         candidate_dicts.append({
             'type_id': int(type_id), 'name': name, 'qty': proto_qty,
             'unit_volume': unit_volume, 'buy_avg': buy_avg, 'sell_avg': sell_avg,
@@ -637,8 +889,17 @@ def build_portfolio(
             'expected_days_to_sell': getattr(c, 'expected_days_to_sell', c.get('expected_days_to_sell', 0.0) if isinstance(c, dict) else 0.0),
             'sell_through_ratio_90d': getattr(c, 'sell_through_ratio_90d', c.get('sell_through_ratio_90d', 0.0) if isinstance(c, dict) else 0.0),
             'risk_score': getattr(c, 'risk_score', c.get('risk_score', 0.0) if isinstance(c, dict) else 0.0),
-            'expected_profit_90d': getattr(c, 'expected_profit_90d', c.get('expected_profit_90d', 0.0) if isinstance(c, dict) else 0.0),
-            'expected_profit_per_m3_90d': getattr(c, 'expected_profit_per_m3_90d', c.get('expected_profit_per_m3_90d', 0.0) if isinstance(c, dict) else 0.0),
+            'gross_profit_if_full_sell': getattr(c, 'gross_profit_if_full_sell', c.get('gross_profit_if_full_sell', profit) if isinstance(c, dict) else profit) * float(scale_ratio or 1.0),
+            'expected_units_sold_90d': getattr(c, 'expected_units_sold_90d', c.get('expected_units_sold_90d', proto_qty) if isinstance(c, dict) else proto_qty) * float(scale_ratio or 1.0),
+            'expected_units_unsold_90d': getattr(c, 'expected_units_unsold_90d', c.get('expected_units_unsold_90d', 0.0) if isinstance(c, dict) else 0.0) * float(scale_ratio or 1.0),
+            'expected_realized_profit_90d': expected_realized_profit,
+            'expected_realized_profit_per_m3_90d': expected_realized_profit / max(1e-9, unit_volume * proto_qty),
+            'estimated_sellable_units_90d': getattr(c, 'estimated_sellable_units_90d', c.get('estimated_sellable_units_90d', proto_qty) if isinstance(c, dict) else proto_qty),
+            'exit_confidence': getattr(c, 'exit_confidence', c.get('exit_confidence', 0.0) if isinstance(c, dict) else 0.0),
+            'liquidity_confidence': getattr(c, 'liquidity_confidence', c.get('liquidity_confidence', 0.0) if isinstance(c, dict) else 0.0),
+            'overall_confidence': getattr(c, 'overall_confidence', c.get('overall_confidence', 0.0) if isinstance(c, dict) else 0.0),
+            'expected_profit_90d': expected_realized_profit,
+            'expected_profit_per_m3_90d': expected_realized_profit / max(1e-9, unit_volume * proto_qty),
             'used_volume_fallback': getattr(c, 'used_volume_fallback', c.get('used_volume_fallback', False) if isinstance(c, dict) else False),
             'reference_price': getattr(c, 'reference_price', c.get('reference_price', 0.0) if isinstance(c, dict) else 0.0),
             'reference_price_average': getattr(c, 'reference_price_average', c.get('reference_price_average', 0.0) if isinstance(c, dict) else 0.0),
@@ -650,6 +911,10 @@ def build_portfolio(
             'reference_price_penalty': getattr(c, 'reference_price_penalty', c.get('reference_price_penalty', 0.0) if isinstance(c, dict) else 0.0),
             'strict_confidence_score': getattr(c, 'strict_confidence_score', c.get('strict_confidence_score', 0.0) if isinstance(c, dict) else 0.0),
             'strict_mode_enabled': getattr(c, 'strict_mode_enabled', c.get('strict_mode_enabled', False) if isinstance(c, dict) else False),
+            'exit_type': getattr(c, 'exit_type', c.get('exit_type', 'instant') if isinstance(c, dict) else 'instant'),
+            'target_price_basis': getattr(c, 'target_price_basis', c.get('target_price_basis', '') if isinstance(c, dict) else ''),
+            'target_price_confidence': getattr(c, 'target_price_confidence', c.get('target_price_confidence', 0.0) if isinstance(c, dict) else 0.0),
+            'estimated_transport_cost': getattr(c, 'estimated_transport_cost', c.get('estimated_transport_cost', 0.0) if isinstance(c, dict) else 0.0) * float(scale_ratio or 1.0),
             'buy_at': getattr(c, 'route_src_label', c.get('buy_at', "") if isinstance(c, dict) else ""),
             'sell_at': getattr(c, 'route_dst_label', c.get('sell_at', "") if isinstance(c, dict) else ""),
             'route_hops': getattr(c, 'dest_hop_count', c.get('route_hops', 1) if isinstance(c, dict) else 1),
@@ -664,7 +929,7 @@ def build_portfolio(
     optimized = local_search_optimize(picks, candidate_dicts, budget_isk, cargo_m3, portfolio_cfg)
     if optimized is not picks:
         opt_cost, opt_profit, opt_m3, _ = portfolio_stats(optimized)
-        if opt_profit > total_profit + 1e-6:
+        if _portfolio_objective(optimized, budget_isk, portfolio_cfg) > _portfolio_objective(picks, budget_isk, portfolio_cfg) + 1e-6:
             picks = optimized
             total_cost = opt_cost
             total_profit = opt_profit
@@ -694,13 +959,20 @@ def choose_portfolio_for_route(
 ) -> tuple[list[dict], float, float, float, str]:
     def build_from_candidates(cands, f_used):
         inst = [c for c in cands if c.instant]
-        if inst:
-            p, c, pr, m = build_portfolio(inst, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
-            md = "instant"
-        else:
-            p, c, pr, m = build_portfolio(cands, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
-            md = "fallback"
-        p.sort(key=lambda x: x["profit"], reverse=True)
+        all_p, all_c, all_pr, all_m = build_portfolio(cands, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
+        p, c, pr, m, md = all_p, all_c, all_pr, all_m, ("mixed" if len(inst) != len(cands) else "fallback")
+        if inst and len(inst) != len(cands):
+            inst_p, inst_c, inst_pr, inst_m = build_portfolio(inst, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
+            if _portfolio_objective(inst_p, budget_isk, port_cfg) >= _portfolio_objective(all_p, budget_isk, port_cfg):
+                p, c, pr, m, md = inst_p, inst_c, inst_pr, inst_m, "instant"
+        p.sort(
+            key=lambda x: (
+                float(x.get("expected_realized_profit_90d", x.get("expected_profit_90d", x.get("profit", 0.0))) or 0.0),
+                float(x.get("overall_confidence", x.get("strict_confidence_score", 0.0)) or 0.0),
+                -float(x.get("expected_days_to_sell", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
         return p, c, pr, m, md
 
     picks, cost, profit, m3, mode = build_from_candidates(candidates, filters_used)
