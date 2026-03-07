@@ -526,6 +526,57 @@ class TestWriteExecutionPlanProfiles:
         assert "Trader One" in content
         assert "Open Orders 4" in content
 
+    def test_personal_history_warning_shown_in_header(self):
+        result = _make_route_result()
+        result["_personal_calibration_summary"] = {
+            "quality_level": "low",
+            "sample_size": {
+                "eligible_entries": 4,
+                "wallet_backed_entries": 4,
+                "reliable_entries": 1,
+            },
+            "policy": {
+                "fallback_to_generic": True,
+                "reason": "unreliable personal history",
+            },
+            "warnings": ["unreliable personal history"],
+            "diagnostics": {"overall": {}},
+        }
+        content = self._write_and_read([result])
+        assert "Personal History: LOW" in content
+        assert "fallback to generic" in content
+        assert "advisory only" in content
+        assert "Warning: unreliable personal history" in content
+
+    def test_personal_history_good_basis_shown_in_header(self):
+        result = _make_route_result()
+        result["_personal_calibration_summary"] = {
+            "quality_level": "good",
+            "sample_size": {
+                "eligible_entries": 12,
+                "wallet_backed_entries": 10,
+                "reliable_entries": 9,
+            },
+            "policy": {
+                "fallback_to_generic": False,
+                "reason": "",
+            },
+            "warnings": [],
+            "diagnostics": {
+                "overall": {
+                    "diagnosis": "well_aligned",
+                    "actual_success_rate": 0.83,
+                    "optimism_gap": -0.04,
+                }
+            },
+        }
+        content = self._write_and_read([result])
+        assert "Personal History: GOOD" in content
+        assert "sample 12" in content
+        assert "wallet-backed 10" in content
+        assert "reliable 9" in content
+        assert "Outcome Basis: well_aligned" in content
+
     def test_character_order_overlap_shown_in_pick_block(self):
         pick = _planned_pick(
             character_open_orders=2,

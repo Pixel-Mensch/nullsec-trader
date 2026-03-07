@@ -701,6 +701,46 @@ def format_personal_calibration_summary(summary: dict | None, limit: int = 5) ->
     return "\n".join(lines)
 
 
+def personal_calibration_status_lines(summary: dict | None) -> list[str]:
+    if not isinstance(summary, dict) or not summary:
+        return []
+    sample_size = dict(summary.get("sample_size", {}) or {})
+    policy = dict(summary.get("policy", {}) or {})
+    overall = dict((summary.get("diagnostics", {}) or {}).get("overall", {}) or {})
+    warnings = [str(item).strip() for item in list(summary.get("warnings", []) or []) if str(item).strip()]
+    quality = str(summary.get("quality_level", "none") or "none").strip().lower() or "none"
+    fallback_to_generic = bool(policy.get("fallback_to_generic", True))
+    eligible_entries = int(sample_size.get("eligible_entries", 0) or 0)
+    wallet_backed_entries = int(sample_size.get("wallet_backed_entries", 0) or 0)
+    reliable_entries = int(sample_size.get("reliable_entries", 0) or 0)
+    lines = [
+        (
+            f"Personal History: {quality.upper()} | "
+            f"sample {eligible_entries} | "
+            f"wallet-backed {wallet_backed_entries} | "
+            f"reliable {reliable_entries} | "
+            f"{'fallback to generic | ' if fallback_to_generic else ''}"
+            "advisory only"
+        )
+    ]
+    warning_text = warnings[0] if warnings else str(policy.get("reason", "") or "").strip()
+    if warning_text and (quality in ("none", "very_low", "low") or fallback_to_generic):
+        lines.append(f"Warning: {warning_text}")
+        return lines
+    diagnosis = str(overall.get("diagnosis", "") or "").strip()
+    if diagnosis and diagnosis.lower() not in {"n/a", "insufficient_data"}:
+        lines.append(
+            (
+                f"Outcome Basis: {diagnosis} | "
+                f"success {float(overall.get('actual_success_rate', 0.0)):.2f} | "
+                f"gap {float(overall.get('optimism_gap', 0.0)):+.2f}"
+            )
+        )
+    elif warning_text:
+        lines.append(f"Note: {warning_text}")
+    return lines
+
+
 def build_confidence_calibration(entries: list[dict], cfg: dict | None, now: datetime | None = None) -> dict:
     cal_cfg = resolve_confidence_calibration_cfg(cfg)
     prepared: list[dict] = []
@@ -1033,6 +1073,7 @@ __all__ = [
     "classify_trade_outcome",
     "format_confidence_calibration_report",
     "format_personal_calibration_summary",
+    "personal_calibration_status_lines",
     "overall_raw_confidence_from_components",
     "resolve_confidence_calibration_cfg",
     "transport_confidence_to_score",

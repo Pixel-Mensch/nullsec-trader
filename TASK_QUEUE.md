@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 8 personal analytics)
+Last updated: 2026-03-07 (session 9 runtime personal advisory)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -210,12 +210,31 @@ full backlog scrape.
 ### Task 5d: Decide how personal history should stay observable before any opt-in decision hook
 
 - Priority: P1
+- Status: DONE
+- Completed: 2026-03-07
+- What was done:
+  - Added `personal_calibration_status_lines()` in
+    `confidence_calibration.py` for compact runtime-safe advisory output
+  - `runtime_runner.py` now loads the personal calibration summary from the
+    journal DB during normal runs and prints a small `Personal History` block on
+    stdout without touching generic calibration or decision logic
+  - `execution_plan.py` now mirrors that advisory block in the route-profile
+    execution-plan header
+  - Generic `build_confidence_calibration()` behavior, ranking effect, route
+    ranking, candidate scoring, and `no_trade` stayed unchanged
+  - Added focused output coverage in `tests/test_confidence_calibration.py` and
+    `tests/test_execution_plan.py`
+  - Full suite: **310 passed**
+
+### Task 5e: Decide whether advisory personal-history output needs artifact parity beyond execution plans
+
+- Priority: P2
 - Status: ready
-- Relevant files: `journal_reporting.py`, `confidence_calibration.py`,
-  `runtime_runner.py`, `README.md`
-- Expected result: expose the personal calibration basis in more places only if
-  it remains clearly advisory. Any future hook into decision logic must be
-  explicit, opt-in, sample-size-aware, and separately evidence-backed.
+- Relevant files: `runtime_reports.py`, `runtime_runner.py`, `README.md`,
+  `ARCHITECTURE.md`
+- Expected result: if roundtrip or chain summary artifacts also need the compact
+  personal-history block, add that parity without touching ranking logic or
+  turning personal history into a decision hook.
 
 ## P2
 

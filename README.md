@@ -320,6 +320,15 @@ Was `journal calibration` jetzt zusaetzlich zeigt:
 - inklusive Quality-Level (`none`, `very_low`, `low`, `usable`, `good`),
   Sample Size, Warning-Hinweisen und `fallback to generic`-Policy
 
+Was normale Runs jetzt zusaetzlich zeigen:
+
+- eine kleine `Personal History`-Zeile im normalen Runtime-Output
+- bei schwacher Basis: Quality-Level plus `fallback to generic` und Warnhinweis
+- bei brauchbarer Basis: Quality-Level plus Sample Size sowie
+  wallet-backed/reliable Count
+- weiterhin nur advisory: die generische Runtime-Calibration bleibt der echte
+  Decision-Pfad
+
 Aktuelle Matching-Signale:
 
 - `character_id`, wenn im Plan/Journal vorhanden

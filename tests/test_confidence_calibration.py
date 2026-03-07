@@ -197,6 +197,10 @@ def test_personal_calibration_summary_falls_back_without_history() -> None:
     report = nst.format_personal_calibration_summary(summary)
     assert "PERSONAL CALIBRATION BASIS" in report
     assert "fallback_generic" in report
+    status_lines = nst.personal_calibration_status_lines(summary)
+    assert any("Personal History: NONE" in line for line in status_lines)
+    assert any("fallback to generic" in line for line in status_lines)
+    assert any("Warning: insufficient personal history" in line for line in status_lines)
 
 
 def test_personal_calibration_uses_reconciled_outcomes_without_touching_generic_model() -> None:
@@ -258,6 +262,11 @@ def test_personal_calibration_summary_reports_good_quality_for_consistent_wallet
     assert int(summary["diagnostics"]["overall"]["sample_count"]) == 12
     report = nst.format_personal_calibration_summary(summary, limit=3)
     assert "Quality: good" in report
+    status_lines = nst.personal_calibration_status_lines(summary)
+    assert any("Personal History: GOOD" in line for line in status_lines)
+    assert any("sample 12" in line for line in status_lines)
+    assert any("wallet-backed 12" in line for line in status_lines)
+    assert any("advisory only" in line for line in status_lines)
     assert "Personal outcome buckets:" in report
 
 

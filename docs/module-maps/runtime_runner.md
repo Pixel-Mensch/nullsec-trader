@@ -11,6 +11,7 @@ not a full line-by-line review.
 - owns `run_cli()` and the top-level runtime path
 - coordinates route, route-wide, chain, and snapshot-only execution
 - wires profiles, calibration, reporting, and plan artifacts together
+- attaches advisory-only character/personal-history metadata to runtime results
 
 ## Inputs
 
@@ -38,6 +39,7 @@ not a full line-by-line review.
 - `run_route()`
 - `run_route_wide_leg()`
 - `run_snapshot_only()`
+- `_build_personal_calibration_runtime()`
 - `_write_trade_plan_artifact()`
 
 ## Depends On
@@ -64,6 +66,7 @@ not a full line-by-line review.
 
 - add or adjust CLI/runtime modes
 - wire new profile, calibration, or ranking behavior into the main flow
+- surface advisory runtime metadata without turning it into a decision hook
 - change artifact generation or route/chain branching
 
 ## Risk Areas
@@ -72,6 +75,7 @@ not a full line-by-line review.
 - easy to duplicate business logic that belongs in domain modules
 - route summaries, output files, and metadata can drift together
 - profile and calibration changes can affect multiple runtime paths at once
+- personal-history output must stay separate from generic runtime calibration
 
 ## Tests
 

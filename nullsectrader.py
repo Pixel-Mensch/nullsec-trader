@@ -72,6 +72,7 @@ _EXPORTS = {
     "format_confidence_calibration_report": _confidence_calibration.format_confidence_calibration_report,
     "format_personal_calibration_summary": _confidence_calibration.format_personal_calibration_summary,
     "overall_raw_confidence_from_components": _confidence_calibration.overall_raw_confidence_from_components,
+    "personal_calibration_status_lines": _confidence_calibration.personal_calibration_status_lines,
     "resolve_confidence_calibration_cfg": _confidence_calibration.resolve_confidence_calibration_cfg,
     "transport_confidence_to_score": _confidence_calibration.transport_confidence_to_score,
     "INTERNAL_REASON_CODES": _explainability.INTERNAL_REASON_CODES,

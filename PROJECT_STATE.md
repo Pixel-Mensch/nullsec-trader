@@ -102,6 +102,9 @@ Not fully re-audited this session:
 - `journal calibration` now keeps the existing generic model intact while also
   printing a separate personal calibration basis with explicit
   fallback-to-generic guardrails
+- normal runtime output now also shows a compact personal-history advisory
+  summary with quality level, sample size, wallet-backed/reliable counts, and
+  fallback warnings while leaving ranking effect at `none`
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
@@ -141,8 +144,9 @@ Not fully re-audited this session:
 - wallet history is now more transparent, but still bounded by configured page
   limits; very old trades can stay uncertain when the loaded transaction window
   does not reach far enough back
-- personal analytics are now richer, but still CLI-only; there is not yet an
-  explicit downstream consumer outside journal reporting
+- personal analytics are now visible in journal views and the normal runtime
+  header, but chain/roundtrip summary artifacts outside `execution_plan.py` do
+  not yet show the same compact advisory block
 
 ## Current Focus
 
@@ -160,6 +164,8 @@ centered on:
   older or truncated snapshots
 - personal journal analytics and a separate personal calibration basis that
   stays advisory-only
+- compact runtime visibility for personal-history quality without changing the
+  generic decision path
 
 Files that indicate this focus:
 
@@ -202,8 +208,9 @@ Files that indicate this focus:
   truncation warnings in the journal views. This reduces false confidence, but
   does not create a historical backfill system.
 - Personal history quality is now graded (`none` to `good`) and sample-size
-  aware, but remains an additive analytics layer only. It does not change
-  route ranking, candidate scoring, or no-trade logic.
+  aware. It is visible in journal views and the normal runtime header, but it
+  remains an additive analytics layer only. It does not change route ranking,
+  candidate scoring, or no-trade logic.
 - Matching remains intentionally honest rather than magical: ambiguous
   transactions stay visible as uncertain, and unmatched wallet activity is
   reported separately instead of being forced onto a trade entry.

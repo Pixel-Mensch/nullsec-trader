@@ -1,3 +1,4 @@
+from confidence_calibration import personal_calibration_status_lines
 from explainability import (
     build_rejected_candidate_table,
     ensure_record_explainability,
@@ -516,6 +517,15 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             lines.append(f"Character: {status}  â€”  no private character data")
         for warning in list(character_summary.get("warnings", []) or []):
             lines.append(f"           [WARN] {warning}")
+    personal_summary = {}
+    for leg in list(route_results or []):
+        raw_summary = leg.get("_personal_calibration_summary", {})
+        if isinstance(raw_summary, dict) and raw_summary:
+            personal_summary = dict(raw_summary)
+            break
+    if personal_summary:
+        for idx, line in enumerate(personal_calibration_status_lines(personal_summary)):
+            lines.append(line if idx == 0 else f"                  {line}")
     if compact_mode:
         lines.append("Mode:      COMPACT (shopping list only — use --detail for full breakdown)")
     lines.append("")

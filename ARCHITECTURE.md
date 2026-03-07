@@ -117,6 +117,7 @@ Personal analytics flow is separate on purpose:
 -> `journal_reporting.py`
 -> optional `confidence_calibration.py` personal summary
 -> `journal_cli.py`
+-> `runtime_runner.py` / `execution_plan.py` for compact advisory-only runtime visibility
 
 This path is currently analytics-only and does not feed back into route ranking
 or candidate scoring.
@@ -168,6 +169,7 @@ Most recent focused work on 2026-03-07 touched:
   older or truncated wallet snapshots
 - personal trade analytics, data-quality tiers, and a separate personal
   calibration basis with explicit fallback-to-generic guardrails
+- compact runtime visibility for personal-history quality and fallback status
 
 Treat those areas as the most likely source of doc drift until targeted tests
 confirm the current branch state.

@@ -16,6 +16,7 @@ future task explicitly wires it into decisions.
 - builds a guarded personal calibration basis from reconciled history
 - calibrates values and mutates target records
 - formats human-readable calibration reports
+- formats compact advisory status lines for runtime/output surfaces
 
 ## Inputs
 
@@ -45,6 +46,7 @@ future task explicitly wires it into decisions.
 - `resolve_confidence_calibration_cfg()`
 - `build_confidence_calibration()`
 - `build_personal_calibration_summary()`
+- `personal_calibration_status_lines()`
 - `calibrate_confidence_value()`
 - `apply_calibration_to_record()`
 - `format_confidence_calibration_report()`
@@ -58,6 +60,7 @@ future task explicitly wires it into decisions.
 ## Used By
 
 - `runtime_runner.py`
+- `execution_plan.py`
 - `journal_cli.py`
 - `portfolio_builder.py`
 - `route_search.py`
