@@ -259,6 +259,24 @@ def _candidate_scale_ratio(c, qty: int) -> float:
     return max(0.0, min(1.0, float(qty) / max_units))
 
 
+def _candidate_scaled_expected_days(c, qty: int) -> float:
+    expected_days = _candidate_expected_days(c)
+    if expected_days <= 0.0 or int(qty) <= 0:
+        return 0.0
+    max_units = float(getattr(c, "max_units", c.get("max_units", 0) if isinstance(c, dict) else 0) or 0.0)
+    if max_units <= 0.0:
+        return float(expected_days)
+    queue_ahead_units = max(
+        0.0,
+        float(getattr(c, "queue_ahead_units", c.get("queue_ahead_units", 0) if isinstance(c, dict) else 0) or 0.0),
+    )
+    scaled_qty = max(0.0, min(float(qty), max_units))
+    denom = queue_ahead_units + max_units
+    if denom <= 0.0:
+        return float(expected_days)
+    return float(expected_days) * ((queue_ahead_units + scaled_qty) / denom)
+
+
 def _portfolio_expected_realized_profit(picks: list[dict]) -> float:
     return sum(float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0) for p in picks)
 
@@ -275,7 +293,11 @@ def _portfolio_objective(picks: list[dict], budget_isk: float, portfolio_cfg: di
         share = (cost / max(1e-9, float(budget_isk))) if float(budget_isk) > 0 else 0.0
         over = max(0.0, share - (max_share * 0.70))
         concentration_penalty += over * max(0.0, float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0))
-        liquidity_penalty += max(0.0, float(p.get("expected_days_to_sell", 0.0) or 0.0) - 30.0) * 1000.0
+        # Penalty proportional to expected profit: 0.5% of realized profit per extra day over 30d.
+        # Flat-ISK (1000/day) was ~0.06% of a typical position — functionally zero vs million-ISK profits.
+        extra_days = max(0.0, float(p.get("expected_days_to_sell", 0.0) or 0.0) - 30.0)
+        pick_expected = max(0.0, float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0))
+        liquidity_penalty += extra_days * pick_expected * 0.005
     return float(total_expected) - float(concentration_penalty * 0.25) - float(liquidity_penalty)
 
 
@@ -495,7 +517,12 @@ def try_cargo_fill(
     added = 0
     added_new_types = 0
     base_total_m3 = sum(float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0)) for p in base_picks)
-    base_total_profit = sum(float(p.get("profit", 0.0)) for p in base_picks)
+    # Use expected_realized_profit_90d (risk-adjusted) if available, otherwise fall back to gross profit.
+    # Gross `profit` field overstates the baseline for planned_sell routes where sell-through < 100%.
+    base_total_profit = sum(
+        float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0)
+        for p in base_picks
+    )
     base_profit_per_m3 = (base_total_profit / base_total_m3) if base_total_m3 > 0 else 0.0
     for c in sorted_fill_pool:
         if remaining_budget <= 1e-6 or remaining_cargo <= 1e-6:
@@ -534,6 +561,7 @@ def try_cargo_fill(
 
         total_qty_after = existing_qty + qty
         scale_ratio = _candidate_scale_ratio(c, qty)
+        scaled_expected_realized_profit = _candidate_expected_realized_profit(c) * float(scale_ratio or 1.0)
         if bool(getattr(c, "instant", True)):
             instant_fill_ratio_after = min(1.0, float(getattr(c, "dest_buy_depth_units", 0)) / max(1.0, float(total_qty_after)))
             if instant_fill_ratio_after < min_instant_fill_ratio:
@@ -566,12 +594,13 @@ def try_cargo_fill(
             continue
         if float(profit) < max(0.0, cargo_fill_min_profit_abs_isk):
             continue
-        candidate_profit_per_m3 = (float(profit) / max(1e-9, unit_vol * qty))
+        candidate_profit_per_m3 = float(scaled_expected_realized_profit) / max(1e-9, unit_vol * qty)
         if base_profit_per_m3 > 0 and candidate_profit_per_m3 < (base_profit_per_m3 * max(0.0, cargo_fill_min_profit_per_m3_ratio)):
             continue
 
         if is_existing:
             confidence_payload = _candidate_confidence_payload(c)
+            scaled_expected_days_total = _candidate_scaled_expected_days(c, total_qty_after)
             existing_pick["qty"] = int(existing_pick.get("qty", 0)) + qty
             existing_pick["cost"] = float(existing_pick.get("cost", 0.0)) + cost
             existing_pick["revenue_net"] = float(existing_pick.get("revenue_net", 0.0)) + revenue_net
@@ -593,6 +622,10 @@ def try_cargo_fill(
             existing_pick["gross_profit_if_full_sell"] = float(existing_pick.get("gross_profit_if_full_sell", 0.0)) + (
                 float(getattr(c, "gross_profit_if_full_sell", float(profit))) * float(scale_ratio)
             )
+            existing_pick["expected_days_to_sell"] = max(
+                float(existing_pick.get("expected_days_to_sell", 0.0) or 0.0),
+                float(scaled_expected_days_total),
+            )
             existing_pick["expected_units_sold_90d"] = float(existing_pick.get("expected_units_sold_90d", 0.0)) + (
                 float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability_after))) * float(scale_ratio or 1.0)
             )
@@ -600,7 +633,7 @@ def try_cargo_fill(
                 float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio)
             )
             existing_pick["expected_realized_profit_90d"] = float(existing_pick.get("expected_realized_profit_90d", 0.0)) + (
-                float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio)
+                float(scaled_expected_realized_profit)
             )
             existing_pick["estimated_sellable_units_90d"] = max(
                 float(existing_pick.get("estimated_sellable_units_90d", 0.0)),
@@ -707,6 +740,7 @@ def try_cargo_fill(
             confidence_payload = _candidate_confidence_payload(c)
             pick_profit_per_m3 = (float(profit) / float(qty) / unit_vol)
             pick_profit_per_m3_per_day = pick_profit_per_m3 * turnover_factor_after
+            scaled_expected_days = _candidate_scaled_expected_days(c, qty)
             new_pick = {
                 "type_id": c.type_id,
                 "name": c.name,
@@ -745,15 +779,15 @@ def try_cargo_fill(
                 "target_sell_price": float(getattr(c, "target_sell_price", 0.0)),
                 "avg_daily_volume_30d": float(getattr(c, "avg_daily_volume_30d", 0.0)),
                 "avg_daily_volume_7d": float(getattr(c, "avg_daily_volume_7d", 0.0)),
-                "expected_days_to_sell": float(getattr(c, "expected_days_to_sell", 0.0)) * float(scale_ratio or 1.0),
+                "expected_days_to_sell": float(scaled_expected_days),
                 "sell_through_ratio_90d": float(getattr(c, "sell_through_ratio_90d", 0.0)),
                 "risk_score": float(getattr(c, "risk_score", 0.0)),
                 "gross_profit_if_full_sell": float(getattr(c, "gross_profit_if_full_sell", float(profit))) * float(scale_ratio or 1.0),
                 "expected_units_sold_90d": float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability_after))) * float(scale_ratio or 1.0),
                 "expected_units_unsold_90d": float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio or 1.0),
-                "expected_realized_profit_90d": float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio or 1.0),
+                "expected_realized_profit_90d": float(scaled_expected_realized_profit),
                 "expected_realized_profit_per_m3_90d": float(
-                    getattr(c, "expected_realized_profit_90d", float(profit)) * float(scale_ratio or 1.0)
+                    float(scaled_expected_realized_profit)
                 ) / max(1e-9, float(qty) * float(unit_vol)),
                 "estimated_sellable_units_90d": float(getattr(c, "estimated_sellable_units_90d", float(qty))),
                 "exit_confidence": float(getattr(c, "exit_confidence", fill_probability_after)),
@@ -768,9 +802,9 @@ def try_cargo_fill(
                     getattr(c, "profit_at_conservative_executable_price", float(profit))
                 ) * float(scale_ratio or 1.0),
                 **confidence_payload,
-                "expected_profit_90d": float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio or 1.0),
+                "expected_profit_90d": float(scaled_expected_realized_profit),
                 "expected_profit_per_m3_90d": float(
-                    (getattr(c, "expected_realized_profit_90d", float(profit)) * float(scale_ratio or 1.0))
+                    float(scaled_expected_realized_profit)
                     / max(1e-9, float(qty) * float(unit_vol))
                 ),
                 "used_volume_fallback": bool(getattr(c, "used_volume_fallback", False)),
@@ -805,9 +839,7 @@ def try_cargo_fill(
             added_new_types += 1
 
         total_cost += cost
-        total_profit += float(
-            getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", profit))
-        ) * float(scale_ratio or 1.0)
+        total_profit += float(scaled_expected_realized_profit)
         total_m3 += (unit_vol * qty)
         remaining_budget -= cost
         remaining_cargo -= (unit_vol * qty)
@@ -909,9 +941,7 @@ def build_portfolio(
                 continue
 
             scale_ratio = _candidate_scale_ratio(c, qty)
-            scaled_expected_days = float(getattr(c, "expected_days_to_sell", 0.0) or 0.0)
-            if scaled_expected_days > 0.0 and int(getattr(c, "max_units", 0) or 0) > 0:
-                scaled_expected_days *= float(scale_ratio)
+            scaled_expected_days = _candidate_scaled_expected_days(c, qty)
             if scaled_expected_days > max_liq_days:
                 continue
 
@@ -923,7 +953,7 @@ def build_portfolio(
                 turnover_factor = min(max_turnover_factor, max(0.0, instant_fill_ratio))
                 fill_probability = instant_fill_ratio
             else:
-                instant_fill_ratio = 1.0
+                instant_fill_ratio = 0.0  # not applicable for planned/listed sells
                 turnover_factor = float(c.turnover_factor)
                 fill_probability = float(c.fill_probability)
             pick_profit_per_m3_per_day = pick_profit_per_m3 * turnover_factor

@@ -175,8 +175,16 @@ def summarize_route_for_ranking(route: dict) -> dict:
 
 
 def route_ranking_value(route: dict, metric: str) -> float:
-    summary = summarize_route_for_ranking(route)
     m = str(metric or "risk_adjusted_expected_profit").strip().lower()
+    # For the default metric, use the pre-computed profile-adjusted score when available.
+    # This lets runtime_runner store a profile-weighted score without re-running the summary.
+    if m not in ("profit_total", "full_sell_profit", "expected_profit", "expected_realized_profit",
+                 "expected_realized_profit_90d", "confidence", "route_confidence",
+                 "liquidation_speed", "speed"):
+        pre = route.get("_profile_risk_adjusted_score")
+        if pre is not None:
+            return float(pre)
+    summary = summarize_route_for_ranking(route)
     if m in ("profit_total", "full_sell_profit"):
         return float(summary["total_full_sell_profit"])
     if m in ("expected_profit", "expected_realized_profit", "expected_realized_profit_90d"):

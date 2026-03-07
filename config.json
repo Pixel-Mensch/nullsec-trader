@@ -552,6 +552,23 @@
     "diagnostics": {
         "network_verbose": false
     },
+    "character_context": {
+        "enabled": false,
+        "allow_live_sync": true,
+        "allow_cache_fallback": true,
+        "apply_skill_fee_overrides": true,
+        "include_skills": true,
+        "include_skill_queue": false,
+        "include_orders": true,
+        "include_wallet_balance": true,
+        "include_wallet_journal": true,
+        "include_wallet_transactions": true,
+        "wallet_journal_max_pages": 2,
+        "wallet_transactions_max_pages": 2,
+        "profile_cache_ttl_sec": 3600,
+        "show_order_exposure_in_output": true,
+        "warn_if_budget_exceeds_wallet": true
+    },
     "global_excludes": {
         "type_ids": [],
         "name_keywords": []

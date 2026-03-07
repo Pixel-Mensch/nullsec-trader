@@ -109,6 +109,56 @@ def test_try_cargo_fill_topup_existing_pick() -> None:
     assert "scc_surcharge_isk" in picks[0]
     assert "relist_fee_isk" in picks[0]
 
+def test_candidate_scaled_expected_days_keeps_queue_component() -> None:
+    from portfolio_builder import _candidate_scaled_expected_days
+
+    candidate = {
+        "expected_days_to_sell": 20.0,
+        "max_units": 10,
+        "queue_ahead_units": 90,
+    }
+
+    scaled_days = _candidate_scaled_expected_days(candidate, 1)
+    assert abs(scaled_days - 18.2) < 1e-9
+
+def test_build_portfolio_pick_expected_days_respects_queue_ahead_units() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    portfolio_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 1,
+        "max_liquidation_days_per_position": 30.0,
+        "max_share_of_estimated_demand_per_position": 1.0,
+    }
+    planned = nst.TradeCandidate(
+        type_id=9101,
+        name="queued-planned",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=160.0,
+        max_units=10,
+        profit_per_unit=60.0,
+        profit_pct=0.60,
+        instant=False,
+        mode="planned_sell",
+        queue_ahead_units=90,
+        expected_days_to_sell=20.0,
+        expected_units_sold_90d=5.0,
+        expected_units_unsold_90d=5.0,
+        expected_realized_profit_90d=300.0,
+        expected_realized_profit_per_m3_90d=30.0,
+        estimated_sellable_units_90d=20.0,
+        fill_probability=0.5,
+        turnover_factor=0.5,
+        overall_confidence=0.7,
+        exit_confidence=0.7,
+        liquidity_confidence=0.7,
+    )
+
+    picks, _, _, _ = nst.build_portfolio([planned], 150.0, 100.0, fees, filters, portfolio_cfg)
+    assert len(picks) == 1
+    assert abs(float(picks[0]["expected_days_to_sell"]) - 18.2) < 1e-9
+
 def test_strict_rejects_fallback_volume() -> None:
     esi = _FakeESI(history_30=0, history_7=0, reference_price=100.0)
     source_orders, dest_orders = _simple_orders(dest_price=130.0)
@@ -388,4 +438,183 @@ def test_build_portfolio_caps_single_position_by_estimated_demand() -> None:
     picks, _, _, _ = nst.build_portfolio([thin_candidate], 1_000_000.0, 100_000.0, fees, filters, portfolio_cfg)
     assert len(picks) == 1
     assert int(picks[0]["qty"]) <= 5
+
+
+# --- Fix K1: _portfolio_objective liquidity penalty is meaningful ---
+
+def test_portfolio_objective_penalizes_long_hold_proportionally() -> None:
+    """Long-hold picks must incur a penalty significant enough to affect optimizer decisions."""
+    from portfolio_builder import _portfolio_objective
+
+    base_pick = {
+        "type_id": 1,
+        "cost": 50_000_000.0,
+        "expected_realized_profit_90d": 5_000_000.0,
+        "profit": 5_000_000.0,
+    }
+    short_pick = dict(base_pick, expected_days_to_sell=10.0)
+    long_pick = dict(base_pick, expected_days_to_sell=90.0)
+
+    cfg = {"max_item_share_of_budget": 1.0}
+    budget = 100_000_000.0
+
+    score_short = _portfolio_objective([short_pick], budget, cfg)
+    score_long = _portfolio_objective([long_pick], budget, cfg)
+
+    # Short-hold must score strictly higher than long-hold.
+    assert score_short > score_long, (
+        f"Expected short-hold (score={score_short}) > long-hold (score={score_long})"
+    )
+    # Penalty must be at least 1% of expected profit (60 extra days * 5M * 0.005 = 1.5M).
+    penalty = score_short - score_long
+    assert penalty >= 1_000_000.0, f"Penalty {penalty:,.0f} too small — liquidity cost not meaningful"
+
+
+def test_portfolio_objective_no_penalty_within_30d() -> None:
+    """Picks held ≤ 30 days should receive zero liquidity penalty."""
+    from portfolio_builder import _portfolio_objective
+
+    pick_30 = {"type_id": 1, "cost": 10_000_000.0, "expected_realized_profit_90d": 2_000_000.0, "profit": 2_000_000.0, "expected_days_to_sell": 30.0}
+    pick_1 = dict(pick_30, expected_days_to_sell=1.0)
+
+    cfg = {"max_item_share_of_budget": 1.0}
+    score_30 = _portfolio_objective([pick_30], 50_000_000.0, cfg)
+    score_1 = _portfolio_objective([pick_1], 50_000_000.0, cfg)
+    assert score_30 == score_1
+
+
+# --- Fix H1: try_cargo_fill base_profit_per_m3 uses expected_realized, not gross profit ---
+
+def test_cargo_fill_base_profit_uses_expected_realized() -> None:
+    """
+    Base picks with low expected_realized (high unsold ratio) must not set an
+    overly generous base_profit_per_m3 threshold that lets low-quality cargo fill through.
+    """
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0}
+    filters_used = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    # cargo_fill_min_profit_per_m3_ratio=1.0 means fill must match base profit density exactly
+    port_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 10,
+        "cargo_fill_max_extra_items": 5,
+        "cargo_fill_ranking_metric": "profit_per_m3",
+        "cargo_fill_min_profit_per_m3_ratio": 1.0,
+        "cargo_fill_allow_topup_existing": False,
+    }
+
+    # Base pick: gross profit=1000, but expected_realized=200 (80% unsold)
+    base_picks = [{
+        "type_id": 2001, "name": "Base", "qty": 1, "unit_volume": 10.0,
+        "buy_avg": 100.0, "sell_avg": 1100.0, "cost": 100.0,
+        "revenue_net": 1100.0, "profit": 1000.0,
+        "expected_realized_profit_90d": 200.0,
+        "instant": False, "mode": "planned_sell",
+        "suggested_sell_price": 1100.0, "order_duration_days": 90,
+        "fill_probability": 0.2, "turnover_factor": 0.2,
+        "profit_per_m3": 100.0, "profit_per_m3_per_day": 20.0,
+        "expected_days_to_sell": 5.0, "sell_through_ratio_90d": 0.2,
+    }]
+
+    # Fill candidate: gross profit density = 250/10=25/m3, which is > expected_realized base (200/10=20/m3)
+    # If base uses gross profit (1000/10=100/m3), candidate (25/m3) would be rejected.
+    # If base uses expected_realized (200/10=20/m3), candidate (25/m3) should pass.
+    fill_candidate = nst.TradeCandidate(
+        type_id=3001, name="Fill", unit_volume=10.0,
+        buy_avg=50.0, sell_avg=300.0, max_units=5,
+        profit_per_unit=250.0, profit_pct=5.0, instant=True,
+        dest_buy_depth_units=50, fill_probability=1.0,
+        profit_per_m3=25.0, profit_per_m3_per_day=25.0,
+        expected_realized_profit_90d=1250.0,
+    )
+
+    _, _, _, _, n_added = nst.try_cargo_fill(
+        base_picks=base_picks,
+        candidates=[fill_candidate],
+        budget_isk=100_000.0,
+        cargo_m3=10_000.0,
+        fees=fees,
+        filters_used=filters_used,
+        port_cfg=port_cfg,
+    )
+    # With expected_realized base (20/m3) and ratio=1.0, candidate at 25/m3 must pass.
+    assert n_added >= 1, "Fill candidate should have been accepted when base uses expected_realized profit"
+
+
+def test_cargo_fill_candidate_profit_gate_uses_expected_realized_for_planned_fill() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0}
+    filters_used = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    port_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 10,
+        "cargo_fill_max_extra_items": 5,
+        "cargo_fill_ranking_metric": "profit_per_m3",
+        "cargo_fill_min_profit_per_m3_ratio": 1.0,
+        "cargo_fill_allow_topup_existing": False,
+    }
+
+    base_picks = [{
+        "type_id": 2001, "name": "Base", "qty": 1, "unit_volume": 10.0,
+        "buy_avg": 100.0, "sell_avg": 1100.0, "cost": 100.0,
+        "revenue_net": 1100.0, "profit": 1000.0,
+        "expected_realized_profit_90d": 200.0,
+        "instant": False, "mode": "planned_sell",
+        "suggested_sell_price": 1100.0, "order_duration_days": 90,
+        "fill_probability": 0.2, "turnover_factor": 0.2,
+        "profit_per_m3": 100.0, "profit_per_m3_per_day": 20.0,
+        "expected_days_to_sell": 5.0, "sell_through_ratio_90d": 0.2,
+    }]
+
+    fill_candidate = nst.TradeCandidate(
+        type_id=3002, name="PlannedFill", unit_volume=10.0,
+        buy_avg=50.0, sell_avg=300.0, max_units=1,
+        profit_per_unit=250.0, profit_pct=5.0,
+        instant=False, mode="planned_sell",
+        fill_probability=0.2,
+        turnover_factor=0.2,
+        expected_days_to_sell=10.0,
+        expected_realized_profit_90d=50.0,
+        expected_realized_profit_per_m3_90d=5.0,
+        overall_confidence=0.5,
+        exit_confidence=0.5,
+        liquidity_confidence=0.5,
+    )
+
+    _, _, _, _, n_added = nst.try_cargo_fill(
+        base_picks=base_picks,
+        candidates=[fill_candidate],
+        budget_isk=100_000.0,
+        cargo_m3=10_000.0,
+        fees=fees,
+        filters_used=filters_used,
+        port_cfg=port_cfg,
+    )
+    assert n_added == 0, "Planned cargo-fill candidate should be rejected when expected realized profit density is below the base threshold"
+
+
+# --- Fix H2: instant_fill_ratio = 0.0 for planned_sell picks ---
+
+def test_planned_sell_pick_has_zero_instant_fill_ratio() -> None:
+    """planned_sell picks must not carry instant_fill_ratio=1.0 in their output dict."""
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.03, "sales_tax": 0.036, "scc_surcharge": 0.0}
+    filters_used = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    portfolio_cfg = {"max_item_share_of_budget": 1.0, "max_items": 10, "max_liquidation_days_per_position": 99.0, "max_share_of_estimated_demand_per_position": 1.0}
+
+    planned = nst.TradeCandidate(
+        type_id=5001, name="planned_item", unit_volume=1.0,
+        buy_avg=100.0, sell_avg=200.0, max_units=3,
+        profit_per_unit=100.0, profit_pct=1.0,
+        instant=False, mode="planned_sell",
+        dest_buy_depth_units=0,
+        fill_probability=0.6,
+        expected_days_to_sell=30.0,
+        expected_units_sold_90d=2.0,
+        expected_realized_profit_90d=200.0,
+        expected_realized_profit_per_m3_90d=200.0,
+        estimated_sellable_units_90d=5.0,
+        overall_confidence=0.6,
+    )
+    picks, _, _, _ = nst.build_portfolio([planned], 10_000.0, 100.0, fees, filters_used, portfolio_cfg)
+    assert len(picks) == 1
+    ratio = float(picks[0].get("instant_fill_ratio", 1.0))
+    assert ratio == 0.0, f"planned_sell pick should have instant_fill_ratio=0.0, got {ratio}"
 

@@ -239,7 +239,7 @@ def depth_slice(
     return avg, total_qty
 
 def apply_strategy_filters(cfg: dict, filters: dict) -> dict:
-    """Merge strategy-mode constraints into route filters."""
+    """Merge strategy-mode constraints and active risk profile into route filters."""
     merged = dict(filters)
     strategy_cfg = cfg.get("strategy", {})
     mode = strategy_cfg.get("mode", "balanced")
@@ -270,6 +270,14 @@ def apply_strategy_filters(cfg: dict, filters: dict) -> dict:
     ):
         if k not in merged and k in orderbook_cfg:
             merged[k] = orderbook_cfg[k]
+
+    # Apply active risk profile filter overrides (tighten-only, no duplicate logic)
+    profile_name = str(cfg.get("_active_risk_profile_name", "") or "")
+    profile_params = cfg.get("_active_risk_profile_params", {})
+    if profile_name and isinstance(profile_params, dict):
+        from risk_profiles import apply_profile_to_filters
+        merged = apply_profile_to_filters(profile_name, profile_params, merged)
+
     return merged
 
 def compute_candidates(
@@ -914,7 +922,8 @@ def compute_candidates(
             avg_daily_volume_30d = daily_vol
             avg_daily_volume_7d = 0.0
         dest_buy_depth_units = int(sell_qty) if instant_flag else 0
-        instant_fill_ratio = 1.0 if instant_flag else 1.0
+        # 0.0 for non-instant: the ratio of dest buy depth to units is not applicable to planned_sell listings.
+        instant_fill_ratio = 1.0 if instant_flag else 0.0
         if instant_flag and dest_buy_depth_units < min_dest_buy_depth_units:
             record_explain(
                 "rejected",
@@ -1414,9 +1423,10 @@ def compute_candidates(
         if mode == "planned_sell":
             strict_confidence_score = _clamp01(float(overall_confidence))
         else:
-            liquidity_confidence = max(liquidity_confidence, _clamp01(float(fill_probability)))
-            exit_confidence = max(exit_confidence, liquidity_confidence)
-            overall_confidence = max(overall_confidence, min(exit_confidence, liquidity_confidence))
+            # Use min() to stay conservative — max() would inflate confidence above fill_probability.
+            liquidity_confidence = min(liquidity_confidence, _clamp01(float(fill_probability))) if liquidity_confidence > 0.0 else _clamp01(float(fill_probability))
+            exit_confidence = min(exit_confidence, liquidity_confidence) if exit_confidence > 0.0 else liquidity_confidence
+            overall_confidence = min(exit_confidence, liquidity_confidence)
             strict_confidence_score = _clamp01(float(overall_confidence if overall_confidence > 0.0 else fill_probability))
 
         if mode in ("fast_sell", "planned_sell"):

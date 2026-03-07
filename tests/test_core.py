@@ -272,3 +272,77 @@ def test_resolve_structure_region_map_handles_int_structures() -> None:
     assert int(resolved.get(1040804972352, 0)) == 10000059
     assert int(resolved.get(1049588174021, 0)) == 10000009
 
+
+# --- Fix H3: market_plausibility planned_sell usable_depth_ratio uses proposed_qty as neutral fallback ---
+
+def test_market_plausibility_planned_sell_no_competition_not_hard_rejected() -> None:
+    """
+    For planned_sell with zero competing sell orders below our target price,
+    usable_depth_ratio must use proposed_qty as fallback (we can list our own qty).
+    Before fix: exit_usable_units=0 → fallback was source_usable_units (wrong association).
+    After fix: exit_usable_units=0 → fallback is proposed_qty → ratio reflects our position size.
+    """
+    from market_plausibility import assess_market_plausibility
+    from models import OrderLevel
+
+    source_levels = [OrderLevel(price=90.0, volume=50)]
+    # Destination sell orders all above our 180 ISK target → exit_usable_units = 0
+    exit_levels = [OrderLevel(price=200.0, volume=20), OrderLevel(price=210.0, volume=20)]
+
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.03, "sales_tax": 0.036}
+    result = assess_market_plausibility(
+        source_levels=source_levels,
+        exit_levels=exit_levels,
+        exit_is_buy=False,
+        proposed_qty=10,
+        source_usable_price=90.0,
+        exit_usable_price=180.0,
+        reference_price=180.0,
+        mode="planned_sell",
+        fees=fees,
+        price_depth_pct=0.02,
+        competition_band_pct=0.01,
+        relist_budget_pct=0.0,
+        relist_budget_isk=0.0,
+        cfg={},
+    )
+    # exit_depth_for_ratio = proposed_qty=10 (no competition → we list our own qty)
+    # source_usable_units = 50. min(50, 10)=10. required=ceil(10*0.35)=4. ratio=10/4=2.5→capped at 1.0
+    assert result["usable_depth_ratio"] >= 1.0, (
+        f"planned_sell with no competition should have usable_depth_ratio >= 1.0, got {result['usable_depth_ratio']}"
+    )
+    # Must not be hard-rejected solely due to zero competition depth
+    assert result.get("hard_reject") is False or "UNUSABLE_DEPTH" not in result["flags"], (
+        "No-competition planned_sell must not be hard-rejected for depth"
+    )
+
+
+def test_market_plausibility_planned_sell_with_competition_uses_exit_depth() -> None:
+    """With actual competition below our target, exit_usable_units > 0 and used directly."""
+    from market_plausibility import assess_market_plausibility
+    from models import OrderLevel
+
+    source_levels = [OrderLevel(price=90.0, volume=50)]
+    exit_levels = [OrderLevel(price=150.0, volume=20), OrderLevel(price=160.0, volume=20), OrderLevel(price=170.0, volume=20)]
+
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.03, "sales_tax": 0.036}
+    result = assess_market_plausibility(
+        source_levels=source_levels,
+        exit_levels=exit_levels,
+        exit_is_buy=False,
+        proposed_qty=10,
+        source_usable_price=90.0,
+        exit_usable_price=180.0,
+        reference_price=180.0,
+        mode="planned_sell",
+        fees=fees,
+        price_depth_pct=0.02,
+        competition_band_pct=0.01,
+        relist_budget_pct=0.0,
+        relist_budget_isk=0.0,
+        cfg={},
+    )
+    assert result["exit_usable_depth_at_confidence_price"] == 60
+    assert result["usable_depth_at_confidence_price"] == min(50, 60)
+    assert result["usable_depth_ratio"] >= 1.0
+

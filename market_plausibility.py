@@ -272,9 +272,16 @@ def assess_market_plausibility(
         reference_anchor_price = max(usable_sell_price, top_sell_price)
     ref_deviation = reference_price_deviation(reference_anchor_price, float(reference_price or 0.0))
 
+    # For instant (exit_is_buy=True): both source and exit must have depth — use min of both.
+    # For planned_sell (exit_is_buy=False): exit_usable_units = sell competition at/below our target price.
+    # When exit_usable_units=0, we are the cheapest/only seller — that is fine for a listing.
+    # Use proposed_qty as neutral exit depth for planned_sell (we can always list our own qty).
+    # Previously used `exit_usable_units or source_usable_units` which incorrectly rewarded
+    # "no competition" trades with source-side depth, masking genuinely thin destination markets.
+    exit_depth_for_ratio = exit_usable_units if exit_is_buy else (exit_usable_units if exit_usable_units > 0 else proposed_qty)
     usable_depth_ratio = min(
         1.0,
-        float(min(source_usable_units, exit_usable_units if exit_is_buy else exit_usable_units or proposed_qty)) / float(max(1, required_usable_units)),
+        float(min(source_usable_units, exit_depth_for_ratio)) / float(max(1, required_usable_units)),
     )
     flags: list[str] = []
 
@@ -355,7 +362,7 @@ def assess_market_plausibility(
         "order_concentration_ratio": float(max(source_concentration, exit_concentration)),
         "source_order_concentration_ratio": float(source_concentration),
         "exit_order_concentration_ratio": float(exit_concentration),
-        "usable_depth_at_confidence_price": int(min(source_usable_units, exit_usable_units if exit_is_buy else exit_usable_units or source_usable_units)),
+        "usable_depth_at_confidence_price": int(min(source_usable_units, exit_depth_for_ratio)),
         "source_usable_depth_at_confidence_price": int(source_usable_units),
         "exit_usable_depth_at_confidence_price": int(exit_usable_units),
         "usable_depth_ratio": float(usable_depth_ratio),

@@ -10,8 +10,11 @@ It intentionally contains no business logic.
 from __future__ import annotations
 
 import candidate_engine as _candidate_engine
+import character_profile as _character_profile
 import confidence_calibration as _confidence_calibration
 import config_loader as _config_loader
+import eve_character_client as _eve_character_client
+import eve_sso as _eve_sso
 import execution_plan as _execution_plan
 import explainability as _explainability
 import fees as _fees
@@ -19,6 +22,7 @@ import journal_cli as _journal_cli
 import journal_models as _journal_models
 import journal_reporting as _journal_reporting
 import journal_store as _journal_store
+import local_cache as _local_cache
 import location_utils as _location_utils
 import market_fetch as _market_fetch
 import market_normalization as _market_normalization
@@ -44,6 +48,16 @@ _EXPORTS = {
     "compute_route_wide_candidates_for_source": _candidate_engine.compute_route_wide_candidates_for_source,
     "depth_slice": _candidate_engine.depth_slice,
     "get_structure_micro_liquidity": _candidate_engine.get_structure_micro_liquidity,
+    "DEFAULT_CHARACTER_CONTEXT_CFG": _character_profile.DEFAULT_CHARACTER_CONTEXT_CFG,
+    "apply_character_fee_overrides": _character_profile.apply_character_fee_overrides,
+    "attach_character_context_to_result": _character_profile.attach_character_context_to_result,
+    "build_character_context_summary": _character_profile.build_character_context_summary,
+    "build_character_profile": _character_profile.build_character_profile,
+    "character_status_lines": _character_profile.character_status_lines,
+    "requested_character_scopes": _character_profile.requested_character_scopes,
+    "resolve_character_context": _character_profile.resolve_character_context,
+    "resolve_character_context_cfg": _character_profile.resolve_character_context_cfg,
+    "sync_character_profile": _character_profile.sync_character_profile,
     "CONFIDENCE_DEFINITIONS": _confidence_calibration.CONFIDENCE_DEFINITIONS,
     "CONFIDENCE_DIMENSIONS": _confidence_calibration.CONFIDENCE_DIMENSIONS,
     "DEFAULT_CONFIDENCE_BUCKETS": _confidence_calibration.DEFAULT_CONFIDENCE_BUCKETS,
@@ -78,6 +92,16 @@ _EXPORTS = {
     "load_json": _config_loader.load_json,
     "save_json": _config_loader.save_json,
     "validate_config": _config_loader.validate_config,
+    "CharacterESIError": _eve_character_client.CharacterESIError,
+    "EveCharacterClient": _eve_character_client.EveCharacterClient,
+    "DEFAULT_AUTHORIZATION_ENDPOINT": _eve_sso.DEFAULT_AUTHORIZATION_ENDPOINT,
+    "DEFAULT_SSO_METADATA_URL": _eve_sso.DEFAULT_SSO_METADATA_URL,
+    "DEFAULT_TOKEN_ENDPOINT": _eve_sso.DEFAULT_TOKEN_ENDPOINT,
+    "EveSSOAuth": _eve_sso.EveSSOAuth,
+    "SSOAuthError": _eve_sso.SSOAuthError,
+    "decode_access_token_claims": _eve_sso.decode_access_token_claims,
+    "requested_sso_scopes": _eve_sso.normalize_scopes,
+    "token_identity_from_claims": _eve_sso.token_identity_from_claims,
     "write_execution_plan_profiles": _execution_plan.write_execution_plan_profiles,
     "write_route_leaderboard": _execution_plan.write_route_leaderboard,
     "compute_trade_financials": _fees.compute_trade_financials,
@@ -112,6 +136,11 @@ _EXPORTS = {
     "record_journal_sell": _journal_store.record_journal_sell,
     "resolve_journal_db_path": _journal_store.resolve_journal_db_path,
     "update_journal_entry_status": _journal_store.update_journal_entry_status,
+    "cache_record_age_sec": _local_cache.cache_record_age_sec,
+    "cached_payload": _local_cache.cached_payload,
+    "is_cache_fresh": _local_cache.is_cache_fresh,
+    "load_cache_record": _local_cache.load_cache_record,
+    "save_cache_record": _local_cache.save_cache_record,
     "run_journal_cli": _journal_cli.run_journal_cli,
     "label_to_slug": _location_utils.label_to_slug,
     "normalize_location_label": _location_utils.normalize_location_label,

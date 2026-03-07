@@ -647,7 +647,7 @@ def validate_config(cfg: dict) -> dict:
         err("config root must be an object")
         return result
 
-    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration"):
+    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context"):
         if key in cfg and not isinstance(cfg.get(key), dict):
             err(f"{key} must be an object")
 
@@ -843,6 +843,38 @@ def validate_config(cfg: dict) -> dict:
                 err(f"fees.{skey} must be in range [0..5]")
     else:
         err("fees must be an object")
+
+    character_context_cfg = cfg.get("character_context", {})
+    if character_context_cfg is not None and not isinstance(character_context_cfg, dict):
+        err("character_context must be an object")
+    elif isinstance(character_context_cfg, dict):
+        for bkey in (
+            "enabled",
+            "allow_live_sync",
+            "allow_cache_fallback",
+            "apply_skill_fee_overrides",
+            "include_skills",
+            "include_skill_queue",
+            "include_orders",
+            "include_wallet_balance",
+            "include_wallet_journal",
+            "include_wallet_transactions",
+            "show_order_exposure_in_output",
+            "warn_if_budget_exceeds_wallet",
+        ):
+            if bkey in character_context_cfg and not isinstance(character_context_cfg.get(bkey), bool):
+                err(f"character_context.{bkey} must be a boolean")
+        for nkey in ("wallet_journal_max_pages", "wallet_transactions_max_pages", "profile_cache_ttl_sec"):
+            if nkey in character_context_cfg:
+                try:
+                    value = int(character_context_cfg.get(nkey, 0) or 0)
+                except Exception:
+                    value = -1
+                if value < 0:
+                    err(f"character_context.{nkey} must be a non-negative integer")
+        for skey in ("profile_cache_path", "token_path", "metadata_path"):
+            if skey in character_context_cfg and not isinstance(character_context_cfg.get(skey), str):
+                err(f"character_context.{skey} must be a string")
 
     route_costs_cfg = cfg.get("route_costs", {})
     if route_costs_cfg is not None and not isinstance(route_costs_cfg, dict):

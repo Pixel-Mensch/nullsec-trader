@@ -3,6 +3,10 @@
     "client_id": "your_client_id_here",
     "client_secret": "your_client_secret_here"
   },
+  "character_context": {
+    "enabled": true,
+    "include_skill_queue": false
+  },
   "replay": {
     "enabled": false
   }

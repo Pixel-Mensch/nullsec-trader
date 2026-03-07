@@ -14,6 +14,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Portfolio-Bau unter Budget-, Cargo-, Liquidations- und Nachfragelimits
 - Execution Plans, Route Leaderboard, CSV-Exporte und Candidate-Dumps
 - Lokales Trade Journal fuer Soll/Ist-Abgleich von vorgeschlagenen und tatsaechlich ausgefuehrten Trades
+- Optionaler persoenlicher Character Context via EVE SSO / ESI: Character-Identitaet, Skills, optionale Skill Queue, offene Orders und Wallet-Snapshots mit lokalem Cache/Fallback
 - Replay-Unterstuetzung fuer reproduzierbare Analysen und Regressionstests
 - Snapshot-Only-Modus zum Bauen neuer Replay-Snapshots aus Live-Daten
 
@@ -61,6 +62,7 @@ python -m pip install -r .\requirements.txt
 ```
 
 - Fuer Live-Betrieb: gueltige ESI-Credentials und Zugriff auf die benoetigten Strukturen
+- Fuer optionalen privaten Character Context: lokale EVE-SSO-App / ESI-App mit `client_id` und optional `client_secret`
 - Lokale Secrets am besten ueber `config.local.json` oder Umgebungsvariablen setzen
 
 Als Vorlage gibt es [`config.local.example.json`](./config.local.example.json).
@@ -96,9 +98,85 @@ Direkt ueber Python:
 python .\main.py --cargo-m3 10000 --budget-isk 500m
 python .\main.py --snapshot-only
 python .\main.py --snapshot-only --structures 1040804972352 1049588174021 --snapshot-out .\snapshot.json
+python .\main.py auth login
+python .\main.py auth status
+python .\main.py character sync
+python .\main.py character status
 ```
 
 Wenn `--cargo-m3` oder `--budget-isk` fehlen, fragt die CLI interaktiv nach Cargo und Budget.
+
+### Risk Profiles / Handelsmodi
+
+Das Tool unterstuetzt konfigurierbare Risk Profiles, die echte Auswirkungen auf Candidate-Auswahl, Portfoliobau, Route-Ranking und Output haben.
+
+#### Profil waehlen
+
+Per CLI-Argument:
+
+```powershell
+python .\main.py --profile conservative --cargo-m3 10000 --budget-isk 500m
+python .\main.py --profile aggressive
+python .\main.py --profile instant_only
+python .\main.py --profile low_maintenance
+```
+
+Per Umgebungsvariable (ueberschreibt CLI und Config):
+
+```powershell
+$env:NULLSEC_RISK_PROFILE = "high_liquidity"
+python .\main.py
+```
+
+Per `config.local.json`:
+
+```json
+{
+  "risk_profile": {
+    "name": "balanced"
+  }
+}
+```
+
+Einzelne Parameter koennen im Config-Block ueberschrieben werden (werden auf das Basisprofil aufgesetzt):
+
+```json
+{
+  "risk_profile": {
+    "name": "balanced",
+    "max_items": 25,
+    "min_expected_profit_isk": 2000000
+  }
+}
+```
+
+#### Eingebaute Profile
+
+| Profil | Beschreibung | planned_sell | Max Items | Max Tage |
+|---|---|---|---|---|
+| `conservative` | Nur liquide Instant-Exits, enge Confidence-Schwellen | blockiert | 20 | 14 |
+| `balanced` | Standardverhalten, gemischte Exits (Standard-Profil) | erlaubt | 40 | 45 |
+| `aggressive` | Maximaler Papierprofit, duenne Maerkte toleriert | erlaubt | 100 | 90 |
+| `instant_only` | Kein planned_sell, nur Buy-Order-Exits | blockiert | 50 | 1 |
+| `high_liquidity` | Exit-Qualitaet vor Marge, harte Strafe fuer tote Maerkte | erlaubt | 30 | 21 |
+| `low_maintenance` | Wenige Items, klare Exits, minimales Repricing-Risiko | blockiert | 12 | 21 |
+
+#### Was die Profile steuern
+
+- **Candidate Filter**: `min_fill_probability`, `max_expected_days_to_sell`, `planned_min_liquidity_confidence`, `min_expected_profit_isk`, `min_profit_per_m3`
+- **Portfolio**: `max_item_share_of_budget`, `max_items`, `max_liquidation_days_per_position`
+- **planned_sell-Blockierung**: Profile wie `instant_only`, `conservative` und `low_maintenance` blockieren den planned_sell-Pfad vollstaendig
+- **Route-Ranking**: Jedes Profil gewichtet `stale_market_penalty`, `speculative_penalty`, `concentration_penalty` und `capital_lock_risk` unterschiedlich
+- **Output**: Das aktive Profil und seine Restriktionen erscheinen im Execution Plan Header
+
+#### Beispiel: konservativ vs. aggressiv
+
+Bei denselben Marktdaten:
+
+- `conservative` laesst nur Kandidaten mit >= 70% Fill-Probability, max. 14 Tage Verkaufsdauer, min. 5m ISK konservativem Profit durch — und blockiert planned_sell.
+- `aggressive` akzeptiert bereits 10% Fill-Probability, bis zu 90 Tage, keine ISK-Untergrenze und erlaubt speculative Exits.
+
+Ergebnis: Bei duennen Maerkten zeigt `conservative` haeufig keinen Plan (korrekte Ablehnung), `aggressive` baut einen Plan aus schwaecheren Signalen.
 
 ### Replay
 
@@ -106,6 +184,94 @@ Wenn `--cargo-m3` oder `--budget-isk` fehlen, fragt die CLI interaktiv nach Carg
 - `NULLSEC_REPLAY_ENABLED=1` erzwingt Replay, `NULLSEC_REPLAY_ENABLED=0` erzwingt Live.
 - Live-Runs koennen nach dem Fetch ein Replay-Snapshot schreiben, wenn `replay.write_snapshot_after_fetch=true` gesetzt ist.
 - Vorhandene Replay-Fixtures fuer Regressionen liegen unter [`tests/fixtures`](./tests/fixtures).
+
+### Persoenlicher Character Context (optional)
+
+Der Character Context ist absichtlich optional. Ohne SSO/ESI bleibt das Tool
+voll benutzbar. Wenn er aktiviert wird, kann das Tool echte Charakterdaten
+statt generischer Annahmen nutzen.
+
+#### Was aktuell genutzt werden kann
+
+- Character-Identitaet aus dem EVE SSO Access Token
+- Skill-Snapshot fuer echte Fee-Skill-Levels (`Accounting`, `Broker Relations`,
+  `Advanced Broker Relations`)
+- optionale Skill Queue
+- offene Character Market Orders als Exposure-Signal im Output
+- Wallet Balance sowie Wallet Journal / Transactions als lokale Snapshots fuer
+  spaetere persoenliche Handelsauswertung
+
+#### Verifizierte offizielle SSO-/ESI-Pfade
+
+Die aktuell im Code genutzten privaten SSO-/ESI-Pfade wurden vor der
+Implementierung gegen die offiziellen EVE Entwicklerquellen verifiziert:
+
+- SSO Metadata Discovery: `https://login.eveonline.com/.well-known/oauth-authorization-server`
+- SSO Authorize: `https://login.eveonline.com/v2/oauth/authorize`
+- SSO Token: `https://login.eveonline.com/v2/oauth/token`
+- Character Skills: `/characters/{character_id}/skills/`
+- Character Skill Queue: `/characters/{character_id}/skillqueue/`
+- Character Orders: `/characters/{character_id}/orders/`
+- Character Wallet Balance: `/characters/{character_id}/wallet/`
+- Character Wallet Journal: `/characters/{character_id}/wallet/journal/`
+- Character Wallet Transactions: `/characters/{character_id}/wallet/transactions/`
+
+Verifizierte Scope-Namen:
+
+- `esi-skills.read_skills.v1`
+- `esi-skills.read_skillqueue.v1` (nur wenn Skill Queue genutzt werden soll)
+- `esi-markets.read_character_orders.v1`
+- `esi-wallet.read_character_wallet.v1`
+
+#### Lokale Einrichtung
+
+1. Lege `client_id` und nach Moeglichkeit `client_secret` lokal in
+   [`config.local.example.json`](./config.local.example.json)-Manier ab oder
+   setze sie per `ESI_CLIENT_ID` / `ESI_CLIENT_SECRET`.
+2. Aktiviere in `config.local.json` den Block `character_context.enabled`.
+3. Starte einmal lokal den Login:
+
+```powershell
+python .\main.py auth login
+python .\main.py character sync
+```
+
+4. Danach kann ein normaler Run den Charakterkontext live oder aus Cache
+   verwenden.
+
+Beispiel fuer `config.local.json`:
+
+```json
+{
+  "esi": {
+    "client_id": "your_client_id_here",
+    "client_secret": "your_client_secret_here"
+  },
+  "character_context": {
+    "enabled": true,
+    "include_skill_queue": false
+  }
+}
+```
+
+#### Lokale Dateien / Cache
+
+Die private Character-Integration schreibt keine Secrets ins Repo. Alle lokalen
+Artefakte liegen unter dem ohnehin ignorierten `cache/`-Bereich:
+
+- `cache/character_context/sso_token.json`
+- `cache/character_context/sso_metadata.json`
+- `cache/character_context/character_profile.json`
+
+#### Fallback-Verhalten
+
+- Wenn `character_context.enabled=false`, nutzt das Tool generische Defaults.
+- Wenn Replay/Offline aktiv ist, wird kein harter Live-Call erzwungen; ein
+  vorhandener Character-Cache kann genutzt werden.
+- Wenn Login, Refresh oder Character-Sync fehlschlagen, faellt das Tool sauber
+  auf Cache oder generische Defaults zurueck.
+- Ohne Character-Kontext bleiben Live-Marktlogik, Replay und Offline-Nutzung
+  weiter lauffaehig.
 
 ### Trade Journal
 
@@ -141,6 +307,7 @@ Fuer den Betrieb relevant sind vor allem:
 - `portfolio`
 - `route_search`, `route_profiles`, `route_chain`
 - `replay`
+- `character_context`
 
 ## Output verstehen
 
@@ -175,6 +342,8 @@ Pro Route werden unter anderem ausgegeben:
 - `transport_confidence`
 - `capital_lock_risk`
 - Prune- oder Downgrade-Gruende
+- optionaler Character-Context-Status (live/cache/default), Wallet-Balance und
+  offene Order-Anzahl
 
 Pro Pick werden unter anderem ausgegeben:
 
@@ -187,6 +356,8 @@ Pro Pick werden unter anderem ausgegeben:
 - `transport_confidence`
 - `overall_confidence`
 - Fees, Taxes und Transportkosten
+- bei Ueberlappung mit bestehenden Character-Orders: offenes Exposure fuer
+  denselben Type
 
 Auf Pick-Ebene kann `transport_confidence` als Modellstatus wie `normal`, `exception` oder `blocked` erscheinen. Auf Route-Ebene ist es ein zusammengefasster Confidence-Wert.
 
@@ -220,6 +391,9 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 ### Kernmodule
 
 - [`candidate_engine.py`](./candidate_engine.py): Candidate-Erzeugung, `planned_sell`-Logik, Queue- und Nachfragebewertung
+- [`character_profile.py`](./character_profile.py): lokales Character-Profil, Cache/Fallback, Fee-Skill-Mapping und Order-Exposure
+- [`eve_sso.py`](./eve_sso.py): lokaler EVE SSO Login, Token-Refresh und Scope-/Identity-Ableitung
+- [`eve_character_client.py`](./eve_character_client.py): private Character-ESI-Endpunkte fuer Skills, Orders und Wallet
 - [`fees.py`](./fees.py), [`fee_engine.py`](./fee_engine.py): Gebuehrenmodell
 - [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
@@ -253,6 +427,9 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
 - Regionale History ist fuer Strukturmaerkte nur ein schwacher Proxy. Das Tool behandelt sie inzwischen vorsichtiger, aber nicht magisch praezise.
 - Shipping-Modelle sind konfigurationsgetrieben. Wenn Lane-Parameter nicht zur realen Hauling-Situation passen, passt auch die Profitrechnung nicht.
 - Gebuehren haengen von den in der Config hinterlegten Skills und Markttypen ab. Wenn dein Charakter oder Markt-Setup davon abweicht, driftet das Ergebnis.
+- Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
+  harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell
+  im Ranking.
 - Ein blockierter oder leerer Plan ist oft die richtige Antwort. Das Tool soll lieber nichts empfehlen als schlechte Trades normal ausgeben.
 
 ## Entwicklung und Tests

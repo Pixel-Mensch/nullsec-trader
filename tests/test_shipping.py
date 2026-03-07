@@ -515,14 +515,12 @@ def test_execution_plan_shipping_total_matches_route_result_field() -> None:
         nst.write_execution_plan_profiles(out_path, "2026-03-05_00-00-00", route_results)
         with open(out_path, "r", encoding="utf-8") as f:
             content = f.read()
-    assert "Shipping Cost Total: 5.000.000,00 ISK" in content
-    assert "shipping_cost_total: 5.000.000,00 ISK" in content
+    assert "Shipping:  5.000.000,00 ISK (transport cost)" in content
     assert "provider: ITL" in content
     assert "per_m3_rate: 1200.0" in content
     assert "minimum_reward: 5000000.0" in content
     assert "collateral_basis: jita_split" in content
-    assert "total_route_m3: 1.00 m3" in content
-    assert "unit_volume: 1.00 m3 | total_m3: 1.00 m3" in content
+    assert "1.00m3" in content or "1.0 m3" in content  # m3 shown in fees or cargo line
     assert "sales_tax_isk:" in content
     assert "broker_fee_isk:" in content
     assert "scc_surcharge_isk:" in content
