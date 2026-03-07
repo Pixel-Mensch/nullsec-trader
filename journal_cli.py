@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from character_profile import resolve_character_context
-from confidence_calibration import build_confidence_calibration, format_confidence_calibration_report
+from confidence_calibration import (
+    build_confidence_calibration,
+    build_personal_calibration_summary,
+    format_confidence_calibration_report,
+    format_personal_calibration_summary,
+)
 from config_loader import load_config
 from journal_models import JOURNAL_ALLOWED_STATUSES
 from journal_reporting import (
@@ -301,7 +306,14 @@ def run_journal_cli(argv: list[str]) -> None:
             print(format_reconciliation_overview(result, limit=int(args.get("limit", 10) or 10)))
             return
         if action == "personal":
-            print(format_personal_trade_history(list(result.get("entries", []) or []), limit=int(args.get("limit", 10) or 10)))
+            personal_calibration = build_personal_calibration_summary(list(result.get("entries", []) or []), cfg)
+            print(
+                format_personal_trade_history(
+                    list(result.get("entries", []) or []),
+                    limit=int(args.get("limit", 10) or 10),
+                    personal_calibration=personal_calibration,
+                )
+            )
             return
         print(format_unmatched_wallet_activity(result, limit=int(args.get("limit", 20) or 20)))
         return
@@ -310,7 +322,10 @@ def run_journal_cli(argv: list[str]) -> None:
         entries = fetch_journal_entries(db_path)
         cfg = load_config(str(args.get("config_path", CONFIG_PATH) or CONFIG_PATH))
         calibration = build_confidence_calibration(entries, cfg)
+        personal_calibration = build_personal_calibration_summary(entries, cfg)
         print(format_confidence_calibration_report(calibration, limit=int(args.get("limit", 5) or 5)))
+        print("")
+        print(format_personal_calibration_summary(personal_calibration, limit=int(args.get("limit", 5) or 5)))
         return
 
     if action == "show":

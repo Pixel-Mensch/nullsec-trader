@@ -14,6 +14,7 @@ Current coverage:
 - `runtime_common.md`
 - `risk_profiles.md`
 - `confidence_calibration.md`
+- `journal_reporting.md`
 - `character_profile.md`
 - `eve_sso.md`
 - `eve_character_client.md`

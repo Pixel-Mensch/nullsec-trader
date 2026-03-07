@@ -1,118 +1,116 @@
 # Session Handoff
 
-Date: 2026-03-07 (session 7 wallet history quality)
+Date: 2026-03-07 (session 8 personal analytics)
 Branch: `dev`
 
 ## Completed This Session
 
-### Task 5b - Wallet Paging, Freshness, And Fee-Matching Quality
+### Task 5c - Personal Analytics And Separate Personal Calibration Basis
 
-Wallet fetch / cache layer:
+Shared outcome semantics:
 
-- `eve_character_client.py` now supports optional paging metadata for wallet
-  journal and wallet transactions:
-  - `pages_loaded`
-  - `total_pages`
-  - `page_limit`
-  - `history_truncated`
-- `character_profile.py` now stores wallet snapshot metadata in the local
-  character profile:
-  - snapshot timestamp
-  - stale threshold
-  - journal/transaction page counts
-  - journal/transaction truncation flags
-  - oldest/newest wallet timestamps
-  - component status (`loaded`, `disabled`, `error`)
+- `journal_models.py` now owns the effective wallet-backed outcome helpers used
+  by both reporting and personal calibration:
+  - `effective_entry_status()`
+  - `effective_entry_qty()`
+  - `effective_entry_profit_net()`
+  - `effective_entry_days_to_sell()`
+  - `effective_entry_trade_history_source()`
 
-Reconciliation and persistence:
+Personal analytics:
 
-- `journal_reconciliation.py` now evaluates wallet snapshot quality before
-  matching:
-  - fresh vs stale
-  - full vs partial vs truncated history
-  - transaction-window coverage for older journal entries
-- Entries can now stay `match_uncertain` when a truncated transaction window
-  does not actually cover the trade age, instead of being pushed toward a false
-  `suggested_not_bought`.
-- Fee matching is now explicitly tiered:
-  - `exact`
-  - `partial`
-  - `fallback`
-  - `uncertain`
-  - `unavailable`
-- Conservative fee fallback was added only for unique nearby wallet-journal
-  candidates. Multiple plausible candidates remain uncertain.
-- `journal_store.py` now persists the key wallet-quality fields on each journal
-  entry:
-  - `fee_match_quality`
-  - `wallet_snapshot_age_sec`
-  - `wallet_data_freshness`
-  - `wallet_history_quality`
-  - `wallet_history_truncated`
-  - `wallet_transactions_pages_loaded`
-  - `wallet_journal_pages_loaded`
-  - `reconciliation_basis`
+- `journal_reporting.py` now builds richer personal analytics from reconciled
+  entries:
+  - suggested -> bought hit rate
+  - bought -> fully sold hit rate
+  - partially sold share
+  - uncertain-match and `wallet_unmatched` share
+  - expected vs realized profit and sell-duration deltas
+  - open-position age buckets
+  - compact problem-pattern counts
+- `journal personal` now shows:
+  - history quality and eligible sample size
+  - explicit fallback/advisory policy
+  - wallet quality lines
+  - richer personal metrics without changing ranking
 
-Reporting / CLI:
+Personal calibration basis:
 
-- Existing commands stayed the same:
-  - `journal reconcile`
-  - `journal personal`
-  - `journal unmatched`
-- `journal_reporting.py` now shows wallet quality summary lines and warnings for:
-  - stale snapshot basis
-  - truncated history
-  - limited transaction window
-  - fee-match quality
-  - reconciliation basis
+- `confidence_calibration.py` now has a separate personal-history path:
+  - `classify_personal_trade_outcome()`
+  - `build_personal_calibration_summary()`
+  - `format_personal_calibration_summary()`
+- Personal history quality is now graded:
+  - `none`
+  - `very_low`
+  - `low`
+  - `usable`
+  - `good`
+- Guardrails are explicit:
+  - no personal history -> fallback generic
+  - low sample size -> fallback generic
+  - unreliable history -> fallback generic
+  - ranking effect stays `none`
+- The existing generic `build_confidence_calibration()` path was intentionally
+  left unchanged, so route ranking and candidate scoring did not move.
+
+CLI / docs / maps:
+
+- `journal calibration` now prints the existing generic calibration report plus
+  a separate `PERSONAL CALIBRATION BASIS`
+- Added `docs/module-maps/journal_reporting.md`
+- Updated the confidence-calibration module map and control files to document
+  the advisory-only design
 
 ## Tests
 
 - Updated:
-  - `tests/test_character_context.py`
-  - `tests/test_journal_reconciliation.py`
-- Existing coverage still exercised:
+  - `tests/test_confidence_calibration.py`
   - `tests/test_journal.py`
+  - `tests/test_journal_reconciliation.py`
 - Focused tests after the patch:
-  - `python -m pytest -q tests/test_character_context.py tests/test_journal_reconciliation.py tests/test_journal.py`
-  - Result: **28 passed**
+  - `python -m pytest -q tests/test_confidence_calibration.py tests/test_journal.py tests/test_journal_reconciliation.py`
+  - Result: **31 passed**
 
 ## Current Assessment
 
-- Wallet history is now more honest and more useful:
-  - multi-page wallet snapshots retain page-depth metadata
-  - stale vs fresh cache/live basis is visible
-  - truncated history is surfaced instead of hidden
-  - fee linking is better for older or incomplete snapshots, without aggressive
-    guessing
-- The journal remains usable without live ESI.
-- Reconciliation is still intentionally conservative and snapshot-bound.
+- Personal journal analytics are now materially more useful and more honest.
+- The system now distinguishes:
+  - no personal history
+  - weak sample size
+  - unreliable wallet-backed basis
+  - usable/good advisory history
+- Reconciled outcomes can now be read as a calibration basis without feeding
+  back into the runtime ranking path.
 
 ## Known Limits
 
-- This is still not a full historical sync. If the configured page window does
-  not reach the real trade age, older trades can remain uncertain.
-- Fee fallback only runs for unique nearby candidates. It will deliberately
-  miss some real fees rather than overmatch.
-- Wallet-based profit still excludes off-wallet costs like shipping.
+- Personal history is still analytics-only. There is no opt-in decision hook
+  yet.
+- Quality grading is intentionally conservative and heuristic. It is meant to
+  prevent false certainty, not to be a scientific trust score.
+- Wallet history remains snapshot-bound and page-limited, so older trades can
+  still stay uncertain even when the analytics layer is richer.
 
 ## Next Recommended Task
 
-Use the cleaner reconciliation basis for higher-level analytics, not scoring:
+Keep personal history advisory until there is evidence for a careful opt-in
+consumer:
 
-- improve personal trade-history summaries from reconciled outcomes
-- evaluate whether confidence calibration should consume reconciled wallet
-  outcomes more directly
-- keep route ranking and candidate scoring unchanged unless a separate,
-  evidence-backed task requires it
+- decide whether the personal calibration basis should appear in additional
+  runtime reports
+- if a future decision hook is desired, make it explicit, opt-in, and
+  sample-size-aware
+- continue avoiding silent changes to route ranking or candidate scoring
 
 ## Relevant Files For The Next Session
 
-- `eve_character_client.py`
-- `character_profile.py`
-- `journal_reconciliation.py`
-- `journal_store.py`
+- `journal_models.py`
 - `journal_reporting.py`
+- `confidence_calibration.py`
 - `journal_cli.py`
-- `tests/test_character_context.py`
+- `journal_reconciliation.py`
+- `tests/test_confidence_calibration.py`
+- `tests/test_journal.py`
 - `tests/test_journal_reconciliation.py`
+- `docs/module-maps/journal_reporting.md`

@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 7 wallet history quality)
+Last updated: 2026-03-07 (session 8 personal analytics)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -185,12 +185,37 @@ full backlog scrape.
 ### Task 5c: Use reconciled history for deeper journal analytics without changing ranking
 
 - Priority: P1
+- Status: DONE
+- Completed: 2026-03-07
+- What was done:
+  - Moved effective wallet-backed outcome semantics into `journal_models.py`
+    so personal analytics and personal calibration use the same conservative
+    entry view
+  - Extended `journal_reporting.py` with personal hit rates, partial-sell
+    share, wallet-unmatched share, expected-vs-realized profit and duration
+    deltas, open-position age buckets, and compact problem-pattern counts
+  - Added a separate personal-history quality model in
+    `confidence_calibration.py` with explicit levels (`none`, `very_low`,
+    `low`, `usable`, `good`) and guardrails that keep poor or sparse history on
+    generic fallback
+  - Added `build_personal_calibration_summary()` and
+    `format_personal_calibration_summary()` without changing
+    `build_confidence_calibration()` or runtime ranking paths
+  - Extended `journal personal` and `journal calibration` to surface the new
+    analytics and personal calibration basis while keeping ranking effect at
+    `none`
+  - Added targeted coverage in `tests/test_confidence_calibration.py`,
+    `tests/test_journal.py`, and `tests/test_journal_reconciliation.py`
+
+### Task 5d: Decide how personal history should stay observable before any opt-in decision hook
+
+- Priority: P1
 - Status: ready
-- Relevant files: `journal_reporting.py`, `journal_models.py`,
-  `confidence_calibration.py`, `journal_store.py`, `README.md`
-- Expected result: build richer personal-trade summaries or calibration inputs
-  from reconciled outcomes, but keep route ranking and candidate scoring
-  untouched unless a separate evidence-backed task justifies it.
+- Relevant files: `journal_reporting.py`, `confidence_calibration.py`,
+  `runtime_runner.py`, `README.md`
+- Expected result: expose the personal calibration basis in more places only if
+  it remains clearly advisory. Any future hook into decision logic must be
+  explicit, opt-in, sample-size-aware, and separately evidence-backed.
 
 ## P2
 

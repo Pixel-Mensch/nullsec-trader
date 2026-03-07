@@ -96,6 +96,12 @@ Not fully re-audited this session:
   `uncertain`, `unavailable`) instead of silently treating all misses the same
 - journal CLI now supports `reconcile`, `personal`, and `unmatched` views for
   personal trade-history work without requiring live ESI
+- `journal personal` now exposes personal hit rates, profit/duration deltas,
+  open-position age buckets, problem classes, and sample-size/data-quality
+  hints from reconciled history
+- `journal calibration` now keeps the existing generic model intact while also
+  printing a separate personal calibration basis with explicit
+  fallback-to-generic guardrails
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
@@ -135,6 +141,8 @@ Not fully re-audited this session:
 - wallet history is now more transparent, but still bounded by configured page
   limits; very old trades can stay uncertain when the loaded transaction window
   does not reach far enough back
+- personal analytics are now richer, but still CLI-only; there is not yet an
+  explicit downstream consumer outside journal reporting
 
 ## Current Focus
 
@@ -150,6 +158,8 @@ centered on:
 - wallet-to-journal reconciliation and personal trade-history reporting
 - wallet paging, freshness visibility, and conservative fee/ref matching for
   older or truncated snapshots
+- personal journal analytics and a separate personal calibration basis that
+  stays advisory-only
 
 Files that indicate this focus:
 
@@ -191,6 +201,9 @@ Files that indicate this focus:
 - Wallet reconciliation now exposes snapshot freshness, page coverage, and
   truncation warnings in the journal views. This reduces false confidence, but
   does not create a historical backfill system.
+- Personal history quality is now graded (`none` to `good`) and sample-size
+  aware, but remains an additive analytics layer only. It does not change
+  route ranking, candidate scoring, or no-trade logic.
 - Matching remains intentionally honest rather than magical: ambiguous
   transactions stay visible as uncertain, and unmatched wallet activity is
   reported separately instead of being forced onto a trade entry.
@@ -198,9 +211,8 @@ Files that indicate this focus:
   contain behavior not yet reflected here.
 - `config.local.json` exists locally but is Git-ignored; secret values were not
   inspected.
-- The repository currently has uncommitted changes in core runtime modules.
-  Any future edit should check `git status --short` first and avoid overwriting
-  that work.
+- Always check `git status --short` before editing. This repository often has
+  in-flight work on core runtime and journal modules.
 
 ## Working Assumptions For Future Sessions
 

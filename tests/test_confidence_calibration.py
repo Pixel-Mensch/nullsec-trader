@@ -51,6 +51,47 @@ def _entry(
     }
 
 
+def _reconciled_entry(
+    *,
+    entry_id: str,
+    raw_conf: float,
+    expected_profit: float = 100.0,
+    realized_profit: float = 95.0,
+    expected_days: float = 10.0,
+    actual_days: float = 8.0,
+    matched_buy_qty: float = 10.0,
+    matched_sell_qty: float = 10.0,
+    reconciliation_status: str = "fully_sold",
+    fee_match_quality: str = "exact",
+    wallet_data_freshness: str = "fresh",
+    wallet_history_truncated: bool = False,
+) -> dict:
+    entry = _entry(
+        entry_id=entry_id,
+        raw_conf=raw_conf,
+        status="planned",
+        actual_buy_qty=0.0,
+        actual_sell_qty=0.0,
+        expected_profit=expected_profit,
+        actual_profit=0.0,
+        expected_days=expected_days,
+        actual_days=actual_days,
+    )
+    entry["first_buy_at"] = ""
+    entry["last_sell_at"] = ""
+    entry["reconciliation_status"] = reconciliation_status
+    entry["matched_buy_qty"] = matched_buy_qty
+    entry["matched_sell_qty"] = matched_sell_qty
+    entry["realized_profit_net"] = realized_profit
+    entry["first_matched_buy_at"] = "2026-03-01T10:00:00+00:00"
+    entry["last_matched_sell_at"] = "2026-03-09T10:00:00+00:00" if matched_sell_qty > 0.0 else ""
+    entry["fee_match_quality"] = fee_match_quality
+    entry["wallet_data_freshness"] = wallet_data_freshness
+    entry["wallet_history_truncated"] = bool(wallet_history_truncated)
+    entry["wallet_history_quality"] = "truncated" if wallet_history_truncated else "good"
+    return entry
+
+
 def test_classify_trade_outcome_marks_stale_partial_position_as_stuck() -> None:
     entry = _entry(
         entry_id="entry_partial",
@@ -145,6 +186,79 @@ def test_calibration_with_too_few_data_returns_raw_confidence() -> None:
     info = nst.calibrate_confidence_value(0.9, calibration, dimension="overall", target_market="o4t")
     assert "insufficient journal data" in str(info["warning"])
     assert abs(float(info["raw_confidence"]) - float(info["calibrated_confidence"])) < 1e-9
+
+
+def test_personal_calibration_summary_falls_back_without_history() -> None:
+    summary = nst.build_personal_calibration_summary([], {"enabled": True, "min_samples": 4})
+    assert summary["quality_level"] == "none"
+    assert bool(summary["usable_for_calibration"]) is False
+    assert bool(summary["policy"]["fallback_to_generic"]) is True
+    assert "insufficient personal history" in summary["warnings"]
+    report = nst.format_personal_calibration_summary(summary)
+    assert "PERSONAL CALIBRATION BASIS" in report
+    assert "fallback_generic" in report
+
+
+def test_personal_calibration_uses_reconciled_outcomes_without_touching_generic_model() -> None:
+    entry = _reconciled_entry(entry_id="wallet_only", raw_conf=0.82, realized_profit=110.0)
+    cfg = {"enabled": True, "min_samples": 4, "min_samples_per_bucket": 1}
+    generic = nst.build_confidence_calibration([entry], cfg)
+    personal = nst.build_personal_calibration_summary([entry], cfg)
+    info = nst.calibrate_confidence_value(0.82, generic, dimension="overall", target_market="o4t")
+    assert int(generic["eligible_entries"]) == 0
+    assert int(personal["sample_size"]["eligible_entries"]) == 1
+    assert personal["quality_level"] == "very_low"
+    assert bool(personal["policy"]["fallback_to_generic"]) is True
+    assert abs(float(info["raw_confidence"]) - float(info["calibrated_confidence"])) < 1e-9
+
+
+def test_personal_calibration_marks_unreliable_history_when_matches_are_weak() -> None:
+    entries = [
+        _reconciled_entry(
+            entry_id=f"weak_{idx}",
+            raw_conf=0.70,
+            realized_profit=20.0 + idx,
+            reconciliation_status="sold_match_uncertain",
+            fee_match_quality="uncertain",
+            wallet_data_freshness="stale",
+            wallet_history_truncated=True,
+        )
+        for idx in range(4)
+    ]
+    summary = nst.build_personal_calibration_summary(
+        entries,
+        {"enabled": True, "min_samples": 4, "min_samples_per_bucket": 1},
+    )
+    assert summary["quality_level"] == "low"
+    assert bool(summary["policy"]["fallback_to_generic"]) is True
+    assert "unreliable personal history" in summary["warnings"]
+    assert "wallet history is truncated" in summary["warnings"]
+
+
+def test_personal_calibration_summary_reports_good_quality_for_consistent_wallet_backed_history() -> None:
+    entries = [
+        _reconciled_entry(
+            entry_id=f"good_{idx}",
+            raw_conf=0.55 + (idx % 4) * 0.08,
+            realized_profit=90.0 + idx,
+            expected_profit=100.0,
+            expected_days=10.0,
+            actual_days=7.0 + (idx % 3),
+        )
+        for idx in range(12)
+    ]
+    summary = nst.build_personal_calibration_summary(
+        entries,
+        {"enabled": True, "min_samples": 4, "min_samples_per_bucket": 2},
+    )
+    assert summary["quality_level"] == "good"
+    assert bool(summary["usable_for_calibration"]) is True
+    assert bool(summary["policy"]["fallback_to_generic"]) is False
+    assert int(summary["sample_size"]["wallet_backed_entries"]) == 12
+    assert int(summary["diagnostics"]["overall"]["sample_count"]) == 12
+    report = nst.format_personal_calibration_summary(summary, limit=3)
+    assert "Quality: good" in report
+    assert "Personal outcome buckets:" in report
 
 
 def test_route_summary_prefers_decision_confidence_when_present() -> None:

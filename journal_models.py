@@ -305,6 +305,66 @@ def compute_actual_days_to_sell(entry: dict) -> float | None:
     return max(0.0, delta.total_seconds() / 86400.0)
 
 
+def effective_entry_status(entry: dict) -> str:
+    raw_status = str(entry.get("status", "") or "").strip().lower()
+    reconciliation_status = str(entry.get("reconciliation_status", "") or "").strip().lower()
+    mapped = {
+        "suggested_not_bought": "planned",
+        "bought_open": "bought",
+        "partially_sold": "partially_sold",
+        "fully_sold": "sold",
+        "sold_match_uncertain": "sold",
+    }
+    return mapped.get(reconciliation_status, raw_status)
+
+
+def effective_entry_qty(entry: dict, direction: str) -> float:
+    if str(direction or "").strip().lower() == "buy":
+        matched = float(entry.get("matched_buy_qty", 0.0) or 0.0)
+        actual = float(entry.get("actual_buy_qty", 0.0) or 0.0)
+    else:
+        matched = float(entry.get("matched_sell_qty", 0.0) or 0.0)
+        actual = float(entry.get("actual_sell_qty", 0.0) or 0.0)
+    return matched if matched > 0.0 else actual
+
+
+def effective_entry_profit_net(entry: dict) -> float:
+    matched_buy_qty = float(entry.get("matched_buy_qty", 0.0) or 0.0)
+    matched_sell_qty = float(entry.get("matched_sell_qty", 0.0) or 0.0)
+    if matched_buy_qty > 0.0 or matched_sell_qty > 0.0:
+        return float(entry.get("realized_profit_net", 0.0) or 0.0)
+    return float(entry.get("actual_profit_net", 0.0) or 0.0)
+
+
+def effective_entry_days_to_sell(entry: dict) -> float | None:
+    matched_buy = str(entry.get("first_matched_buy_at", "") or "").strip()
+    matched_sell = str(entry.get("last_matched_sell_at", "") or "").strip()
+    if matched_buy and matched_sell:
+        shadow = dict(entry)
+        shadow["first_buy_at"] = matched_buy
+        shadow["last_sell_at"] = matched_sell
+        return compute_actual_days_to_sell(shadow)
+    return compute_actual_days_to_sell(entry)
+
+
+def effective_entry_first_buy_at(entry: dict) -> str:
+    first_buy_at = str(entry.get("first_buy_at", "") or "").strip()
+    if first_buy_at:
+        return first_buy_at
+    first_matched_buy_at = str(entry.get("first_matched_buy_at", "") or "").strip()
+    if first_matched_buy_at:
+        return first_matched_buy_at
+    return str(entry.get("created_at", "") or "").strip()
+
+
+def effective_entry_trade_history_source(entry: dict) -> str:
+    matched_buy_qty = float(entry.get("matched_buy_qty", 0.0) or 0.0)
+    matched_sell_qty = float(entry.get("matched_sell_qty", 0.0) or 0.0)
+    if matched_buy_qty > 0.0 or matched_sell_qty > 0.0:
+        return "wallet"
+    return "manual"
+
+
 def compute_realized_outcome_score(entry: dict) -> float:
     proposed_expected_profit = float(entry.get("proposed_expected_profit", 0.0) or 0.0)
     proposed_qty = float(entry.get("proposed_qty", 0.0) or 0.0)
@@ -333,6 +393,12 @@ __all__ = [
     "build_trade_plan_manifest",
     "compute_actual_days_to_sell",
     "compute_realized_outcome_score",
+    "effective_entry_days_to_sell",
+    "effective_entry_first_buy_at",
+    "effective_entry_profit_net",
+    "effective_entry_qty",
+    "effective_entry_status",
+    "effective_entry_trade_history_source",
     "entry_profit_delta",
     "make_run_id",
     "normalize_journal_timestamp",

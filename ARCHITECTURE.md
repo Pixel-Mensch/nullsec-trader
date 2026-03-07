@@ -26,6 +26,7 @@ Current module maps:
 - `docs/module-maps/runtime_common.md`
 - `docs/module-maps/risk_profiles.md`
 - `docs/module-maps/confidence_calibration.md`
+- `docs/module-maps/journal_reporting.md`
 - `docs/module-maps/character_profile.md`
 - `docs/module-maps/eve_sso.md`
 - `docs/module-maps/eve_character_client.md`
@@ -74,7 +75,9 @@ Use this section to avoid loading large unrelated modules.
 - Journal CLI and persistence: `journal_cli.py`, `journal_store.py`,
   `journal_models.py`, `journal_reporting.py`
 - Wallet/journal reconciliation: `journal_reconciliation.py`
-- Confidence calibration from journal outcomes: `confidence_calibration.py`
+- Generic confidence calibration from journal outcomes: `confidence_calibration.py`
+- Personal trade analytics and analytics-only personal calibration basis:
+  `journal_reporting.py`, `confidence_calibration.py`
 - Startup node and chain resolution: `startup_helpers.py`
 
 ## Runtime Flow
@@ -107,6 +110,16 @@ Confidence calibration is fed by journal data:
 -> `confidence_calibration.py`
 -> `runtime_runner.py` applies calibrated confidence to candidates, picks, and
 route results
+
+Personal analytics flow is separate on purpose:
+
+`journal_store.py`
+-> `journal_reporting.py`
+-> optional `confidence_calibration.py` personal summary
+-> `journal_cli.py`
+
+This path is currently analytics-only and does not feed back into route ranking
+or candidate scoring.
 
 ## Output And State Files
 
@@ -153,6 +166,8 @@ Most recent focused work on 2026-03-07 touched:
 - open-order warning tiers in output and journal views
 - wallet paging, freshness visibility, and conservative fee/ref matching for
   older or truncated wallet snapshots
+- personal trade analytics, data-quality tiers, and a separate personal
+  calibration basis with explicit fallback-to-generic guardrails
 
 Treat those areas as the most likely source of doc drift until targeted tests
 confirm the current branch state.

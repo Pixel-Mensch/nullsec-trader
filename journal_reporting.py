@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from journal_models import (
     JOURNAL_CLOSED_STATUSES,
     JOURNAL_OPEN_STATUSES,
-    compute_actual_days_to_sell,
+    effective_entry_days_to_sell,
+    effective_entry_profit_net,
+    effective_entry_qty,
+    effective_entry_status,
+    effective_entry_trade_history_source,
 )
 from runtime_reports import fmt_isk
 
@@ -37,6 +41,12 @@ def _fmt_days(value: float | None) -> str:
     return f"{float(value):.1f}d"
 
 
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value) * 100.0:.0f}%"
+
+
 def _fmt_age_hours(value: object) -> str:
     try:
         age_sec = float(value)
@@ -45,29 +55,6 @@ def _fmt_age_hours(value: object) -> str:
     if age_sec < 0.0:
         return "-"
     return f"{age_sec / 3600.0:.1f}h"
-
-
-def _effective_status(entry: dict) -> str:
-    raw_status = str(entry.get("status", "") or "").strip().lower()
-    reconciliation_status = str(entry.get("reconciliation_status", "") or "").strip().lower()
-    mapped = {
-        "suggested_not_bought": "planned",
-        "bought_open": "bought",
-        "partially_sold": "partially_sold",
-        "fully_sold": "sold",
-        "sold_match_uncertain": "sold",
-    }
-    return mapped.get(reconciliation_status, raw_status)
-
-
-def _effective_qty(entry: dict, direction: str) -> float:
-    if direction == "buy":
-        matched = _as_float(entry.get("matched_buy_qty", 0.0))
-        actual = _as_float(entry.get("actual_buy_qty", 0.0))
-    else:
-        matched = _as_float(entry.get("matched_sell_qty", 0.0))
-        actual = _as_float(entry.get("actual_sell_qty", 0.0))
-    return matched if matched > 0.0 else actual
 
 
 def _entries_wallet_quality(entries: list[dict]) -> dict:
@@ -132,25 +119,6 @@ def _append_wallet_quality_lines(
         lines.append(f"[WARN] {warning}")
 
 
-def _effective_profit(entry: dict) -> float:
-    matched_buy_qty = _as_float(entry.get("matched_buy_qty", 0.0))
-    matched_sell_qty = _as_float(entry.get("matched_sell_qty", 0.0))
-    if matched_buy_qty > 0.0 or matched_sell_qty > 0.0:
-        return _as_float(entry.get("realized_profit_net", 0.0))
-    return _as_float(entry.get("actual_profit_net", 0.0))
-
-
-def _effective_days(entry: dict) -> float | None:
-    matched_buy = str(entry.get("first_matched_buy_at", "") or "").strip()
-    matched_sell = str(entry.get("last_matched_sell_at", "") or "").strip()
-    if matched_buy and matched_sell:
-        shadow = dict(entry)
-        shadow["first_buy_at"] = matched_buy
-        shadow["last_sell_at"] = matched_sell
-        return compute_actual_days_to_sell(shadow)
-    return compute_actual_days_to_sell(entry)
-
-
 def _realized_outcome_score(proposed_expected_profit: float, proposed_qty: float, proposed_days: float, actual_profit: float, actual_sell_qty: float, actual_days: float | None) -> float:
     profit_score = _clamp01(
         (actual_profit / proposed_expected_profit) if proposed_expected_profit > 1e-9 else (1.0 if actual_profit >= 0.0 else 0.0)
@@ -171,12 +139,12 @@ def enrich_journal_entry(entry: dict, now: datetime | None = None) -> dict:
     current_now = now or datetime.now(timezone.utc)
     enriched = dict(entry or {})
     proposed_qty = _as_float(enriched.get("proposed_qty", 0.0))
-    actual_buy_qty = _effective_qty(enriched, "buy")
-    actual_sell_qty = _effective_qty(enriched, "sell")
+    actual_buy_qty = effective_entry_qty(enriched, "buy")
+    actual_sell_qty = effective_entry_qty(enriched, "sell")
     proposed_expected_profit = _as_float(enriched.get("proposed_expected_profit", 0.0))
     proposed_expected_days = _as_float(enriched.get("proposed_expected_days_to_sell", 0.0))
-    actual_profit = _effective_profit(enriched)
-    actual_days = _effective_days(enriched)
+    actual_profit = effective_entry_profit_net(enriched)
+    actual_days = effective_entry_days_to_sell(enriched)
     proposed_confidence = _as_float(
         enriched.get("proposed_overall_confidence_raw", enriched.get("proposed_confidence", 0.0))
     )
@@ -200,15 +168,11 @@ def enrich_journal_entry(entry: dict, now: datetime | None = None) -> dict:
     )
     enriched["realized_outcome_score"] = outcome_score
     enriched["confidence_gap"] = outcome_score - proposed_confidence
-    enriched["effective_status"] = _effective_status(enriched)
+    enriched["effective_status"] = effective_entry_status(enriched)
     enriched["effective_buy_qty"] = actual_buy_qty
     enriched["effective_sell_qty"] = actual_sell_qty
     enriched["effective_profit_net"] = actual_profit
-    enriched["trade_history_source"] = (
-        "wallet"
-        if (_as_float(enriched.get("matched_buy_qty", 0.0)) > 0.0 or _as_float(enriched.get("matched_sell_qty", 0.0)) > 0.0)
-        else "manual"
-    )
+    enriched["trade_history_source"] = effective_entry_trade_history_source(enriched)
     first_buy = _parse_dt(str(enriched.get("first_buy_at", "") or ""))
     if first_buy is None:
         first_buy = _parse_dt(str(enriched.get("first_matched_buy_at", "") or ""))
@@ -220,6 +184,98 @@ def enrich_journal_entry(entry: dict, now: datetime | None = None) -> dict:
         enriched["open_days"] = 0.0
     enriched["actual_inventory_open_qty"] = max(0.0, actual_buy_qty - actual_sell_qty)
     return enriched
+
+
+def build_personal_trade_analytics(entries: list[dict], now: datetime | None = None) -> dict:
+    enriched = [enrich_journal_entry(entry, now=now) for entry in list(entries or [])]
+    sold_entries = [entry for entry in enriched if str(entry.get("effective_status", "")).strip().lower() == "sold"]
+    bought_entries = [entry for entry in enriched if _as_float(entry.get("effective_buy_qty", 0.0)) > 0.0]
+    open_entries = [entry for entry in enriched if str(entry.get("effective_status", "")).strip().lower() in JOURNAL_OPEN_STATUSES]
+    partial_entries = [entry for entry in enriched if str(entry.get("effective_status", "")).strip().lower() == "partially_sold"]
+    uncertain_entries = [
+        entry for entry in enriched if "uncertain" in str(entry.get("reconciliation_status", "") or "").strip().lower()
+    ]
+    wallet_unmatched_entries = [
+        entry for entry in enriched if str(entry.get("reconciliation_status", "") or "").strip().lower() == "wallet_unmatched"
+    ]
+    overlap_entries = [
+        entry for entry in enriched if str(entry.get("open_order_warning_tier", "") or "").strip().lower() in {"low", "medium", "high"}
+    ]
+    open_age_buckets = {"0-7d": 0, "7-30d": 0, "30d+": 0}
+    for entry in open_entries:
+        open_days = _as_float(entry.get("open_days", 0.0))
+        if open_days < 7.0:
+            open_age_buckets["0-7d"] += 1
+        elif open_days < 30.0:
+            open_age_buckets["7-30d"] += 1
+        else:
+            open_age_buckets["30d+"] += 1
+    fee_quality_mix: dict[str, int] = defaultdict(int)
+    freshness_mix: dict[str, int] = defaultdict(int)
+    history_mix: dict[str, int] = defaultdict(int)
+    for entry in enriched:
+        fee_quality_mix[str(entry.get("fee_match_quality", "") or "none").strip().lower() or "none"] += 1
+        freshness_mix[str(entry.get("wallet_data_freshness", "") or "unknown").strip().lower() or "unknown"] += 1
+        history_mix[str(entry.get("wallet_history_quality", "") or "missing").strip().lower() or "missing"] += 1
+    expected_days_values = [
+        _as_float(entry.get("proposed_expected_days_to_sell", 0.0))
+        for entry in sold_entries
+        if entry.get("actual_days_to_sell") is not None
+    ]
+    actual_days_values = [
+        _as_float(entry.get("actual_days_to_sell", 0.0))
+        for entry in sold_entries
+        if entry.get("actual_days_to_sell") is not None
+    ]
+    days_deltas = [
+        _as_float(entry.get("comparison_days_delta", 0.0))
+        for entry in sold_entries
+        if entry.get("comparison_days_delta") is not None
+    ]
+    total_entries = len(enriched)
+    bought_count = len(bought_entries)
+    return {
+        "entries_total": total_entries,
+        "wallet_backed_count": sum(1 for entry in enriched if str(entry.get("trade_history_source", "") or "") == "wallet"),
+        "manual_only_count": sum(1 for entry in enriched if str(entry.get("trade_history_source", "") or "") != "wallet"),
+        "suggested_to_bought_rate": (bought_count / float(total_entries)) if total_entries > 0 else 0.0,
+        "bought_to_fully_sold_rate": (len(sold_entries) / float(bought_count)) if bought_count > 0 else 0.0,
+        "partial_sell_share": (len(partial_entries) / float(bought_count)) if bought_count > 0 else 0.0,
+        "uncertain_match_share": (len(uncertain_entries) / float(total_entries)) if total_entries > 0 else 0.0,
+        "wallet_unmatched_share": (len(wallet_unmatched_entries) / float(total_entries)) if total_entries > 0 else 0.0,
+        "sold_expected_profit_total": sum(_as_float(entry.get("proposed_expected_profit", 0.0)) for entry in sold_entries),
+        "sold_realized_profit_total": sum(_as_float(entry.get("effective_profit_net", 0.0)) for entry in sold_entries),
+        "profit_delta_total": sum(_as_float(entry.get("comparison_profit_delta", 0.0)) for entry in sold_entries),
+        "avg_expected_sell_days_sold": (sum(expected_days_values) / float(len(expected_days_values))) if expected_days_values else None,
+        "avg_actual_sell_days_sold": (sum(actual_days_values) / float(len(actual_days_values))) if actual_days_values else None,
+        "avg_sell_days_delta_sold": (sum(days_deltas) / float(len(days_deltas))) if days_deltas else None,
+        "open_positions_by_age": open_age_buckets,
+        "problem_counts": {
+            "optimistic_profit": sum(1 for entry in sold_entries if _as_float(entry.get("comparison_profit_delta", 0.0)) < 0.0),
+            "optimistic_sell_duration": sum(1 for entry in sold_entries if _as_float(entry.get("comparison_days_delta", 0.0)) > 0.0),
+            "never_bought": sum(1 for entry in enriched if _as_float(entry.get("effective_buy_qty", 0.0)) <= 0.0),
+            "partially_sold": len(partial_entries),
+            "stuck_open": sum(
+                1
+                for entry in open_entries
+                if _as_float(entry.get("open_days", 0.0))
+                > max(14.0, _as_float(entry.get("proposed_expected_days_to_sell", 0.0)))
+            ),
+            "order_overlap": len(overlap_entries),
+        },
+        "data_quality": {
+            "fee_match_quality_mix": dict(fee_quality_mix),
+            "wallet_data_freshness_mix": dict(freshness_mix),
+            "wallet_history_quality_mix": dict(history_mix),
+            "secure_trade_count": sum(
+                1
+                for entry in enriched
+                if "uncertain" not in str(entry.get("reconciliation_status", "") or "").strip().lower()
+                and str(entry.get("reconciliation_status", "") or "").strip().lower() != "wallet_unmatched"
+            ),
+            "uncertain_trade_count": len(uncertain_entries),
+        },
+    }
 
 
 def summarize_journal(entries: list[dict], now: datetime | None = None) -> dict:
@@ -606,10 +662,24 @@ def format_unmatched_wallet_activity(result: dict, limit: int = 20) -> str:
     return "\n".join(lines)
 
 
-def format_personal_trade_history(entries: list[dict], limit: int = 10, now: datetime | None = None) -> str:
+def format_personal_trade_history(
+    entries: list[dict],
+    limit: int = 10,
+    now: datetime | None = None,
+    personal_calibration: dict | None = None,
+) -> str:
     report = build_journal_report(entries, limit=limit, now=now)
     summary = report["summary"]
+    analytics = build_personal_trade_analytics(list(report.get("entries", []) or []), now=now)
     wallet_quality = _entries_wallet_quality(list(report.get("entries", []) or []))
+    if personal_calibration is None:
+        from confidence_calibration import build_personal_calibration_summary
+
+        personal_calibration = build_personal_calibration_summary(list(report.get("entries", []) or []), {}, now=now)
+    sample_size = dict((personal_calibration or {}).get("sample_size", {}) or {})
+    policy = dict((personal_calibration or {}).get("policy", {}) or {})
+    overall_diag = dict(((personal_calibration or {}).get("diagnostics", {}) or {}).get("overall", {}) or {})
+    personal_warnings = list((personal_calibration or {}).get("warnings", []) or [])
     lines = [
         "=" * 70,
         "PERSONAL TRADE HISTORY",
@@ -621,8 +691,67 @@ def format_personal_trade_history(entries: list[dict], limit: int = 10, now: dat
         f"Expected gesamt: {fmt_isk(summary['total_proposed_expected_profit'])}",
         f"Realisiert (sold): {fmt_isk(summary['total_real_profit_closed'])}",
         "",
-        "Soll/Ist groesste Abweichungen:",
+        (
+            f"History quality={str((personal_calibration or {}).get('quality_level', 'none'))} | "
+            f"eligible={int(sample_size.get('eligible_entries', 0) or 0)} | "
+            f"wallet_backed={int(sample_size.get('wallet_backed_entries', 0) or 0)} | "
+            f"reliable={int(sample_size.get('reliable_entries', 0) or 0)}"
+        ),
+        (
+            f"Policy: {'fallback generic' if bool(policy.get('fallback_to_generic', True)) else 'supplemental only'} | "
+            f"ranking_effect={policy.get('ranking_effect', 'none')} | "
+            f"diagnosis={str(overall_diag.get('diagnosis', 'n/a') or 'n/a')}"
+        ),
+        "",
     ]
+    if personal_warnings:
+        lines.append("Warnings:")
+        for warning in personal_warnings:
+            lines.append(f"- {warning}")
+        lines.append("")
+    lines.extend(
+        [
+            "Persoenliche Trefferquoten:",
+            (
+                f"- suggested -> bought: {_fmt_pct(analytics.get('suggested_to_bought_rate'))} | "
+                f"bought -> fully sold: {_fmt_pct(analytics.get('bought_to_fully_sold_rate'))}"
+            ),
+            (
+                f"- partially sold share: {_fmt_pct(analytics.get('partial_sell_share'))} | "
+                f"uncertain matches: {_fmt_pct(analytics.get('uncertain_match_share'))} | "
+                f"wallet unmatched: {_fmt_pct(analytics.get('wallet_unmatched_share'))}"
+            ),
+            "",
+            "Soll/Ist komprimiert:",
+            (
+                f"- sold expected: {fmt_isk(_as_float(analytics.get('sold_expected_profit_total', 0.0)))} | "
+                f"sold realized: {fmt_isk(_as_float(analytics.get('sold_realized_profit_total', 0.0)))} | "
+                f"delta: {fmt_isk(_as_float(analytics.get('profit_delta_total', 0.0)))}"
+            ),
+            (
+                f"- expected sell days: {_fmt_days(analytics.get('avg_expected_sell_days_sold'))} | "
+                f"actual sell days: {_fmt_days(analytics.get('avg_actual_sell_days_sold'))} | "
+                f"delta: {_fmt_days(analytics.get('avg_sell_days_delta_sold'))}"
+            ),
+            (
+                f"- open positions by age: 0-7d={int((analytics.get('open_positions_by_age', {}) or {}).get('0-7d', 0) or 0)} | "
+                f"7-30d={int((analytics.get('open_positions_by_age', {}) or {}).get('7-30d', 0) or 0)} | "
+                f"30d+={int((analytics.get('open_positions_by_age', {}) or {}).get('30d+', 0) or 0)}"
+            ),
+            "",
+            "Problemklassen:",
+            (
+                f"- optimistic profit={int((analytics.get('problem_counts', {}) or {}).get('optimistic_profit', 0) or 0)} | "
+                f"optimistic sell duration={int((analytics.get('problem_counts', {}) or {}).get('optimistic_sell_duration', 0) or 0)}"
+            ),
+            (
+                f"- never bought={int((analytics.get('problem_counts', {}) or {}).get('never_bought', 0) or 0)} | "
+                f"partially sold={int((analytics.get('problem_counts', {}) or {}).get('partially_sold', 0) or 0)} | "
+                f"stuck open={int((analytics.get('problem_counts', {}) or {}).get('stuck_open', 0) or 0)} | "
+                f"order overlap={int((analytics.get('problem_counts', {}) or {}).get('order_overlap', 0) or 0)}"
+            ),
+        ]
+    )
     if wallet_quality:
         _append_wallet_quality_lines(
             lines,
@@ -636,6 +765,14 @@ def format_personal_trade_history(entries: list[dict], limit: int = 10, now: dat
             reconciliation_basis=str(wallet_quality.get("reconciliation_basis", "") or ""),
         )
         lines.append("")
+    lines.append(
+        (
+            f"Persoenliche Calibration-Basis: "
+            f"{'fallback to generic model' if bool(policy.get('fallback_to_generic', True)) else 'supplemental personal history available'}"
+        )
+    )
+    lines.append("")
+    lines.append("Soll/Ist groesste Abweichungen:")
     mismatches = sorted(
         list(report.get("entries", []) or []),
         key=lambda entry: abs(_as_float(entry.get("comparison_profit_delta", 0.0))),
@@ -676,6 +813,7 @@ def format_personal_trade_history(entries: list[dict], limit: int = 10, now: dat
 
 __all__ = [
     "build_journal_report",
+    "build_personal_trade_analytics",
     "enrich_journal_entry",
     "format_closed_positions",
     "format_journal_overview",

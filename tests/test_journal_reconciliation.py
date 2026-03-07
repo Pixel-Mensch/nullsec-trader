@@ -255,6 +255,8 @@ def test_reconciliation_overview_and_personal_history_include_wallet_status() ->
     assert "Matched entries: 1" in overview
     assert "Wallet quality:" in overview
     assert "PERSONAL TRADE HISTORY" in personal
+    assert "History quality=" in personal
+    assert "Persoenliche Trefferquoten:" in personal
     assert "Soll/Ist groesste Abweichungen" in personal
 
 

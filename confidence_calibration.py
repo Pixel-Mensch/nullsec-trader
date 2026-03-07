@@ -3,7 +3,16 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timezone
 
-from journal_models import compute_actual_days_to_sell, utc_now_iso
+from journal_models import (
+    compute_actual_days_to_sell,
+    effective_entry_days_to_sell,
+    effective_entry_first_buy_at,
+    effective_entry_profit_net,
+    effective_entry_qty,
+    effective_entry_status,
+    effective_entry_trade_history_source,
+    utc_now_iso,
+)
 
 
 CONFIDENCE_DEFINITIONS = {
@@ -15,6 +24,7 @@ CONFIDENCE_DEFINITIONS = {
 
 CONFIDENCE_DIMENSIONS = ("overall", "exit", "liquidity", "transport")
 DEFAULT_CONFIDENCE_BUCKETS = (0.2, 0.4, 0.6, 0.8, 1.0)
+PERSONAL_HISTORY_QUALITY_LEVELS = ("none", "very_low", "low", "usable", "good")
 
 
 def _clamp01(value: float) -> float:
@@ -113,6 +123,14 @@ def _open_days(entry: dict, now: datetime | None = None) -> float:
     return max(0.0, (current_now - first_buy).total_seconds() / 86400.0)
 
 
+def _effective_open_days(entry: dict, now: datetime | None = None) -> float:
+    current_now = now or datetime.now(timezone.utc)
+    first_buy = _parse_dt(effective_entry_first_buy_at(entry))
+    if first_buy is None:
+        return 0.0
+    return max(0.0, (current_now - first_buy).total_seconds() / 86400.0)
+
+
 def classify_trade_outcome(entry: dict, cfg: dict, now: datetime | None = None) -> dict:
     cal_cfg = resolve_confidence_calibration_cfg(cfg)
     status = str(entry.get("status", "") or "").strip().lower()
@@ -170,6 +188,83 @@ def classify_trade_outcome(entry: dict, cfg: dict, now: datetime | None = None) 
         "success_score": success_score,
         "actual_days_to_sell": actual_days,
         "open_days": open_days,
+    }
+
+
+def classify_personal_trade_outcome(entry: dict, cfg: dict | None, now: datetime | None = None) -> dict:
+    cal_cfg = resolve_confidence_calibration_cfg(cfg)
+    status = effective_entry_status(entry)
+    proposed_qty = max(0.0, _as_float(entry.get("proposed_qty", 0.0)))
+    expected_profit = _as_float(entry.get("proposed_expected_profit", 0.0))
+    expected_days = max(0.0, _as_float(entry.get("proposed_expected_days_to_sell", 0.0)))
+    actual_buy_qty = max(0.0, effective_entry_qty(entry, "buy"))
+    actual_sell_qty = max(0.0, effective_entry_qty(entry, "sell"))
+    actual_profit = effective_entry_profit_net(entry)
+    actual_days = effective_entry_days_to_sell(entry)
+    open_days = _effective_open_days(entry, now=now)
+    stale_open_threshold = max(
+        cal_cfg["stale_open_position_days"],
+        expected_days * cal_cfg["open_position_horizon_factor"],
+    )
+    closed_status = status in ("sold", "abandoned", "invalidated")
+    stale_open_position = status in ("planned", "bought", "partially_sold") and open_days >= stale_open_threshold
+    eligible = bool(closed_status or stale_open_position)
+    fully_sold = bool(actual_buy_qty > 0.0 and actual_sell_qty + 1e-9 >= actual_buy_qty)
+    sold_within_horizon = bool(fully_sold and actual_days is not None and expected_days > 0.0 and actual_days <= expected_days + 1e-9)
+    profit_positive = bool(actual_profit > 0.0)
+    profit_threshold = float(expected_profit) * float(cal_cfg["profit_close_ratio"])
+    profit_close = bool(
+        actual_profit >= (profit_threshold - float(cal_cfg["profit_close_tolerance_isk"]))
+        if expected_profit > 0.0
+        else actual_profit > 0.0
+    )
+    remaining_qty = max(0.0, actual_buy_qty - actual_sell_qty)
+    position_stuck = bool(
+        status in ("abandoned", "invalidated")
+        or (stale_open_position and remaining_qty > 1e-9)
+        or (closed_status and not fully_sold and actual_buy_qty > 0.0)
+    )
+    qty_realization_ratio = (actual_sell_qty / proposed_qty) if proposed_qty > 1e-9 else (1.0 if actual_sell_qty <= 1e-9 else 0.0)
+    profit_delta = actual_profit - expected_profit
+    sell_duration_delta = (actual_days - expected_days) if actual_days is not None and expected_days > 0.0 else None
+    reconciliation_status = str(entry.get("reconciliation_status", "") or "").strip().lower()
+    fee_match_quality = str(entry.get("fee_match_quality", "") or "").strip().lower()
+    wallet_data_freshness = str(entry.get("wallet_data_freshness", "") or "").strip().lower()
+    wallet_history_quality = str(entry.get("wallet_history_quality", "") or "").strip().lower()
+    history_source = effective_entry_trade_history_source(entry)
+    uncertain_match = "uncertain" in reconciliation_status
+    wallet_unmatched = reconciliation_status == "wallet_unmatched"
+    stale_basis = wallet_data_freshness == "stale"
+    truncated_basis = bool(entry.get("wallet_history_truncated", False)) or wallet_history_quality == "truncated"
+    reliable_outcome = bool(eligible and not uncertain_match and not wallet_unmatched and fee_match_quality != "uncertain")
+    success_score = _clamp01(
+        (0.35 if fully_sold else 0.0)
+        + (0.20 if sold_within_horizon else 0.0)
+        + (0.20 if profit_positive else 0.0)
+        + (0.15 if profit_close else 0.0)
+        + (0.10 if not position_stuck else 0.0)
+    )
+    return {
+        "eligible": eligible,
+        "status": status,
+        "fully_sold": fully_sold,
+        "sold_within_horizon": sold_within_horizon,
+        "profit_positive": profit_positive,
+        "profit_close": profit_close,
+        "position_stuck": position_stuck,
+        "qty_realization_ratio": qty_realization_ratio,
+        "profit_delta": profit_delta,
+        "sell_duration_delta": sell_duration_delta,
+        "success_score": success_score,
+        "actual_days_to_sell": actual_days,
+        "open_days": open_days,
+        "history_source": history_source,
+        "uncertain_match": uncertain_match,
+        "wallet_unmatched": wallet_unmatched,
+        "stale_basis": stale_basis,
+        "truncated_basis": truncated_basis,
+        "fee_match_quality": fee_match_quality or "none",
+        "reliable_outcome": reliable_outcome,
     }
 
 
@@ -350,6 +445,260 @@ def _segment_diagnostics(entries: list[dict], key_name: str, limit: int) -> list
         )
     rows.sort(key=lambda row: (abs(float(row["optimism_gap"])), float(row["sample_count"])), reverse=True)
     return rows[: max(1, int(limit or 5))]
+
+
+def _fee_quality_mix(entries: list[dict]) -> dict:
+    counts = {"exact": 0, "partial": 0, "uncertain": 0, "none": 0}
+    for entry in list(entries or []):
+        key = str(entry.get("fee_match_quality", "none") or "none").strip().lower()
+        if key not in counts:
+            key = "none"
+        counts[key] += 1
+    return counts
+
+
+def _resolve_personal_history_quality(prepared: list[dict], total_entries: int, min_samples: int) -> tuple[str, list[str], dict]:
+    eligible_count = len(prepared)
+    reliable_count = sum(1 for entry in prepared if bool(entry.get("reliable_outcome", False)))
+    uncertain_count = sum(1 for entry in prepared if bool(entry.get("uncertain_match", False)))
+    unmatched_count = sum(1 for entry in prepared if bool(entry.get("wallet_unmatched", False)))
+    stale_count = sum(1 for entry in prepared if bool(entry.get("stale_basis", False)))
+    truncated_count = sum(1 for entry in prepared if bool(entry.get("truncated_basis", False)))
+    exact_fee_count = sum(1 for entry in prepared if str(entry.get("fee_match_quality", "") or "") == "exact")
+    partial_fee_count = sum(1 for entry in prepared if str(entry.get("fee_match_quality", "") or "") == "partial")
+    uncertain_fee_count = sum(1 for entry in prepared if str(entry.get("fee_match_quality", "") or "") == "uncertain")
+    wallet_backed_count = sum(1 for entry in prepared if str(entry.get("history_source", "") or "") == "wallet")
+    reliable_ratio = (reliable_count / float(eligible_count)) if eligible_count > 0 else 0.0
+    weak_count = sum(
+        1
+        for entry in prepared
+        if bool(entry.get("uncertain_match", False))
+        or bool(entry.get("wallet_unmatched", False))
+        or bool(entry.get("stale_basis", False))
+        or bool(entry.get("truncated_basis", False))
+        or str(entry.get("fee_match_quality", "") or "") == "uncertain"
+    )
+    weak_ratio = (weak_count / float(eligible_count)) if eligible_count > 0 else 1.0
+    warnings: list[str] = []
+    if eligible_count <= 0:
+        warnings.append("insufficient personal history")
+        return (
+            "none",
+            warnings,
+            {
+                "reliable_ratio": 0.0,
+                "uncertain_match_ratio": 0.0,
+                "wallet_unmatched_ratio": 0.0,
+                "stale_basis_ratio": 0.0,
+                "truncated_basis_ratio": 0.0,
+                "wallet_backed_ratio": 0.0,
+                "exact_fee_ratio": 0.0,
+                "partial_fee_ratio": 0.0,
+                "uncertain_fee_ratio": 0.0,
+            },
+        )
+    if eligible_count < max(3, int(min_samples) // 2):
+        warnings.append("very low personal sample size")
+        level = "very_low"
+    elif eligible_count < int(min_samples):
+        warnings.append("low personal sample size")
+        level = "low"
+    else:
+        level = "usable"
+    if weak_ratio > 0.60 or reliable_ratio < 0.40:
+        warnings.append("unreliable personal history")
+        if level == "usable":
+            level = "low"
+    if stale_count > 0:
+        warnings.append("stale wallet-backed basis present")
+    if truncated_count > 0:
+        warnings.append("wallet history is truncated")
+    if uncertain_fee_count > 0 and exact_fee_count <= partial_fee_count:
+        warnings.append("fee matching is only partially reliable")
+    if (
+        eligible_count >= max(int(min_samples) * 2, 12)
+        and reliable_ratio >= 0.75
+        and weak_ratio <= 0.25
+        and wallet_backed_count >= max(4, int(min_samples))
+    ):
+        level = "good"
+    elif level == "usable" and (reliable_ratio < 0.50 or weak_ratio > 0.50):
+        level = "low"
+    return (
+        level,
+        list(dict.fromkeys(warnings)),
+        {
+            "reliable_ratio": reliable_ratio,
+            "uncertain_match_ratio": uncertain_count / float(eligible_count),
+            "wallet_unmatched_ratio": unmatched_count / float(eligible_count),
+            "stale_basis_ratio": stale_count / float(eligible_count),
+            "truncated_basis_ratio": truncated_count / float(eligible_count),
+            "wallet_backed_ratio": wallet_backed_count / float(eligible_count),
+            "exact_fee_ratio": exact_fee_count / float(eligible_count),
+            "partial_fee_ratio": partial_fee_count / float(eligible_count),
+            "uncertain_fee_ratio": uncertain_fee_count / float(eligible_count),
+        },
+    )
+
+
+def _build_personal_history_policy(quality_level: str, warnings: list[str]) -> dict:
+    level = str(quality_level or "none").strip().lower()
+    if level in ("none", "very_low", "low"):
+        reason = "insufficient personal history"
+        if "unreliable personal history" in warnings:
+            reason = "unreliable personal history"
+        return {
+            "fallback_to_generic": True,
+            "supplemental_only": True,
+            "ranking_effect": "none",
+            "reason": reason,
+        }
+    return {
+        "fallback_to_generic": False,
+        "supplemental_only": True,
+        "ranking_effect": "none",
+        "reason": "supplemental personal history available",
+    }
+
+
+def build_personal_calibration_summary(entries: list[dict], cfg: dict | None, now: datetime | None = None) -> dict:
+    cal_cfg = resolve_confidence_calibration_cfg(cfg)
+    prepared: list[dict] = []
+    total_entries = 0
+    for entry in list(entries or []):
+        if not isinstance(entry, dict):
+            continue
+        total_entries += 1
+        outcome = classify_personal_trade_outcome(entry, cal_cfg, now=now)
+        merged = dict(entry)
+        merged.update(outcome)
+        if "proposed_overall_confidence_raw" not in merged:
+            merged["proposed_overall_confidence_raw"] = _as_float(
+                merged.get("proposed_confidence", merged.get("overall_confidence", 0.0))
+            )
+        if bool(outcome.get("eligible", False)):
+            prepared.append(merged)
+
+    min_samples = max(4, int(cal_cfg.get("min_samples", 8) or 8))
+    quality_level, quality_warnings, quality_metrics = _resolve_personal_history_quality(prepared, total_entries, min_samples)
+    overall_model = _build_scope_model(prepared, "overall", cal_cfg, "personal", "personal")
+    reliable_buckets = [
+        bucket
+        for bucket in list(overall_model.get("buckets", []) or [])
+        if int(bucket.get("sample_count", 0) or 0) >= int(cal_cfg.get("min_samples_per_bucket", 3) or 3)
+    ]
+    reliable_buckets.sort(
+        key=lambda bucket: (
+            abs(float(bucket.get("optimism_gap", 0.0))),
+            -int(bucket.get("sample_count", 0) or 0),
+        )
+    )
+    sample_size = {
+        "entries_total": total_entries,
+        "eligible_entries": len(prepared),
+        "wallet_backed_entries": sum(1 for entry in prepared if str(entry.get("history_source", "") or "") == "wallet"),
+        "manual_only_entries": sum(1 for entry in prepared if str(entry.get("history_source", "") or "") != "wallet"),
+        "reliable_entries": sum(1 for entry in prepared if bool(entry.get("reliable_outcome", False))),
+        "uncertain_entries": sum(1 for entry in prepared if bool(entry.get("uncertain_match", False))),
+        "wallet_unmatched_entries": sum(1 for entry in prepared if bool(entry.get("wallet_unmatched", False))),
+    }
+    fee_quality_mix = _fee_quality_mix(prepared)
+    warnings = list(quality_warnings)
+    if sample_size["eligible_entries"] <= 0:
+        warnings.append("no closed or stale personal outcomes yet")
+    policy = _build_personal_history_policy(quality_level, warnings)
+    diagnostics = {
+        "overall": overall_model,
+        "most_reliable_buckets": reliable_buckets[:3],
+        "target_markets": _segment_diagnostics(prepared, "target_market", limit=5),
+        "routes": _segment_diagnostics(prepared, "route_id", limit=5),
+        "exit_types": _segment_diagnostics(prepared, "proposed_exit_type", limit=5),
+    }
+    return {
+        "generated_at": utc_now_iso(),
+        "config": cal_cfg,
+        "quality_level": quality_level,
+        "usable_for_calibration": quality_level in ("usable", "good"),
+        "policy": policy,
+        "sample_size": sample_size,
+        "data_quality": {
+            **quality_metrics,
+            "fee_quality_mix": fee_quality_mix,
+        },
+        "diagnostics": diagnostics,
+        "warnings": list(dict.fromkeys(warnings)),
+    }
+
+
+def format_personal_calibration_summary(summary: dict | None, limit: int = 5) -> str:
+    if not isinstance(summary, dict):
+        return "Keine persoenliche Kalibrierungsbasis vorhanden."
+    sample_size = dict(summary.get("sample_size", {}) or {})
+    policy = dict(summary.get("policy", {}) or {})
+    overall = dict(summary.get("diagnostics", {}).get("overall", {}) or {})
+    lines = [
+        "=" * 70,
+        "PERSONAL CALIBRATION BASIS",
+        "=" * 70,
+        (
+            f"Quality: {summary.get('quality_level', 'none')} | "
+            f"eligible={int(sample_size.get('eligible_entries', 0) or 0)} | "
+            f"wallet_backed={int(sample_size.get('wallet_backed_entries', 0) or 0)} | "
+            f"reliable={int(sample_size.get('reliable_entries', 0) or 0)}"
+        ),
+        (
+            f"Policy: {'fallback_generic' if bool(policy.get('fallback_to_generic', True)) else 'supplemental_only'} | "
+            f"ranking_effect={policy.get('ranking_effect', 'none')} | reason={policy.get('reason', '')}"
+        ),
+        (
+            f"Overall diagnosis: {overall.get('diagnosis', 'n/a')} | "
+            f"success={float(overall.get('actual_success_rate', 0.0)):.2f} | "
+            f"gap={float(overall.get('optimism_gap', 0.0)):+.2f}"
+        ),
+    ]
+    warnings = list(summary.get("warnings", []) or [])
+    if warnings:
+        lines.append("Warnings:")
+        for warning in warnings:
+            lines.append(f"- {warning}")
+    lines.append("")
+    lines.append("Personal outcome buckets:")
+    bucket_rows = [
+        bucket for bucket in list(overall.get("buckets", []) or []) if int(bucket.get("sample_count", 0) or 0) > 0
+    ]
+    if bucket_rows:
+        for bucket in bucket_rows[: max(1, int(limit))]:
+            lines.append(
+                (
+                    f"- {bucket.get('label', '')} | n={int(bucket.get('sample_count', 0) or 0)} "
+                    f"| raw={float(bucket.get('avg_raw_confidence', 0.0)):.2f} "
+                    f"| success={float(bucket.get('actual_success_rate', 0.0)):.2f} "
+                    f"| gap={float(bucket.get('optimism_gap', 0.0)):+.2f}"
+                )
+            )
+    else:
+        lines.append("- Keine belastbare persoenliche Outcome-Basis.")
+
+    def _append_segment(title: str, rows: list[dict]) -> None:
+        lines.append("")
+        lines.append(title)
+        if not rows:
+            lines.append("- Keine ausreichenden persoenlichen Daten.")
+            return
+        for row in rows[: max(1, int(limit))]:
+            lines.append(
+                (
+                    f"- {row.get('key', '')} | n={int(row.get('sample_count', 0) or 0)} "
+                    f"| success={float(row.get('actual_success_rate', 0.0)):.2f} "
+                    f"| gap={float(row.get('optimism_gap', 0.0)):+.2f}"
+                )
+            )
+
+    diagnostics = summary.get("diagnostics", {})
+    _append_segment("Exit types:", list(diagnostics.get("exit_types", []) or []))
+    _append_segment("Target markets:", list(diagnostics.get("target_markets", []) or []))
+    _append_segment("Routes:", list(diagnostics.get("routes", []) or []))
+    return "\n".join(lines)
 
 
 def build_confidence_calibration(entries: list[dict], cfg: dict | None, now: datetime | None = None) -> dict:
@@ -675,11 +1024,15 @@ __all__ = [
     "CONFIDENCE_DEFINITIONS",
     "CONFIDENCE_DIMENSIONS",
     "DEFAULT_CONFIDENCE_BUCKETS",
+    "PERSONAL_HISTORY_QUALITY_LEVELS",
     "apply_calibration_to_record",
     "build_confidence_calibration",
+    "build_personal_calibration_summary",
     "calibrate_confidence_value",
+    "classify_personal_trade_outcome",
     "classify_trade_outcome",
     "format_confidence_calibration_report",
+    "format_personal_calibration_summary",
     "overall_raw_confidence_from_components",
     "resolve_confidence_calibration_cfg",
     "transport_confidence_to_score",

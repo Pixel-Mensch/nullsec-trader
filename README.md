@@ -16,6 +16,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Lokales Trade Journal fuer Soll/Ist-Abgleich von vorgeschlagenen und tatsaechlich ausgefuehrten Trades
 - Optionaler persoenlicher Character Context via EVE SSO / ESI: Character-Identitaet, Skills, optionale Skill Queue, offene Orders und Wallet-Snapshots mit lokalem Cache/Fallback
 - Wallet-/Journal-Reconciliation fuer persoenliche Handels-Historie mit Match-Confidence, offenen Positionen und ungematchter Wallet-Aktivitaet
+- persoenliche Journal-Analytics mit Datenqualitaetsstufen, Sample-Size-Hinweisen und separater personaler Calibration-Basis ohne stillen Ranking-Eingriff
 - Replay-Unterstuetzung fuer reproduzierbare Analysen und Regressionstests
 - Snapshot-Only-Modus zum Bauen neuer Replay-Snapshots aus Live-Daten
 
@@ -300,6 +301,25 @@ Was `journal reconcile` aktuell macht:
 - zeigt an, ob die Wallet-Historie frisch, alt, teilweise oder durch
   Page-Limits abgeschnitten ist
 
+Was `journal personal` jetzt zusaetzlich zeigt:
+
+- persoenliche Trefferquoten von vorgeschlagen -> gekauft und gekauft ->
+  vollstaendig verkauft
+- Anteil teilweise verkaufter Trades, unsicherer Matches und
+  `wallet_unmatched`-Faelle
+- realer vs erwarteter Profit und reale vs erwartete Sell-Dauer
+- offene Positionen nach Altersklassen
+- haeufige Problemklassen wie zu optimistische Profit-/Sell-Dauer-Annahmen,
+  ungekaufte Vorschlaege, offene Langdreher und Order-Overlap
+- Datenqualitaet, Sample Size und Guardrail-Hinweise fuer persoenliche Aussagen
+
+Was `journal calibration` jetzt zusaetzlich zeigt:
+
+- den bisherigen generischen Calibration-Report unveraendert
+- plus eine separate `PERSONAL CALIBRATION BASIS`
+- inklusive Quality-Level (`none`, `very_low`, `low`, `usable`, `good`),
+  Sample Size, Warning-Hinweisen und `fallback to generic`-Policy
+
 Aktuelle Matching-Signale:
 
 - `character_id`, wenn im Plan/Journal vorhanden
@@ -316,6 +336,8 @@ Aktuelle Matching-Signale:
 Wichtige Ehrlichkeit:
 
 - Matching ist absichtlich nicht als perfekt modelliert
+- persoenliche Analytics sind absichtlich nicht als globale Marktwahrheit
+  modelliert
 - unklare Faelle bleiben als `match_uncertain`
 - nicht zuordenbare Wallet-Events bleiben in `journal unmatched` sichtbar
 - Wallet-basierter Profit ist nur so gut wie die vorhandenen Wallet-Seiten und
@@ -330,6 +352,11 @@ Wichtige Ehrlichkeit:
   `unavailable` kenntlich gemacht, statt schwache Verknuepfungen still zu
   erzwingen
 - Shipping und andere Kosten ausserhalb von Wallet-Daten bleiben separat
+- keine oder schlechte persoenliche Historie fuehrt nicht zu einer stillen
+  Bestrafung im Ranking; die persoenliche Basis bleibt aktuell rein
+  analytisch/advisory
+- geringe Sample Size oder schwache Datenqualitaet werden offen als
+  `fallback to generic` bzw. `insufficient personal history` markiert
 
 ### Trade Journal
 

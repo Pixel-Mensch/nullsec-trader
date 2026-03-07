@@ -4,13 +4,16 @@
 
 Calibration module that learns from journal outcomes and applies calibrated
 confidence values back to candidates, picks, and route records. This map is
-based on a targeted audit, not a full edge-case review.
+based on a targeted audit, not a full edge-case review. It now also exposes a
+separate personal-history calibration summary that stays analytics-only unless a
+future task explicitly wires it into decisions.
 
 ## Responsibilities
 
 - normalizes calibration config
 - classifies trade outcomes
 - builds bucket and scope models
+- builds a guarded personal calibration basis from reconciled history
 - calibrates values and mutates target records
 - formats human-readable calibration reports
 
@@ -24,6 +27,7 @@ based on a targeted audit, not a full edge-case review.
 ## Outputs
 
 - calibration model dicts
+- personal calibration summary dicts with quality and sample-size guardrails
 - calibrated confidence values and warnings
 - in-place record updates
 - formatted calibration reports
@@ -33,15 +37,18 @@ based on a targeted audit, not a full edge-case review.
 - `confidence_calibration.py`
 - `journal_models.py`
 - `journal_cli.py`
+- `journal_reporting.py`
 - `tests/test_confidence_calibration.py`
 
 ## Important Entry Points
 
 - `resolve_confidence_calibration_cfg()`
 - `build_confidence_calibration()`
+- `build_personal_calibration_summary()`
 - `calibrate_confidence_value()`
 - `apply_calibration_to_record()`
 - `format_confidence_calibration_report()`
+- `format_personal_calibration_summary()`
 
 ## Depends On
 
@@ -58,6 +65,7 @@ based on a targeted audit, not a full edge-case review.
 ## Common Change Types
 
 - tune bucket rules or scope behavior
+- adjust personal-history quality thresholds or guardrails
 - change sample eligibility rules
 - adjust sparse-data fallback behavior
 - add warning or report fields
@@ -65,6 +73,7 @@ based on a targeted audit, not a full edge-case review.
 ## Risk Areas
 
 - sparse journal data can look more precise than it is
+- personal history must remain supplemental and must not silently affect ranking
 - bucket and scope fallback behavior is subtle
 - in-place mutation means downstream code may depend on added fields
 - route, exit, liquidity, and transport confidence can drift if handled
@@ -84,8 +93,9 @@ Recommended reading order before editing:
 4. dependent modules only if required
 
 Read `journal_models.py` first if outcome semantics change. Read
-`docs/module-maps/route_search.md` first if transport-confidence handling
-changes.
+`docs/module-maps/journal_reporting.md` first if personal-history output or
+guardrails change. Read `docs/module-maps/route_search.md` first if
+transport-confidence handling changes.
 
 ## When This File Must Be Updated
 
