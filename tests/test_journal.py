@@ -1,6 +1,91 @@
 """Trade journal tests."""
 
+import sqlite3
+
 from tests.shared import *  # noqa: F401,F403
+
+
+def test_initialize_journal_db_migrates_legacy_schema_before_creating_new_indexes() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "legacy_journal.sqlite3")
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE journal_entries (
+                    journal_entry_id TEXT PRIMARY KEY,
+                    pick_id TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    route_id TEXT NOT NULL,
+                    route_profile TEXT NOT NULL,
+                    route_label TEXT NOT NULL,
+                    source_market TEXT NOT NULL,
+                    target_market TEXT NOT NULL,
+                    item_type_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    proposed_qty REAL NOT NULL,
+                    proposed_buy_price REAL NOT NULL,
+                    proposed_sell_price REAL NOT NULL,
+                    proposed_full_sell_profit REAL NOT NULL,
+                    proposed_expected_profit REAL NOT NULL,
+                    proposed_expected_days_to_sell REAL NOT NULL,
+                    proposed_exit_type TEXT NOT NULL,
+                    proposed_confidence REAL NOT NULL,
+                    proposed_expected_units_sold REAL NOT NULL DEFAULT 0,
+                    proposed_expected_units_unsold REAL NOT NULL DEFAULT 0,
+                    actual_buy_qty REAL NOT NULL DEFAULT 0,
+                    actual_buy_price_avg REAL NOT NULL DEFAULT 0,
+                    actual_sell_qty REAL NOT NULL DEFAULT 0,
+                    actual_sell_price_avg REAL NOT NULL DEFAULT 0,
+                    actual_fees_paid REAL NOT NULL DEFAULT 0,
+                    actual_shipping_paid REAL NOT NULL DEFAULT 0,
+                    actual_profit_net REAL NOT NULL DEFAULT 0,
+                    first_buy_at TEXT NOT NULL DEFAULT '',
+                    last_sell_at TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    calibration_warning TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE journal_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    journal_entry_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    qty REAL NOT NULL DEFAULT 0,
+                    price REAL NOT NULL DEFAULT 0,
+                    fees_paid REAL NOT NULL DEFAULT 0,
+                    shipping_paid REAL NOT NULL DEFAULT 0,
+                    happened_at TEXT NOT NULL,
+                    status_to TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX idx_journal_entries_status ON journal_entries(status);
+                CREATE INDEX idx_journal_entries_plan_id ON journal_entries(plan_id);
+                CREATE INDEX idx_journal_entries_route_id ON journal_entries(route_id);
+                CREATE INDEX idx_journal_entries_updated_at ON journal_entries(updated_at);
+                CREATE INDEX idx_journal_events_entry ON journal_events(journal_entry_id, happened_at, event_id);
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        path = nst.initialize_journal_db(db_path)
+        assert str(path) == db_path
+
+        conn = sqlite3.connect(db_path)
+        try:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal_entries)").fetchall()}
+            indexes = {str(row[1]) for row in conn.execute("PRAGMA index_list(journal_entries)").fetchall()}
+        finally:
+            conn.close()
+
+    assert "reconciliation_status" in columns
+    assert "match_confidence" in columns
+    assert "idx_journal_entries_reconciliation_status" in indexes
 
 
 def _sample_route_results() -> list[dict]:

@@ -296,3 +296,15 @@ full backlog scrape.
 - Expected result: replace some stdout/artifact parsing in the web analysis path
   with a smaller structured runtime service API, without rewriting CLI behavior
   or duplicating trading logic.
+
+### Task 7c: Keep local journal schema migration robust for UI and CLI entry points
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - Fixed `journal_store.initialize_journal_db()` so older local journal DBs
+    are migrated before reconciliation-related indexes are created
+  - Prevented the local web dashboard from failing with `sqlite3.OperationalError:
+    no such column: reconciliation_status` on pre-migration caches
+  - Added a regression test in `tests/test_journal.py` for legacy schema upgrade

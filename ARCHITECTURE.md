@@ -162,6 +162,9 @@ Local mutable state:
   wallet-reconciliation summaries on each entry, including wallet-snapshot
   quality fields that keep personal-history output independent from a fresh
   live sync
+- `journal_store.initialize_journal_db()` is also responsible for migrating
+  older local journal schemas before creating newer reconciliation indexes, so
+  existing caches remain usable for CLI and web entry points
 - `webapp/` adds a local-only FastAPI/Jinja2 UI layer and does not replace the
   CLI entry path
 

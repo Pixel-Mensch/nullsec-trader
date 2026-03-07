@@ -127,6 +127,9 @@ Not fully re-audited this session:
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
+- local journal initialization now migrates older `trade_journal.sqlite3`
+  schemas before creating reconciliation-related indexes, so existing caches do
+  not break dashboard or journal pages after schema expansion
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
@@ -255,6 +258,8 @@ Files that indicate this focus:
   `target_market`, and `route_id`. It is not a general personal market model.
 - The local web UI is now usable, but its full-run analysis page still depends
   on CLI-style stdout and artifact contracts exposed by `runtime_runner.py`.
+- Legacy local journal databases with missing reconciliation columns are now
+  upgraded in place on startup instead of failing during index creation.
 - Matching remains intentionally honest rather than magical: ambiguous
   transactions stay visible as uncertain, and unmatched wallet activity is
   reported separately instead of being forced onto a trade entry.

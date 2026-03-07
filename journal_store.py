@@ -102,6 +102,19 @@ def _ensure_journal_entry_columns(conn: sqlite3.Connection) -> None:
         conn.execute(f"ALTER TABLE journal_entries ADD COLUMN {column} {ddl}")
 
 
+def _ensure_journal_indexes(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE INDEX IF NOT EXISTS idx_journal_entries_status ON journal_entries(status);
+        CREATE INDEX IF NOT EXISTS idx_journal_entries_plan_id ON journal_entries(plan_id);
+        CREATE INDEX IF NOT EXISTS idx_journal_entries_route_id ON journal_entries(route_id);
+        CREATE INDEX IF NOT EXISTS idx_journal_entries_reconciliation_status ON journal_entries(reconciliation_status);
+        CREATE INDEX IF NOT EXISTS idx_journal_entries_updated_at ON journal_entries(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_journal_events_entry ON journal_events(journal_entry_id, happened_at, event_id);
+        """
+    )
+
+
 def initialize_journal_db(db_path: str | None = None) -> str:
     path = resolve_journal_db_path(db_path)
     with closing(_connect(path)) as conn:
@@ -200,15 +213,10 @@ def initialize_journal_db(db_path: str | None = None) -> str:
                     notes TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(journal_entry_id) REFERENCES journal_entries(journal_entry_id) ON DELETE CASCADE
                 );
-                CREATE INDEX IF NOT EXISTS idx_journal_entries_status ON journal_entries(status);
-                CREATE INDEX IF NOT EXISTS idx_journal_entries_plan_id ON journal_entries(plan_id);
-                CREATE INDEX IF NOT EXISTS idx_journal_entries_route_id ON journal_entries(route_id);
-                CREATE INDEX IF NOT EXISTS idx_journal_entries_reconciliation_status ON journal_entries(reconciliation_status);
-                CREATE INDEX IF NOT EXISTS idx_journal_entries_updated_at ON journal_entries(updated_at);
-                CREATE INDEX IF NOT EXISTS idx_journal_events_entry ON journal_events(journal_entry_id, happened_at, event_id);
                 """
             )
             _ensure_journal_entry_columns(conn)
+            _ensure_journal_indexes(conn)
     return path
 
 
