@@ -11,7 +11,8 @@ This map is based on focused output and test inspection, not a full audit.
 - owns route leaderboard text rendering
 - categorizes picks and generates warnings
 - handles compact/detail output differences
-- renders compact advisory character/history metadata in the plan header
+- renders compact character/history metadata in the plan header
+- renders applied personal-layer scope/effect lines when a route actually used them
 
 ## Inputs
 
@@ -60,7 +61,7 @@ This map is based on focused output and test inspection, not a full audit.
 - add or adjust warnings
 - change compact/detail behavior
 - surface new route or profile metadata
-- surface advisory-only personal-history context without affecting ranking
+- surface personal-layer state and explainability without inventing business logic
 
 ## Risk Areas
 
@@ -68,8 +69,8 @@ This map is based on focused output and test inspection, not a full audit.
 - this module assumes many pick and route fields exist
 - presentation changes can accidentally embed business logic
 - leaderboard ranking and plan messaging must stay aligned
-- personal-history messaging must stay clearly advisory and separate from
-  generic calibration behavior
+- personal-history messaging must stay honest about fallback vs active state
+- applied scoped effects must stay visible without implying global market truth
 
 ## Tests
 

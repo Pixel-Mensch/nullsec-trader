@@ -76,7 +76,7 @@ Use this section to avoid loading large unrelated modules.
   `journal_models.py`, `journal_reporting.py`
 - Wallet/journal reconciliation: `journal_reconciliation.py`
 - Generic confidence calibration from journal outcomes: `confidence_calibration.py`
-- Personal trade analytics and analytics-only personal calibration basis:
+- Personal trade analytics and personal decision-layer basis:
   `journal_reporting.py`, `confidence_calibration.py`
 - Startup node and chain resolution: `startup_helpers.py`
 
@@ -104,23 +104,28 @@ Journal reconciliation flow:
 -> `journal_store.py`
 -> `journal_reporting.py` / `journal_cli.py`
 
-Confidence calibration is fed by journal data:
+Generic confidence calibration is fed by journal data:
 
 `journal_store.py`
 -> `confidence_calibration.py`
 -> `runtime_runner.py` applies calibrated confidence to candidates, picks, and
 route results
 
-Personal analytics flow is separate on purpose:
+Personal history flow is separate on purpose and only becomes decision-relevant
+through an explicit policy gate:
 
 `journal_store.py`
 -> `journal_reporting.py`
--> optional `confidence_calibration.py` personal summary
--> `journal_cli.py`
--> `runtime_runner.py` / `execution_plan.py` for compact advisory-only runtime visibility
+-> optional `confidence_calibration.py` personal summary + scoped segment index
+-> `runtime_runner.py` applies an opt-in, capped personal adjustment to
+   `decision_overall_confidence`
+-> `execution_plan.py` / runtime stdout show mode, fallback reason, and applied
+   scope
 
-This path is currently analytics-only and does not feed back into route ranking
-or candidate scoring.
+The generic calibration model remains the base path. The personal layer does
+not rewrite `build_confidence_calibration()`, route-ranking formulas,
+`no_trade`, or planned-sell heuristics; it only nudges the already-consumed
+decision confidence when policy, quality, and sample-size guardrails all pass.
 
 ## Output And State Files
 
@@ -169,7 +174,8 @@ Most recent focused work on 2026-03-07 touched:
   older or truncated wallet snapshots
 - personal trade analytics, data-quality tiers, and a separate personal
   calibration basis with explicit fallback-to-generic guardrails
-- compact runtime visibility for personal-history quality and fallback status
+- an opt-in personal decision layer with strict caps, explainability fields,
+  and runtime / execution-plan visibility
 
 Treat those areas as the most likely source of doc drift until targeted tests
 confirm the current branch state.
@@ -179,7 +185,8 @@ confirm the current branch state.
 - Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
-- Confidence calibration logic: `confidence_calibration.py`
+- Confidence calibration logic and personal decision-layer policy:
+  `confidence_calibration.py`
 - Private character auth and cacheable profile sync: `eve_sso.py`,
   `eve_character_client.py`, `character_profile.py`
 - Wallet-based personal trade reconciliation: `journal_reconciliation.py`

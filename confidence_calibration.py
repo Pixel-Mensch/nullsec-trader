@@ -25,6 +25,16 @@ CONFIDENCE_DEFINITIONS = {
 CONFIDENCE_DIMENSIONS = ("overall", "exit", "liquidity", "transport")
 DEFAULT_CONFIDENCE_BUCKETS = (0.2, 0.4, 0.6, 0.8, 1.0)
 PERSONAL_HISTORY_QUALITY_LEVELS = ("none", "very_low", "low", "usable", "good")
+PERSONAL_HISTORY_POLICY_MODES = ("off", "advisory", "soft", "strict")
+DEFAULT_PERSONAL_HISTORY_POLICY = {
+    "enabled": True,
+    "mode": "advisory",
+    "min_quality": "usable",
+    "max_negative_adjustment": 0.08,
+    "max_positive_adjustment": 0.05,
+    "require_wallet_backed_min": 8,
+    "require_reliable_min": 6,
+}
 
 
 def _clamp01(value: float) -> float:
@@ -85,6 +95,28 @@ def resolve_confidence_calibration_cfg(cfg: dict | None) -> dict:
         "open_position_horizon_factor": max(0.0, float(raw.get("open_position_horizon_factor", 1.0) or 1.0)),
         "stale_open_position_days": max(0.0, float(raw.get("stale_open_position_days", 14.0) or 14.0)),
         "optimism_gap_warn": max(0.0, float(raw.get("optimism_gap_warn", 0.10) or 0.10)),
+    }
+
+
+def resolve_personal_history_policy_cfg(cfg: dict | None) -> dict:
+    root = cfg if isinstance(cfg, dict) else {}
+    raw = root.get("personal_history_policy", {})
+    if not isinstance(raw, dict):
+        raw = {}
+    mode = str(raw.get("mode", DEFAULT_PERSONAL_HISTORY_POLICY["mode"]) or DEFAULT_PERSONAL_HISTORY_POLICY["mode"]).strip().lower()
+    if mode not in PERSONAL_HISTORY_POLICY_MODES:
+        mode = str(DEFAULT_PERSONAL_HISTORY_POLICY["mode"])
+    min_quality = str(raw.get("min_quality", DEFAULT_PERSONAL_HISTORY_POLICY["min_quality"]) or DEFAULT_PERSONAL_HISTORY_POLICY["min_quality"]).strip().lower()
+    if min_quality not in PERSONAL_HISTORY_QUALITY_LEVELS:
+        min_quality = str(DEFAULT_PERSONAL_HISTORY_POLICY["min_quality"])
+    return {
+        "enabled": bool(raw.get("enabled", DEFAULT_PERSONAL_HISTORY_POLICY["enabled"])),
+        "mode": mode,
+        "min_quality": min_quality,
+        "max_negative_adjustment": max(0.0, float(raw.get("max_negative_adjustment", DEFAULT_PERSONAL_HISTORY_POLICY["max_negative_adjustment"]) or DEFAULT_PERSONAL_HISTORY_POLICY["max_negative_adjustment"])),
+        "max_positive_adjustment": max(0.0, float(raw.get("max_positive_adjustment", DEFAULT_PERSONAL_HISTORY_POLICY["max_positive_adjustment"]) or DEFAULT_PERSONAL_HISTORY_POLICY["max_positive_adjustment"])),
+        "require_wallet_backed_min": max(0, int(raw.get("require_wallet_backed_min", DEFAULT_PERSONAL_HISTORY_POLICY["require_wallet_backed_min"]) or DEFAULT_PERSONAL_HISTORY_POLICY["require_wallet_backed_min"])),
+        "require_reliable_min": max(0, int(raw.get("require_reliable_min", DEFAULT_PERSONAL_HISTORY_POLICY["require_reliable_min"]) or DEFAULT_PERSONAL_HISTORY_POLICY["require_reliable_min"])),
     }
 
 
@@ -447,6 +479,60 @@ def _segment_diagnostics(entries: list[dict], key_name: str, limit: int) -> list
     return rows[: max(1, int(limit or 5))]
 
 
+def _quality_rank(level: str) -> int:
+    normalized = str(level or "none").strip().lower() or "none"
+    try:
+        return PERSONAL_HISTORY_QUALITY_LEVELS.index(normalized)
+    except ValueError:
+        return 0
+
+
+def _diagnose_gap(optimism_gap: float, warn_gap: float) -> str:
+    if optimism_gap > warn_gap:
+        return "too_optimistic"
+    if optimism_gap < (-warn_gap):
+        return "too_pessimistic"
+    return "balanced"
+
+
+def _build_personal_segment_index(entries: list[dict], scope: str, warn_gap: float) -> dict[str, dict]:
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for entry in list(entries or []):
+        groups[_scope_key(entry, scope)].append(entry)
+    out: dict[str, dict] = {}
+    for key, members in groups.items():
+        if not members:
+            continue
+        summary = _summarize_bucket(members, "overall")
+        reliable_count = sum(1 for member in members if bool(member.get("reliable_outcome", False)))
+        wallet_backed_count = sum(1 for member in members if str(member.get("history_source", "") or "") == "wallet")
+        weak_count = sum(
+            1
+            for member in members
+            if bool(member.get("uncertain_match", False))
+            or bool(member.get("wallet_unmatched", False))
+            or bool(member.get("stale_basis", False))
+            or bool(member.get("truncated_basis", False))
+            or str(member.get("fee_match_quality", "") or "").strip().lower() == "uncertain"
+        )
+        sample_count = int(summary.get("sample_count", 0) or 0)
+        weak_ratio = (float(weak_count) / float(sample_count)) if sample_count > 0 else 1.0
+        reliable_ratio = (float(reliable_count) / float(sample_count)) if sample_count > 0 else 0.0
+        out[str(key)] = {
+            "scope": str(scope),
+            "key": str(key),
+            "sample_count": sample_count,
+            "reliable_count": int(reliable_count),
+            "wallet_backed_count": int(wallet_backed_count),
+            "weak_count": int(weak_count),
+            "weak_ratio": float(weak_ratio),
+            "reliable_ratio": float(reliable_ratio),
+            "diagnosis": _diagnose_gap(float(summary.get("optimism_gap", 0.0) or 0.0), warn_gap),
+            **summary,
+        }
+    return out
+
+
 def _fee_quality_mix(entries: list[dict]) -> dict:
     counts = {"exact": 0, "partial": 0, "uncertain": 0, "none": 0}
     for entry in list(entries or []):
@@ -614,6 +700,11 @@ def build_personal_calibration_summary(entries: list[dict], cfg: dict | None, no
         "routes": _segment_diagnostics(prepared, "route_id", limit=5),
         "exit_types": _segment_diagnostics(prepared, "proposed_exit_type", limit=5),
     }
+    decision_segments = {
+        "target_market": _build_personal_segment_index(prepared, "target_market", float(cal_cfg.get("optimism_gap_warn", 0.10) or 0.10)),
+        "route_id": _build_personal_segment_index(prepared, "route_id", float(cal_cfg.get("optimism_gap_warn", 0.10) or 0.10)),
+        "exit_type": _build_personal_segment_index(prepared, "exit_type", float(cal_cfg.get("optimism_gap_warn", 0.10) or 0.10)),
+    }
     return {
         "generated_at": utc_now_iso(),
         "config": cal_cfg,
@@ -626,6 +717,7 @@ def build_personal_calibration_summary(entries: list[dict], cfg: dict | None, no
             "fee_quality_mix": fee_quality_mix,
         },
         "diagnostics": diagnostics,
+        "decision_segments": decision_segments,
         "warnings": list(dict.fromkeys(warnings)),
     }
 
@@ -738,6 +830,293 @@ def personal_calibration_status_lines(summary: dict | None) -> list[str]:
         )
     elif warning_text:
         lines.append(f"Note: {warning_text}")
+    return lines
+
+
+def build_personal_history_layer_state(summary: dict | None, cfg: dict | None) -> dict:
+    policy_cfg = resolve_personal_history_policy_cfg(cfg)
+    quality_level = str((summary or {}).get("quality_level", "none") or "none").strip().lower() or "none"
+    sample_size = dict((summary or {}).get("sample_size", {}) or {})
+    data_quality = dict((summary or {}).get("data_quality", {}) or {})
+    warnings = [str(item).strip() for item in list((summary or {}).get("warnings", []) or []) if str(item).strip()]
+    effective_mode = "off" if not bool(policy_cfg.get("enabled", True)) else str(policy_cfg.get("mode", "advisory") or "advisory").strip().lower()
+    state = {
+        "config": policy_cfg,
+        "mode": effective_mode,
+        "quality_level": quality_level,
+        "active": False,
+        "fallback_to_generic": True,
+        "reason": "",
+        "effect_scale": 0.0,
+        "mode_factor": 0.0,
+        "max_negative_adjustment": float(policy_cfg.get("max_negative_adjustment", 0.0) or 0.0),
+        "max_positive_adjustment": float(policy_cfg.get("max_positive_adjustment", 0.0) or 0.0),
+        "sample_size": sample_size,
+        "reduction_notes": [],
+        "segment_min_samples": max(2, int(((summary or {}).get("config", {}) or {}).get("min_samples_per_bucket", 3) or 3)),
+        "segment_min_reliable": 2,
+    }
+    if effective_mode == "off":
+        state["reason"] = "personal history policy disabled"
+        return state
+    if effective_mode == "advisory":
+        state["reason"] = "advisory mode keeps the generic decision path"
+        return state
+    if quality_level not in {"usable", "good"}:
+        state["reason"] = "weak personal history quality"
+        return state
+    if _quality_rank(quality_level) < _quality_rank(str(policy_cfg.get("min_quality", "usable") or "usable")):
+        state["reason"] = "personal history below required quality"
+        return state
+    if int(sample_size.get("wallet_backed_entries", 0) or 0) < int(policy_cfg.get("require_wallet_backed_min", 0) or 0):
+        state["reason"] = "insufficient wallet-backed sample"
+        return state
+    if int(sample_size.get("reliable_entries", 0) or 0) < int(policy_cfg.get("require_reliable_min", 0) or 0):
+        state["reason"] = "insufficient reliable personal sample"
+        return state
+    mode_factor = 0.5 if effective_mode == "soft" else 1.0
+    scale = 0.65 if quality_level == "usable" else 1.0
+    reduction_notes: list[str] = []
+    if float(data_quality.get("stale_basis_ratio", 0.0) or 0.0) > 0.0:
+        scale *= 0.75
+        reduction_notes.append("stale wallet basis")
+    if float(data_quality.get("truncated_basis_ratio", 0.0) or 0.0) > 0.0:
+        scale *= 0.75
+        reduction_notes.append("truncated wallet history")
+    if float(data_quality.get("uncertain_match_ratio", 0.0) or 0.0) > 0.25:
+        scale *= 0.80
+        reduction_notes.append("uncertain reconciliation mix")
+    if float(data_quality.get("wallet_unmatched_ratio", 0.0) or 0.0) > 0.20:
+        scale *= 0.80
+        reduction_notes.append("wallet-unmatched activity")
+    fee_mix = dict(data_quality.get("fee_quality_mix", {}) or {})
+    total_fee_rows = sum(int(fee_mix.get(key, 0) or 0) for key in ("exact", "partial", "uncertain", "none"))
+    uncertain_fee_ratio = (float(fee_mix.get("uncertain", 0) or 0) / float(total_fee_rows)) if total_fee_rows > 0 else 0.0
+    if uncertain_fee_ratio > 0.25:
+        scale *= 0.85
+        reduction_notes.append("uncertain fee matching")
+    if scale < 0.35:
+        state["reason"] = "personal history quality too weak for decision mode"
+        state["reduction_notes"] = reduction_notes
+        return state
+    state["active"] = True
+    state["fallback_to_generic"] = False
+    state["reason"] = "personal decision layer active"
+    state["effect_scale"] = float(scale)
+    state["mode_factor"] = float(mode_factor)
+    state["max_negative_adjustment"] = float(state["max_negative_adjustment"]) * float(mode_factor)
+    state["max_positive_adjustment"] = float(state["max_positive_adjustment"]) * float(mode_factor)
+    state["reduction_notes"] = reduction_notes
+    if warnings and reduction_notes:
+        state["reason"] = f"personal decision layer active (reduced: {', '.join(reduction_notes[:2])})"
+    return state
+
+
+def _segment_value(scope: str, *, route_id: str = "", target_market: str = "", exit_type: str = "") -> str:
+    if scope == "route_id":
+        return str(route_id or "(leer)")
+    if scope == "target_market":
+        return str(target_market or "(leer)")
+    if scope == "exit_type":
+        return str(exit_type or "(leer)")
+    return "global"
+
+
+def apply_personal_history_to_record(
+    target: object,
+    summary: dict | None,
+    layer_state: dict | None,
+    *,
+    route_id: str = "",
+    source_market: str = "",
+    target_market: str = "",
+    exit_type: str = "",
+) -> object:
+    base_conf = _clamp01(
+        _as_float(
+            _read_value(
+                target,
+                "decision_overall_confidence",
+                _read_value(target, "calibrated_overall_confidence", _read_value(target, "overall_confidence", 0.0)),
+            )
+        )
+    )
+    state = dict(layer_state or {})
+    updates = {
+        "decision_overall_confidence_base": base_conf,
+        "personal_history_layer_mode": str(state.get("mode", "off") or "off"),
+        "personal_history_layer_quality": str(state.get("quality_level", str((summary or {}).get("quality_level", "none") or "none")) or "none"),
+        "personal_history_layer_active": bool(state.get("active", False)),
+        "personal_history_layer_reason": str(state.get("reason", "") or ""),
+        "personal_history_effect_applied": False,
+        "personal_history_effect_scope": "",
+        "personal_history_effect_reason": "",
+        "personal_history_effect_value": 0.0,
+        "personal_history_effect_details": [],
+        "personal_history_adjusted_confidence": base_conf,
+    }
+    if not isinstance(summary, dict) or not summary or not bool(state.get("active", False)):
+        for key, value in updates.items():
+            _write_value(target, key, value)
+        return target
+    segments_root = summary.get("decision_segments", {})
+    if not isinstance(segments_root, dict):
+        segments_root = {}
+    scope_specs = [
+        ("exit_type", str(exit_type or _read_value(target, "exit_type", _read_value(target, "proposed_exit_type", "")) or ""), 0.45),
+        ("target_market", str(target_market or _read_value(target, "target_market", _read_value(target, "sell_at", "")) or ""), 0.35),
+        ("route_id", str(route_id or _read_value(target, "route_id", "") or ""), 0.20),
+    ]
+    segment_min_samples = max(2, int(state.get("segment_min_samples", 3) or 3))
+    segment_min_reliable = max(1, int(state.get("segment_min_reliable", 2) or 2))
+    effect_scale = float(state.get("effect_scale", 0.0) or 0.0)
+    details: list[dict] = []
+    total_effect = 0.0
+    for scope, raw_value, axis_weight in scope_specs:
+        scope_rows = segments_root.get(scope, {})
+        if not isinstance(scope_rows, dict):
+            continue
+        key = _segment_value(scope, route_id=route_id, target_market=target_market, exit_type=exit_type) if raw_value else _segment_value(scope)
+        if raw_value:
+            key = str(raw_value)
+        row = scope_rows.get(str(key))
+        if not isinstance(row, dict) or not row:
+            continue
+        sample_count = int(row.get("sample_count", 0) or 0)
+        reliable_count = int(row.get("reliable_count", 0) or 0)
+        weak_ratio = float(row.get("weak_ratio", 0.0) or 0.0)
+        if sample_count < segment_min_samples or reliable_count < segment_min_reliable or weak_ratio > 0.60:
+            continue
+        success_gap = float(row.get("actual_success_rate", 0.0) or 0.0) - float(row.get("avg_raw_confidence", 0.0) or 0.0)
+        if abs(success_gap) < 0.05:
+            continue
+        support = min(1.0, float(sample_count) / float(segment_min_samples))
+        support *= min(1.0, float(reliable_count) / float(segment_min_reliable))
+        support *= max(0.35, 1.0 - min(0.65, weak_ratio))
+        effect = float(success_gap) * float(axis_weight) * float(effect_scale) * float(support)
+        if abs(effect) < 0.005:
+            continue
+        detail = {
+            "scope": str(scope),
+            "key": str(key),
+            "value": float(effect),
+            "sample_count": sample_count,
+            "reliable_count": reliable_count,
+            "success_gap": float(success_gap),
+            "diagnosis": str(row.get("diagnosis", "balanced") or "balanced"),
+        }
+        details.append(detail)
+        total_effect += float(effect)
+    max_negative = float(state.get("max_negative_adjustment", 0.0) or 0.0)
+    max_positive = float(state.get("max_positive_adjustment", 0.0) or 0.0)
+    total_effect = max(-max_negative, min(max_positive, float(total_effect)))
+    applied = bool(details) and abs(total_effect) >= 0.005
+    adjusted_conf = _clamp01(base_conf + (float(total_effect) if applied else 0.0))
+    updates.update(
+        {
+            "decision_overall_confidence": adjusted_conf,
+            "personal_history_effect_applied": applied,
+            "personal_history_effect_scope": "+".join(detail["scope"] for detail in details) if applied else "",
+            "personal_history_effect_reason": (
+                "; ".join(
+                    f"{detail['scope']}={detail['key']} (n={detail['sample_count']}, gap={detail['success_gap']:+.2f})"
+                    for detail in details[:3]
+                )
+                if applied
+                else "no scoped personal adjustment"
+            ),
+            "personal_history_effect_value": float(total_effect) if applied else 0.0,
+            "personal_history_effect_details": details,
+            "personal_history_adjusted_confidence": adjusted_conf,
+        }
+    )
+    for key, value in updates.items():
+        _write_value(target, key, value)
+    return target
+
+
+def summarize_personal_history_effect(records: list[object], layer_state: dict | None = None) -> dict:
+    state = dict(layer_state or {})
+    mode = str(state.get("mode", "off") or "off")
+    quality_level = str(state.get("quality_level", "none") or "none")
+    active = bool(state.get("active", False))
+    applied_records: list[object] = []
+    scopes: list[str] = []
+    reasons: list[str] = []
+    effect_values: list[float] = []
+    for record in list(records or []):
+        if not bool(_read_value(record, "personal_history_effect_applied", False)):
+            continue
+        applied_records.append(record)
+        value = _as_float(_read_value(record, "personal_history_effect_value", 0.0))
+        effect_values.append(value)
+        scope = str(_read_value(record, "personal_history_effect_scope", "") or "").strip()
+        reason = str(_read_value(record, "personal_history_effect_reason", "") or "").strip()
+        if scope:
+            scopes.append(scope)
+        if reason:
+            reasons.append(reason)
+    applied = bool(applied_records)
+    scope_text = ", ".join(sorted(dict.fromkeys(scopes))) if scopes else ""
+    reason_text = "; ".join(list(dict.fromkeys(reasons))[:2]) if reasons else str(state.get("reason", "") or "")
+    avg_effect = (sum(effect_values) / float(len(effect_values))) if effect_values else 0.0
+    return {
+        "mode": mode,
+        "quality_level": quality_level,
+        "active": active,
+        "fallback_to_generic": not active,
+        "applied": applied,
+        "applied_count": len(applied_records),
+        "effect_value": float(avg_effect),
+        "scope": scope_text,
+        "reason": reason_text if reason_text else ("no scoped personal adjustment" if active else str(state.get("reason", "") or "")),
+    }
+
+
+def personal_history_layer_status_lines(
+    summary: dict | None,
+    layer_state: dict | None = None,
+    effect_summary: dict | None = None,
+) -> list[str]:
+    if not isinstance(summary, dict) or not summary:
+        return []
+    sample_size = dict(summary.get("sample_size", {}) or {})
+    state = dict(layer_state or {})
+    mode = str(state.get("mode", "advisory") or "advisory").strip().lower()
+    quality = str(state.get("quality_level", summary.get("quality_level", "none")) or "none").strip().lower() or "none"
+    active = bool(state.get("active", False))
+    lines = [
+        f"Personal Layer: {mode.upper()} | quality {quality.upper()} | {'active' if active else 'generic only'}",
+        (
+            f"Personal Basis: sample {int(sample_size.get('eligible_entries', 0) or 0)} | "
+            f"wallet-backed {int(sample_size.get('wallet_backed_entries', 0) or 0)} | "
+            f"reliable {int(sample_size.get('reliable_entries', 0) or 0)}"
+        ),
+    ]
+    if not active:
+        reason = str(state.get("reason", "") or "").strip()
+        if reason:
+            lines.append(f"Fallback: generic only | {reason}")
+        return lines
+    if isinstance(effect_summary, dict) and effect_summary:
+        if bool(effect_summary.get("applied", False)):
+            lines.append(
+                (
+                    f"Applied: {float(effect_summary.get('effect_value', 0.0) or 0.0):+.3f} confidence | "
+                    f"{str(effect_summary.get('scope', '') or '').strip() or 'scoped'}"
+                )
+            )
+        else:
+            lines.append(
+                f"Applied: none | {str(effect_summary.get('reason', 'no scoped personal adjustment') or 'no scoped personal adjustment')}"
+            )
+        return lines
+    caps_text = (
+        f"Policy: scoped confidence adjustments enabled | "
+        f"caps +{float(state.get('max_positive_adjustment', 0.0) or 0.0):.3f} / "
+        f"-{float(state.get('max_negative_adjustment', 0.0) or 0.0):.3f}"
+    )
+    lines.append(caps_text)
     return lines
 
 
@@ -1064,9 +1443,13 @@ __all__ = [
     "CONFIDENCE_DEFINITIONS",
     "CONFIDENCE_DIMENSIONS",
     "DEFAULT_CONFIDENCE_BUCKETS",
+    "DEFAULT_PERSONAL_HISTORY_POLICY",
     "PERSONAL_HISTORY_QUALITY_LEVELS",
+    "PERSONAL_HISTORY_POLICY_MODES",
     "apply_calibration_to_record",
+    "apply_personal_history_to_record",
     "build_confidence_calibration",
+    "build_personal_history_layer_state",
     "build_personal_calibration_summary",
     "calibrate_confidence_value",
     "classify_personal_trade_outcome",
@@ -1074,7 +1457,10 @@ __all__ = [
     "format_confidence_calibration_report",
     "format_personal_calibration_summary",
     "personal_calibration_status_lines",
+    "personal_history_layer_status_lines",
     "overall_raw_confidence_from_components",
     "resolve_confidence_calibration_cfg",
+    "resolve_personal_history_policy_cfg",
+    "summarize_personal_history_effect",
     "transport_confidence_to_score",
 ]

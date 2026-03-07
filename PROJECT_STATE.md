@@ -102,9 +102,16 @@ Not fully re-audited this session:
 - `journal calibration` now keeps the existing generic model intact while also
   printing a separate personal calibration basis with explicit
   fallback-to-generic guardrails
-- normal runtime output now also shows a compact personal-history advisory
-  summary with quality level, sample size, wallet-backed/reliable counts, and
-  fallback warnings while leaving ranking effect at `none`
+- normal runtime output and execution plans now show a compact
+  `Personal Layer` status with mode, quality, sample size, and generic
+  fallback reason when the personal basis is too weak
+- an explicit `personal_history_policy` can now optionally nudge
+  `decision_overall_confidence` through a small bounded personal decision layer
+  (`off`, `advisory`, `soft`, `strict`) using scoped reconciled-history signals
+  for `exit_type`, `target_market`, and `route_id`
+- every personal decision-layer effect is explainable on records and route
+  results via applied flag, scope, reason, and capped effect value; weak or
+  sparse history still falls back to the generic path
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
@@ -144,9 +151,13 @@ Not fully re-audited this session:
 - wallet history is now more transparent, but still bounded by configured page
   limits; very old trades can stay uncertain when the loaded transaction window
   does not reach far enough back
-- personal analytics are now visible in journal views and the normal runtime
-  header, but chain/roundtrip summary artifacts outside `execution_plan.py` do
-  not yet show the same compact advisory block
+- personal analytics and the opt-in decision layer are now visible in journal
+  views, normal runtime output, and execution plans, but chain/roundtrip
+  summary artifacts outside `execution_plan.py` still do not mirror the same
+  compact status block
+- the personal decision layer is intentionally narrow: it only adjusts
+  `decision_overall_confidence` with hard caps and explainability, so evidence
+  for broader scope tuning is still limited
 
 ## Current Focus
 
@@ -162,10 +173,11 @@ centered on:
 - wallet-to-journal reconciliation and personal trade-history reporting
 - wallet paging, freshness visibility, and conservative fee/ref matching for
   older or truncated snapshots
-- personal journal analytics and a separate personal calibration basis that
-  stays advisory-only
-- compact runtime visibility for personal-history quality without changing the
-  generic decision path
+- personal journal analytics and a separate personal calibration basis
+- an explicit, bounded personal decision layer with strict
+  sample-size/data-quality guardrails and visible explainability
+- compact runtime visibility for personal-history quality, fallback reasons,
+  and applied scoped personal adjustments
 
 Files that indicate this focus:
 
@@ -208,9 +220,16 @@ Files that indicate this focus:
   truncation warnings in the journal views. This reduces false confidence, but
   does not create a historical backfill system.
 - Personal history quality is now graded (`none` to `good`) and sample-size
-  aware. It is visible in journal views and the normal runtime header, but it
-  remains an additive analytics layer only. It does not change route ranking,
-  candidate scoring, or no-trade logic.
+  aware. It can only influence `decision_overall_confidence` when
+  `personal_history_policy` is explicitly enabled in `soft` or `strict` mode,
+  the basis is at least `usable`, and wallet-backed / reliable minimums are
+  met. Otherwise it falls back to the generic path.
+- Route-ranking formulas, candidate heuristics, `no_trade`, and generic
+  `build_confidence_calibration()` logic remain unchanged. When the personal
+  layer is active, those existing paths can only see the already-capped
+  `decision_overall_confidence` value they were designed to consume.
+- The personal decision layer currently scopes only by `exit_type`,
+  `target_market`, and `route_id`. It is not a general personal market model.
 - Matching remains intentionally honest rather than magical: ambiguous
   transactions stay visible as uncertain, and unmatched wallet activity is
   reported separately instead of being forced onto a trade entry.

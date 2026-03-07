@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from confidence_calibration import apply_calibration_to_record
+from confidence_calibration import apply_calibration_to_record, apply_personal_history_to_record
 from explainability import build_pick_score_breakdown, ensure_record_explainability
 from fee_engine import FeeEngine
 from models import TradeCandidate
@@ -1274,6 +1274,16 @@ def choose_portfolio_for_route(
                 target_market=str(dst_label).strip(),
                 exit_type=str(getattr(candidate, "exit_type", "") or ""),
                 transport_confidence=1.0,
+            )
+            personal_runtime = cfg.get("_personal_calibration_runtime", {}) if isinstance(cfg, dict) else {}
+            apply_personal_history_to_record(
+                candidate,
+                personal_runtime.get("summary"),
+                personal_runtime.get("layer"),
+                route_id=str(route_label),
+                source_market=str(src_label).strip(),
+                target_market=str(dst_label).strip(),
+                exit_type=str(getattr(candidate, "exit_type", "") or ""),
             )
         r_picks, r_cost, r_profit, r_m3, r_mode = build_from_candidates(relaxed_candidates, relaxed)
         if r_cost > cost and r_profit >= (profit * 0.95):

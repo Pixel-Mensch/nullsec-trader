@@ -4,9 +4,9 @@
 
 Calibration module that learns from journal outcomes and applies calibrated
 confidence values back to candidates, picks, and route records. This map is
-based on a targeted audit, not a full edge-case review. It now also exposes a
-separate personal-history calibration summary that stays analytics-only unless a
-future task explicitly wires it into decisions.
+based on a targeted audit, not a full edge-case review. It now also owns a
+separate opt-in personal-history layer that can apply small bounded adjustments
+to `decision_overall_confidence` without rewriting the generic model.
 
 ## Responsibilities
 
@@ -14,9 +14,12 @@ future task explicitly wires it into decisions.
 - classifies trade outcomes
 - builds bucket and scope models
 - builds a guarded personal calibration basis from reconciled history
+- resolves `personal_history_policy` and personal-layer guardrails
+- builds scoped personal segment indexes for decision use
 - calibrates values and mutates target records
+- applies bounded personal-history adjustments with explainability fields
 - formats human-readable calibration reports
-- formats compact advisory status lines for runtime/output surfaces
+- formats compact layer status lines for runtime/output surfaces
 
 ## Inputs
 
@@ -29,8 +32,9 @@ future task explicitly wires it into decisions.
 
 - calibration model dicts
 - personal calibration summary dicts with quality and sample-size guardrails
+- personal layer state dicts
 - calibrated confidence values and warnings
-- in-place record updates
+- in-place record updates with optional personal-layer explainability
 - formatted calibration reports
 
 ## Key Files
@@ -46,7 +50,10 @@ future task explicitly wires it into decisions.
 - `resolve_confidence_calibration_cfg()`
 - `build_confidence_calibration()`
 - `build_personal_calibration_summary()`
-- `personal_calibration_status_lines()`
+- `build_personal_history_layer_state()`
+- `apply_personal_history_to_record()`
+- `summarize_personal_history_effect()`
+- `personal_history_layer_status_lines()`
 - `calibrate_confidence_value()`
 - `apply_calibration_to_record()`
 - `format_confidence_calibration_report()`
@@ -68,7 +75,7 @@ future task explicitly wires it into decisions.
 ## Common Change Types
 
 - tune bucket rules or scope behavior
-- adjust personal-history quality thresholds or guardrails
+- adjust personal-history quality thresholds, scoped signals, or guardrails
 - change sample eligibility rules
 - adjust sparse-data fallback behavior
 - add warning or report fields
@@ -76,7 +83,8 @@ future task explicitly wires it into decisions.
 ## Risk Areas
 
 - sparse journal data can look more precise than it is
-- personal history must remain supplemental and must not silently affect ranking
+- personal history must remain explicit, bounded, and easy to disable
+- the generic model and personal layer must not get conflated
 - bucket and scope fallback behavior is subtle
 - in-place mutation means downstream code may depend on added fields
 - route, exit, liquidity, and transport confidence can drift if handled

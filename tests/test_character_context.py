@@ -259,7 +259,12 @@ def test_attach_character_context_to_result_marks_order_overlap() -> None:
 def test_validate_config_rejects_invalid_character_context_fields() -> None:
     cfg = _minimal_valid_config()
     cfg["character_context"] = {"enabled": "yes", "profile_cache_ttl_sec": -1, "wallet_warn_stale_after_sec": -5}
+    cfg["personal_history_policy"] = {"enabled": "yes", "mode": "magic", "min_quality": "low", "max_negative_adjustment": 2.0}
     vr = nst.validate_config(cfg)
     assert any("character_context.enabled must be a boolean" in str(e) for e in vr.get("errors", []))
     assert any("character_context.profile_cache_ttl_sec" in str(e) for e in vr.get("errors", []))
     assert any("character_context.wallet_warn_stale_after_sec" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.enabled must be a boolean" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.mode must be one of" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.min_quality must be one of" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.max_negative_adjustment must be a number in range [0..1]" in str(e) for e in vr.get("errors", []))

@@ -92,6 +92,28 @@ def _reconciled_entry(
     return entry
 
 
+def _policy_cfg(mode: str = "soft", **overrides) -> dict:
+    cfg = {
+        "confidence_calibration": {
+            "enabled": True,
+            "min_samples": 4,
+            "min_samples_per_bucket": 2,
+            "buckets": [0.2, 0.4, 0.6, 0.8, 1.0],
+        },
+        "personal_history_policy": {
+            "enabled": True,
+            "mode": mode,
+            "min_quality": "usable",
+            "max_negative_adjustment": 0.08,
+            "max_positive_adjustment": 0.05,
+            "require_wallet_backed_min": 4,
+            "require_reliable_min": 4,
+        },
+    }
+    cfg["personal_history_policy"].update(overrides)
+    return cfg
+
+
 def test_classify_trade_outcome_marks_stale_partial_position_as_stuck() -> None:
     entry = _entry(
         entry_id="entry_partial",
@@ -268,6 +290,128 @@ def test_personal_calibration_summary_reports_good_quality_for_consistent_wallet
     assert any("wallet-backed 12" in line for line in status_lines)
     assert any("advisory only" in line for line in status_lines)
     assert "Personal outcome buckets:" in report
+
+
+def test_personal_history_policy_cfg_defaults_to_advisory() -> None:
+    cfg = nst.resolve_personal_history_policy_cfg({})
+    assert cfg["enabled"] is True
+    assert cfg["mode"] == "advisory"
+    assert cfg["min_quality"] == "usable"
+
+
+def test_personal_history_layer_stays_inactive_for_low_quality() -> None:
+    summary = nst.build_personal_calibration_summary(
+        [_reconciled_entry(entry_id="only_one", raw_conf=0.70, realized_profit=90.0)],
+        _policy_cfg("soft"),
+    )
+    layer = nst.build_personal_history_layer_state(summary, _policy_cfg("soft"))
+    candidate = {"decision_overall_confidence": 0.60, "route_id": "route_jita_o4t", "target_market": "o4t", "exit_type": "planned"}
+    nst.apply_personal_history_to_record(candidate, summary, layer, route_id="route_jita_o4t", target_market="o4t", exit_type="planned")
+    assert layer["active"] is False
+    assert candidate["personal_history_effect_applied"] is False
+    assert abs(float(candidate["decision_overall_confidence"]) - 0.60) < 1e-9
+
+
+def test_personal_history_layer_requires_wallet_backed_and_reliable_minimums() -> None:
+    entries = [
+        _reconciled_entry(entry_id=f"good_{idx}", raw_conf=0.55 + (idx % 3) * 0.1, realized_profit=95.0 + idx)
+        for idx in range(8)
+    ]
+    cfg = _policy_cfg("soft", require_wallet_backed_min=10, require_reliable_min=10)
+    summary = nst.build_personal_calibration_summary(entries, cfg)
+    layer = nst.build_personal_history_layer_state(summary, cfg)
+    candidate = {"decision_overall_confidence": 0.60, "route_id": "route_jita_o4t", "target_market": "o4t", "exit_type": "planned"}
+    nst.apply_personal_history_to_record(candidate, summary, layer, route_id="route_jita_o4t", target_market="o4t", exit_type="planned")
+    assert layer["active"] is False
+    assert "insufficient wallet-backed sample" in str(layer["reason"])
+    assert candidate["personal_history_effect_applied"] is False
+    assert abs(float(candidate["decision_overall_confidence"]) - 0.60) < 1e-9
+
+
+def test_personal_history_off_and_advisory_modes_do_not_change_scores() -> None:
+    entries = [
+        _reconciled_entry(entry_id=f"good_{idx}", raw_conf=0.45 + (idx % 4) * 0.05, realized_profit=100.0 + idx)
+        for idx in range(12)
+    ]
+    for mode in ("off", "advisory"):
+        cfg = _policy_cfg(mode)
+        summary = nst.build_personal_calibration_summary(entries, cfg)
+        layer = nst.build_personal_history_layer_state(summary, cfg)
+        candidate = {"decision_overall_confidence": 0.60, "route_id": "route_jita_o4t", "target_market": "o4t", "exit_type": "planned"}
+        nst.apply_personal_history_to_record(candidate, summary, layer, route_id="route_jita_o4t", target_market="o4t", exit_type="planned")
+        assert layer["active"] is False
+        assert candidate["personal_history_effect_applied"] is False
+        assert abs(float(candidate["decision_overall_confidence"]) - 0.60) < 1e-9
+
+
+def test_personal_history_soft_mode_applies_small_capped_bonus_only_with_good_history() -> None:
+    entries = [
+        _reconciled_entry(
+            entry_id=f"good_{idx}",
+            raw_conf=0.30 + (idx % 4) * 0.05,
+            realized_profit=110.0 + idx,
+            expected_profit=100.0,
+            actual_days=7.0,
+        )
+        for idx in range(12)
+    ]
+    cfg = _policy_cfg("soft")
+    summary = nst.build_personal_calibration_summary(entries, cfg)
+    layer = nst.build_personal_history_layer_state(summary, cfg)
+    candidate = {"decision_overall_confidence": 0.60, "route_id": "route_jita_o4t", "target_market": "o4t", "exit_type": "planned"}
+    nst.apply_personal_history_to_record(candidate, summary, layer, route_id="route_jita_o4t", target_market="o4t", exit_type="planned")
+    assert layer["active"] is True
+    assert candidate["personal_history_effect_applied"] is True
+    assert float(candidate["personal_history_effect_value"]) > 0.0
+    assert float(candidate["personal_history_effect_value"]) <= 0.025 + 1e-9
+    assert float(candidate["decision_overall_confidence"]) > 0.60
+    assert float(candidate["decision_overall_confidence"]) <= 0.625 + 1e-9
+
+
+def test_personal_history_strict_mode_allows_stronger_but_capped_effect_than_soft() -> None:
+    entries = [
+        _reconciled_entry(
+            entry_id=f"good_{idx}",
+            raw_conf=0.30 + (idx % 4) * 0.05,
+            realized_profit=110.0 + idx,
+            expected_profit=100.0,
+            actual_days=7.0,
+        )
+        for idx in range(12)
+    ]
+    summary_soft = nst.build_personal_calibration_summary(entries, _policy_cfg("soft"))
+    layer_soft = nst.build_personal_history_layer_state(summary_soft, _policy_cfg("soft"))
+    candidate_soft = {"decision_overall_confidence": 0.60, "route_id": "route_jita_o4t", "target_market": "o4t", "exit_type": "planned"}
+    nst.apply_personal_history_to_record(candidate_soft, summary_soft, layer_soft, route_id="route_jita_o4t", target_market="o4t", exit_type="planned")
+
+    summary_strict = nst.build_personal_calibration_summary(entries, _policy_cfg("strict"))
+    layer_strict = nst.build_personal_history_layer_state(summary_strict, _policy_cfg("strict"))
+    candidate_strict = {"decision_overall_confidence": 0.60, "route_id": "route_jita_o4t", "target_market": "o4t", "exit_type": "planned"}
+    nst.apply_personal_history_to_record(candidate_strict, summary_strict, layer_strict, route_id="route_jita_o4t", target_market="o4t", exit_type="planned")
+
+    assert float(candidate_soft["personal_history_effect_value"]) > 0.0
+    assert float(candidate_strict["personal_history_effect_value"]) >= float(candidate_soft["personal_history_effect_value"])
+    assert float(candidate_strict["personal_history_effect_value"]) <= 0.05 + 1e-9
+    assert float(candidate_strict["decision_overall_confidence"]) >= float(candidate_soft["decision_overall_confidence"])
+
+
+def test_personal_history_layer_status_lines_show_active_and_fallback_states() -> None:
+    good_entries = [
+        _reconciled_entry(entry_id=f"good_{idx}", raw_conf=0.35 + (idx % 4) * 0.05, realized_profit=110.0 + idx)
+        for idx in range(12)
+    ]
+    good_cfg = _policy_cfg("soft")
+    good_summary = nst.build_personal_calibration_summary(good_entries, good_cfg)
+    good_layer = nst.build_personal_history_layer_state(good_summary, good_cfg)
+    good_lines = nst.personal_history_layer_status_lines(good_summary, good_layer)
+    assert any("Personal Layer: SOFT" in line for line in good_lines)
+    assert any("active" in line for line in good_lines)
+
+    weak_summary = nst.build_personal_calibration_summary([], _policy_cfg("soft"))
+    weak_layer = nst.build_personal_history_layer_state(weak_summary, _policy_cfg("soft"))
+    weak_lines = nst.personal_history_layer_status_lines(weak_summary, weak_layer)
+    assert any("generic only" in line for line in weak_lines)
+    assert any("Fallback: generic only" in line for line in weak_lines)
 
 
 def test_route_summary_prefers_decision_confidence_when_present() -> None:

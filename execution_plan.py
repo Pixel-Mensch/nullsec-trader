@@ -1,4 +1,4 @@
-from confidence_calibration import personal_calibration_status_lines
+from confidence_calibration import personal_history_layer_status_lines
 from explainability import (
     build_rejected_candidate_table,
     ensure_record_explainability,
@@ -518,13 +518,19 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         for warning in list(character_summary.get("warnings", []) or []):
             lines.append(f"           [WARN] {warning}")
     personal_summary = {}
+    personal_layer = {}
     for leg in list(route_results or []):
         raw_summary = leg.get("_personal_calibration_summary", {})
         if isinstance(raw_summary, dict) and raw_summary:
             personal_summary = dict(raw_summary)
             break
+    for leg in list(route_results or []):
+        raw_layer = leg.get("_personal_history_layer", {})
+        if isinstance(raw_layer, dict) and raw_layer:
+            personal_layer = dict(raw_layer)
+            break
     if personal_summary:
-        for idx, line in enumerate(personal_calibration_status_lines(personal_summary)):
+        for idx, line in enumerate(personal_history_layer_status_lines(personal_summary, personal_layer)):
             lines.append(line if idx == 0 else f"                  {line}")
     if compact_mode:
         lines.append("Mode:      COMPACT (shopping list only — use --detail for full breakdown)")
@@ -561,6 +567,13 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         route_id = str(leg.get("route_id", leg.get("route_tag", "")) or "")
         if route_id:
             lines.append(f"Route ID: {route_id}")
+        personal_effect = dict(leg.get("_personal_history_effect_summary", {}) or {})
+        if personal_summary and personal_layer and (
+            bool(personal_layer.get("active", False)) or bool(personal_effect.get("applied", False))
+        ):
+            effect_lines = personal_history_layer_status_lines(personal_summary, personal_layer, personal_effect)
+            if len(effect_lines) >= 3:
+                lines.append(effect_lines[2])
         if src_info:
             if str(src_info.get("node_kind", "")) == "location":
                 lines.append(

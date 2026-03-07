@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 9 runtime personal advisory)
+Last updated: 2026-03-07 (session 10 personal decision layer)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -236,6 +236,28 @@ full backlog scrape.
   personal-history block, add that parity without touching ranking logic or
   turning personal history into a decision hook.
 
+### Task 5f: Add an explicit and bounded personal decision layer
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-07
+- What was done:
+  - Added `personal_history_policy` config validation in `config_loader.py` and
+    the default policy block in `config.json`
+  - Extended `confidence_calibration.py` with explicit personal-layer policy
+    resolution, quality/sample-size guardrails, scoped segment indexes, and
+    bounded explainable adjustments on `decision_overall_confidence`
+  - Kept generic `build_confidence_calibration()` intact while adding a
+    separate opt-in personal layer with modes `off`, `advisory`, `soft`, and
+    `strict`
+  - Wired the layer into `runtime_runner.py` and the relaxed-candidate path in
+    `portfolio_builder.py`, then surfaced mode, fallback reason, and applied
+    scoped effects in `execution_plan.py`
+  - Added focused regression coverage in
+    `tests/test_confidence_calibration.py`,
+    `tests/test_execution_plan.py`, and `tests/test_character_context.py`
+  - Full suite: **317 passed**
+
 ## P2
 
 ### Task 6: Extend regression coverage around confidence calibration and journal feedback loops
@@ -245,5 +267,5 @@ full backlog scrape.
 - Relevant files: `confidence_calibration.py`, `journal_store.py`,
   `journal_models.py`, `runtime_runner.py`, `tests/`
 - Expected result: calibration behavior remains explainable and safe as journal
-  data grows, with targeted tests for scope selection, fallback behavior, and
-  decision confidence application.
+  data grows, with targeted tests for scope selection, fallback behavior,
+  personal-layer caps, and decision confidence application.

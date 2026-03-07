@@ -16,7 +16,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Lokales Trade Journal fuer Soll/Ist-Abgleich von vorgeschlagenen und tatsaechlich ausgefuehrten Trades
 - Optionaler persoenlicher Character Context via EVE SSO / ESI: Character-Identitaet, Skills, optionale Skill Queue, offene Orders und Wallet-Snapshots mit lokalem Cache/Fallback
 - Wallet-/Journal-Reconciliation fuer persoenliche Handels-Historie mit Match-Confidence, offenen Positionen und ungematchter Wallet-Aktivitaet
-- persoenliche Journal-Analytics mit Datenqualitaetsstufen, Sample-Size-Hinweisen und separater personaler Calibration-Basis ohne stillen Ranking-Eingriff
+- persoenliche Journal-Analytics mit Datenqualitaetsstufen, Sample-Size-Hinweisen und optionalem, explizitem Personal-History-Layer mit harten Guardrails
 - Replay-Unterstuetzung fuer reproduzierbare Analysen und Regressionstests
 - Snapshot-Only-Modus zum Bauen neuer Replay-Snapshots aus Live-Daten
 
@@ -322,12 +322,54 @@ Was `journal calibration` jetzt zusaetzlich zeigt:
 
 Was normale Runs jetzt zusaetzlich zeigen:
 
-- eine kleine `Personal History`-Zeile im normalen Runtime-Output
-- bei schwacher Basis: Quality-Level plus `fallback to generic` und Warnhinweis
-- bei brauchbarer Basis: Quality-Level plus Sample Size sowie
-  wallet-backed/reliable Count
-- weiterhin nur advisory: die generische Runtime-Calibration bleibt der echte
-  Decision-Pfad
+- eine kleine `Personal Layer`-Sektion im normalen Runtime-Output und im
+  Execution Plan
+- Modus `OFF`, `ADVISORY`, `SOFT` oder `STRICT`
+- Quality-Level, Sample Size sowie wallet-backed/reliable Count
+- bei schwacher Basis: klare Begruendung fuer `generic only` /
+  `fallback to generic`
+- bei aktivem Layer: kompakte Anzeige des angewandten scoped Effekts
+  (`exit_type`, `target_market`, `route_id`) inklusive Staerke
+
+#### Personal History Policy (optional)
+
+Die persoenliche Historie bleibt standardmaessig kontrolliert und klein.
+Der generische Calibration-Pfad bleibt die Basis. Der optionale Personal-Layer
+darf nur `decision_overall_confidence` leicht und gedeckelt verschieben.
+
+Konfigurationsblock:
+
+```json
+"personal_history_policy": {
+  "enabled": true,
+  "mode": "advisory",
+  "min_quality": "usable",
+  "max_negative_adjustment": 0.08,
+  "max_positive_adjustment": 0.05,
+  "require_wallet_backed_min": 8,
+  "require_reliable_min": 6
+}
+```
+
+Modi:
+
+- `off`: komplett deaktiviert
+- `advisory`: nur sichtbar, kein Score-Effekt
+- `soft`: kleine, streng gedeckelte Anpassung
+- `strict`: gleiche Logik, aber mit voller konfigurierter Kappe
+
+Guardrails:
+
+- `none`, `very_low` und `low` fuehren zu keinem Effekt
+- zu wenig wallet-backed oder reliable Sample fuehrt zu keinem Effekt
+- stale, truncierte oder unsichere Wallet-Basis reduziert die Wirkung oder
+  fuehrt weiter zu `fallback to generic`
+- die generische `build_confidence_calibration()` bleibt unveraendert
+- wenn der Layer aktiv ist, kann er bestehende Entscheidungswege indirekt ueber
+  das bereits verwendete `decision_overall_confidence` beeinflussen; die
+  Ranking- und Filterformeln selbst werden dabei nicht umgeschrieben
+- keine stillen Eingriffe in `no_trade`, geplante Exit-Heuristiken oder
+  sonstige globale Marktlogik
 
 Aktuelle Matching-Signale:
 
@@ -362,8 +404,10 @@ Wichtige Ehrlichkeit:
   erzwingen
 - Shipping und andere Kosten ausserhalb von Wallet-Daten bleiben separat
 - keine oder schlechte persoenliche Historie fuehrt nicht zu einer stillen
-  Bestrafung im Ranking; die persoenliche Basis bleibt aktuell rein
-  analytisch/advisory
+  Bestrafung; ohne ausreichende Qualitaet oder Stichprobe bleibt der Lauf auf
+  dem generischen Pfad
+- wenn der Personal-Layer aktiv ist, beeinflusst er nur
+  `decision_overall_confidence`, nie ungebremst und immer mit sichtbarem Grund
 - geringe Sample Size oder schwache Datenqualitaet werden offen als
   `fallback to generic` bzw. `insufficient personal history` markiert
 

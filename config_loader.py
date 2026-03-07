@@ -647,7 +647,7 @@ def validate_config(cfg: dict) -> dict:
         err("config root must be an object")
         return result
 
-    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context"):
+    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context", "personal_history_policy"):
         if key in cfg and not isinstance(cfg.get(key), dict):
             err(f"{key} must be an object")
 
@@ -1011,6 +1011,31 @@ def validate_config(cfg: dict) -> dict:
                     if value <= previous:
                         err("confidence_calibration.buckets must be strictly increasing")
                     previous = value
+
+    personal_history_policy_cfg = cfg.get("personal_history_policy", {})
+    if personal_history_policy_cfg is not None and not isinstance(personal_history_policy_cfg, dict):
+        err("personal_history_policy must be an object")
+    elif isinstance(personal_history_policy_cfg, dict):
+        if "enabled" in personal_history_policy_cfg and not isinstance(personal_history_policy_cfg.get("enabled"), bool):
+            err("personal_history_policy.enabled must be a boolean")
+        if "mode" in personal_history_policy_cfg:
+            mode = str(personal_history_policy_cfg.get("mode", "")).strip().lower()
+            if mode not in ("off", "advisory", "soft", "strict"):
+                err("personal_history_policy.mode must be one of: off, advisory, soft, strict")
+        if "min_quality" in personal_history_policy_cfg:
+            min_quality = str(personal_history_policy_cfg.get("min_quality", "")).strip().lower()
+            if min_quality not in ("usable", "good"):
+                err("personal_history_policy.min_quality must be one of: usable, good")
+        for nkey in ("max_negative_adjustment", "max_positive_adjustment"):
+            if nkey in personal_history_policy_cfg:
+                value = personal_history_policy_cfg.get(nkey)
+                if not _is_num(value) or float(value) < 0 or float(value) > 1.0:
+                    err(f"personal_history_policy.{nkey} must be a number in range [0..1]")
+        for ikey in ("require_wallet_backed_min", "require_reliable_min"):
+            if ikey in personal_history_policy_cfg:
+                value = personal_history_policy_cfg.get(ikey)
+                if not _is_num(value) or int(float(value)) < 0:
+                    err(f"personal_history_policy.{ikey} must be a non-negative integer")
 
     market_plausibility_cfg = cfg.get("market_plausibility", {})
     if market_plausibility_cfg is not None and not isinstance(market_plausibility_cfg, dict):
