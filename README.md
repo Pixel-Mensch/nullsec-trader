@@ -108,6 +108,44 @@ python .\main.py character status
 
 Wenn `--cargo-m3` oder `--budget-isk` fehlen, fragt die CLI interaktiv nach Cargo und Budget.
 
+### Lokale Web App
+
+Die CLI bleibt der produktive Kernpfad. Zusaetzlich gibt es jetzt eine lokale
+Web-App fuer Browser-Nutzung auf demselben Rechner.
+
+Start:
+
+```powershell
+python -m uvicorn webapp.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+oder nach Installation ueber den Console-Script-Einstieg:
+
+```powershell
+nullsec-trader-web
+```
+
+Dann im Browser:
+
+`http://127.0.0.1:8000`
+
+Aktuelle Seiten:
+
+- Dashboard
+- Analyze
+- Journal
+- Character
+- Config
+
+Wichtige Grenzen:
+
+- lokal gedacht, keine oeffentliche Deployment-Architektur
+- keine neue Nutzerverwaltung
+- keine Shell-Wrapper im Browser; die Web-Schicht nutzt kleine Services und
+  fuer Vollruns einen in-process Runtime-Bridge auf `runtime_runner.run_cli()`
+- CLI, Route-Ranking, Candidate-Scoring, `no_trade`, Reconciliation und
+  persoenliche Analytics bleiben fachlich dieselben Pfade
+
 ### Risk Profiles / Handelsmodi
 
 Das Tool unterstuetzt konfigurierbare Risk Profiles, die echte Auswirkungen auf Candidate-Auswahl, Portfoliobau, Route-Ranking und Output haben.
@@ -553,6 +591,9 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`market_normalization.py`](./market_normalization.py): Replay-Snapshot-Normalisierung
 - [`startup_helpers.py`](./startup_helpers.py): Node-, Chain- und Label-Aufloesung
 - [`models.py`](./models.py): zentrale Datenmodelle wie `TradeCandidate`
+- [`webapp/`](./webapp): lokale FastAPI-/Jinja2-Webschicht mit Services,
+  Templates und statischen Assets fuer Dashboard, Analyse, Journal und
+  Character-Status
 
 ### Runtime-Helfer
 
@@ -604,6 +645,7 @@ Die Test-Suite deckt unter anderem ab:
 - Route Search, Ranking und nicht handelbare Routen
 - Portfolio-Caps fuer Liquidationsdauer, Nachfrage und Konzentration
 - Replay-Integration ueber `main.py`
+- lokale FastAPI-Webseiten und robuste Browser-Routen ohne Live-Login
 - Architektur-Regeln wie den echten Runtime-Pfad und die duenne Rolle von `nullsectrader.py`
 
 ### Worauf bei Refactors zu achten ist

@@ -1,125 +1,117 @@
 # Session Handoff
 
-Date: 2026-03-07 (session 10 personal decision layer)
+Date: 2026-03-07 (session 11 local web UI)
 Branch: `dev`
 
 ## Completed This Session
 
-### Task 5f - Explicit Personal History Decision Layer
+### Task 7 - First Local Web App
 
-Policy and guardrails:
+What changed:
 
-- Added `personal_history_policy` support in `config.json` and
-  `config_loader.py`
-- Supported modes:
-  - `off`
-  - `advisory`
-  - `soft`
-  - `strict`
-- The layer only activates when:
-  - policy mode is `soft` or `strict`
-  - personal quality is at least `usable`
-  - wallet-backed and reliable sample minimums are met
-- Stale, truncated, uncertain, or fee-weak history reduces effect strength and
-  can still force fallback to the generic path
+- Completed the local `webapp/` package as a FastAPI + Jinja2 browser surface
+  over the existing Python runtime
+- Added local pages for:
+  - dashboard
+  - analysis form + results
+  - journal views
+  - character / auth status
+  - config / runtime info
+- Added static CSS/JS and templates under `webapp/templates/` and
+  `webapp/static/`
+- Added `nullsec-trader-web` as a console entry point in `pyproject.toml`
+- Added required runtime dependencies:
+  - `fastapi`
+  - `jinja2`
+  - `uvicorn`
+  - `python-multipart`
+- Added `httpx` in `requirements.txt` for web tests
 
-Decision-layer behavior:
+Service boundaries:
 
-- `confidence_calibration.py` still keeps generic
-  `build_confidence_calibration()` unchanged
-- Added separate helpers for:
-  - policy resolution
-  - personal layer state building
-  - scoped segment indexing
-  - bounded in-place `decision_overall_confidence` adjustment
-  - effect summarization for output
-- Current scoped personal axes:
-  - `exit_type`
-  - `target_market`
-  - `route_id`
-- Effects are intentionally small and capped:
-  - config-driven positive / negative caps
-  - `soft` is weaker than `strict`
+- `webapp/services/dashboard_service.py`
+  - reads config, character summary, journal summary, and personal-history
+    status for the dashboard
+- `webapp/services/analysis_service.py`
+  - builds form defaults and renders route cards from the existing runtime
+- `webapp/services/runtime_bridge.py`
+  - runs `runtime_runner.run_cli()` in-process with patched `sys.argv` /
+    environment, captures stdout, and reads existing plan artifacts
+- `webapp/services/journal_service.py`
+  - exposes overview/open/closed/report/personal/reconcile/unmatched/calibration
+    browser views without changing journal logic
+- `webapp/services/character_service.py`
+  - exposes local auth status, login, sync, and character status using the
+    existing character-context code
+- `webapp/services/config_service.py`
+  - exposes config validity and important runtime sections read-only
 
-Runtime and output wiring:
+Important constraints preserved:
 
-- `runtime_runner.py` now applies the personal layer after generic calibration
-  on candidates and picks
-- The relaxed-candidate path in `portfolio_builder.py` uses the same runtime
-  state, so it does not silently skip the personal layer
-- `execution_plan.py` now shows:
-  - layer mode
-  - quality
-  - generic fallback vs active state
-  - applied scoped effect if one was actually used
-
-Explainability fields now written onto records:
-
-- `personal_history_effect_applied`
-- `personal_history_effect_scope`
-- `personal_history_effect_reason`
-- `personal_history_effect_value`
-- `personal_history_adjusted_confidence`
+- CLI path stayed `main.py` -> `runtime_runner.run_cli()`
+- no silent changes to route ranking, candidate scoring, `no_trade`,
+  reconciliation, or calibration logic
+- no shelling out to `main.py`; the web app uses direct Python services and an
+  in-process runtime bridge
+- the web UI remains local-only and optional
 
 ## Tests
 
-- Updated:
-  - `tests/test_confidence_calibration.py`
-  - `tests/test_execution_plan.py`
-  - `tests/test_character_context.py`
-- Focused tests after the patch:
-  - `python -m pytest -q tests/test_confidence_calibration.py tests/test_execution_plan.py tests/test_character_context.py`
-  - Result: **83 passed**
-- Broader targeted regression:
-  - `python -m pytest -q tests/test_journal.py tests/test_route_search.py tests/test_portfolio.py`
-  - Result: **42 passed**
+- Added:
+  - `tests/test_webapp.py`
+- Targeted web tests:
+  - `python -m pytest -q tests/test_webapp.py`
+  - Result: **7 passed**
+- Focused regression after web patches:
+  - `python -m pytest -q tests/test_execution_plan.py tests/test_confidence_calibration.py tests/test_journal.py tests/test_character_context.py tests/test_webapp.py`
+  - Result: **100 passed**
 - Full suite after the patch:
   - `python -m pytest -q`
-  - Result: **317 passed**
+  - Result: **324 passed**
 
 ## Current Assessment
 
-- Personal history is no longer only visible; it can now directly influence
-  decision confidence when the user explicitly enables it and the data basis is
-  strong enough
-- Weak, sparse, stale, truncated, or unreliable history still falls back to
-  the generic path
-- Generic calibration remains the base model and was not rewritten
-- Route-ranking formulas, `no_trade`, and planned-sell heuristics remain
-  unchanged; only the bounded `decision_overall_confidence` input can move
+- The repository now has a usable local browser UI without forking business
+  logic away from the CLI
+- Dashboard and character pages are useful even without live login because they
+  read cache/default state safely
+- The analysis page is an MVP but genuinely usable: it runs the existing
+  runtime and renders route cards plus text artifacts in the browser
+- Journal pages are practical and honest; reconciliation remains on-demand
 
 ## Known Limits
 
-- The personal layer is intentionally narrow and currently only scopes by
-  `exit_type`, `target_market`, and `route_id`
-- Output parity still mainly exists in runtime stdout and
-  `execution_plan.py`; `runtime_reports.py` summaries do not yet mirror the same
-  compact layer status
-- Wallet history is still snapshot-bound and page-limited, so old trades can
-  keep the personal basis weak or uncertain
+- Full analysis in the web UI still depends on the runtime bridge parsing
+  stdout and artifact files from `runtime_runner.run_cli()`
+- There is no background job queue or persistent run history for browser runs
+- Journal pages currently render the existing formatted text reports inside the
+  UI rather than a richer field-by-field browser table
+- The UI is local-only by design; there is no deployment, multi-user, or cloud
+  story yet
 
 ## Next Recommended Task
 
 Choose one of these, in this order:
 
-- add artifact parity in `runtime_reports.py` if roundtrip/chain summaries also
-  need compact personal-layer visibility
-- otherwise deepen regression evidence for scoped personal effects before any
-  broader personal-model expansion
-- keep avoiding any hidden coupling between personal history and unrelated
-  ranking heuristics
+- reduce `webapp/services/runtime_bridge.py` dependence on stdout/artifact
+  parsing by carving out a smaller structured runtime API for analysis runs
+- improve the journal web pages from formatted-text views toward richer tables
+  only if that can be done without duplicating journal business logic
+- keep browser output aligned with CLI/runtime warnings as new trading features
+  land
 
 ## Relevant Files For The Next Session
 
-- `runtime_runner.py`
-- `execution_plan.py`
-- `confidence_calibration.py`
-- `config_loader.py`
-- `portfolio_builder.py`
-- `tests/test_execution_plan.py`
-- `tests/test_confidence_calibration.py`
-- `tests/test_route_search.py`
-- `tests/test_portfolio.py`
+- `webapp/app.py`
+- `webapp/routes/pages.py`
+- `webapp/services/runtime_bridge.py`
+- `webapp/services/analysis_service.py`
+- `webapp/services/dashboard_service.py`
+- `webapp/services/journal_service.py`
+- `tests/test_webapp.py`
+- `README.md`
+- `ARCHITECTURE.md`
+- `PROJECT_STATE.md`
+- `TASK_QUEUE.md`
+- `docs/module-maps/webapp.md`
 - `docs/module-maps/runtime_runner.md`
-- `docs/module-maps/execution_plan.md`
-- `docs/module-maps/confidence_calibration.md`

@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Analyze | Nullsec Trader Tool{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div>
+    <p class="eyebrow">Route search and execution planning</p>
+    <h2>Run analysis</h2>
+    <p class="hero-copy">Launch the existing runtime with explicit inputs and render the resulting plans in the browser.</p>
+  </div>
+</section>
+
+{% if not data.config_valid %}
+<section class="panel danger">
+  <div class="panel-header">
+    <h3>Configuration is invalid</h3>
+  </div>
+  <ul class="plain-list">
+    {% for error in data.config_errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="split-grid">
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Inputs</h3>
+    </div>
+    <form method="post" action="/analysis/run" class="analysis-form">
+      <label>
+        <span>Budget (ISK)</span>
+        <input type="text" name="budget_isk" value="{{ data.defaults.budget_isk or '' }}" placeholder="e.g. 500m">
+      </label>
+      <label>
+        <span>Cargo (m3)</span>
+        <input type="text" name="cargo_m3" value="{{ data.defaults.cargo_m3 or '' }}" placeholder="e.g. 10000">
+      </label>
+      <label>
+        <span>Risk profile</span>
+        <select name="risk_profile">
+          <option value="">Use config default</option>
+          {% for profile in data.risk_profiles %}
+          <option value="{{ profile.name }}">{{ profile.name }}{% if profile.description %} - {{ profile.description }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="snapshot_only" value="true">
+        <span>Snapshot only</span>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="use_replay" value="true" {% if data.replay_enabled %}checked{% endif %}>
+        <span>Use replay cache</span>
+      </label>
+      <button class="button primary" type="submit">Run analysis</button>
+    </form>
+  </article>
+
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Runtime defaults</h3>
+    </div>
+    <ul class="plain-list">
+      <li>Route mode: {{ data.route_mode }}</li>
+      <li>Replay default: {% if data.replay_enabled %}enabled{% else %}disabled{% endif %}</li>
+      <li>Configured budget: {{ data.defaults.budget_isk or "-" }}</li>
+      <li>Configured cargo: {{ data.defaults.cargo_m3 or "-" }}</li>
+      <li>Default profile: {{ data.config.risk_profile.name or "balanced" }}</li>
+    </ul>
+  </article>
+</section>
+{% endblock %}

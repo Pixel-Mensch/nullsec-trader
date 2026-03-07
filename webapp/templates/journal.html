@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Journal | Nullsec Trader Tool{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div>
+    <p class="eyebrow">Trade journal and reconciliation</p>
+    <h2>Journal</h2>
+    <p class="hero-copy">Read-only journal views plus on-demand reconciliation against cached or live character context.</p>
+  </div>
+  <div class="hero-actions">
+    <form method="post" action="/journal/reconcile">
+      <input type="hidden" name="limit" value="{{ data.limit or 20 }}">
+      <button class="button primary" type="submit">Run reconcile</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="tabs" role="tablist" aria-label="Journal views">
+    {% for tab in data.tabs %}
+    {% if tab == 'unmatched' %}
+    <a class="tab-link {% if data.tab == tab %}is-active{% endif %}" href="/journal/unmatched?limit={{ data.limit }}">{{ tab }}</a>
+    {% else %}
+    <a class="tab-link {% if data.tab == tab %}is-active{% endif %}" href="/journal?tab={{ tab }}&limit={{ data.limit }}">{{ tab }}</a>
+    {% endif %}
+    {% endfor %}
+  </div>
+  <p class="muted">Entries {{ data.entry_count }} | Limit {{ data.limit }} | Reconcile cache {% if data.has_reconciliation_result %}available{% else %}empty{% endif %}</p>
+  {% if data.last_action %}
+  <p class="status-note">{{ data.last_action }}</p>
+  {% endif %}
+  <pre>{{ data.content }}</pre>
+</section>
+{% endblock %}

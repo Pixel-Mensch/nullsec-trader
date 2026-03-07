@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}Results | Nullsec Trader Tool{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div>
+    <p class="eyebrow">Runtime output</p>
+    <h2>Analysis results</h2>
+    <p class="hero-copy">Existing route ranking and planning logic rendered for browser use. Personal history remains advisory unless explicitly enabled in config.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="button secondary" href="/analysis">Run another analysis</a>
+  </div>
+</section>
+
+{% if result.error %}
+<section class="panel danger">
+  <div class="panel-header">
+    <h3>Run error</h3>
+  </div>
+  <p>{{ result.error }}</p>
+  {% if result.details %}
+  <ul class="plain-list">
+    {% for item in result.details %}
+    <li>{{ item }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="card-grid">
+  <article class="info-card">
+    <p class="card-label">Run mode</p>
+    <h3>{{ result.runtime_mode or "analysis" }}</h3>
+    <p class="stat-line">Profile {{ result.selected_profile or "-" }}</p>
+    <p class="muted">Plan {{ result.plan_id or "-" }}</p>
+  </article>
+  <article class="info-card">
+    <p class="card-label">Routes</p>
+    <h3>{{ result.route_count or 0 }}</h3>
+    <p class="stat-line">Actionable {{ result.actionable_route_count or 0 }}</p>
+    <p class="muted">Picks {{ result.pick_count or 0 }}</p>
+  </article>
+  <article class="info-card">
+    <p class="card-label">Replay</p>
+    <h3>{% if result.used_replay %}Enabled{% else %}Disabled{% endif %}</h3>
+    <p class="stat-line">Exit code {{ result.exit_code }}</p>
+    <p class="muted">Snapshot {{ result.snapshot_path or "-" }}</p>
+  </article>
+  <article class="info-card">
+    <p class="card-label">Artifacts</p>
+    <h3>{{ result.created_files|length }}</h3>
+    <p class="stat-line">Manifest routes {{ result.manifest.route_count or result.route_count or 0 }}</p>
+    <p class="muted">Runtime bridge</p>
+  </article>
+</section>
+
+<section class="split-grid">
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Personal history layer</h3>
+    </div>
+    <ul class="plain-list">
+      {% for line in result.personal_layer_lines %}
+      <li>{{ line }}</li>
+      {% else %}
+      <li>No personal history section found for this run.</li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Artifacts</h3>
+    </div>
+    <ul class="plain-list">
+      {% for path in result.created_files %}
+      <li>{{ path }}</li>
+      {% else %}
+      <li>No artifact files reported.</li>
+      {% endfor %}
+    </ul>
+  </article>
+</section>
+
+{% if result.route_cards %}
+<section class="route-stack">
+  {% for route in result.route_cards %}
+  <article class="route-card">
+    <div class="route-head">
+      <div>
+        <p class="card-label">Route</p>
+        <h3>{{ route.route_label or route.route_id or "Unnamed route" }}</h3>
+      </div>
+      <span class="pill {% if route.actionable %}good{% else %}muted{% endif %}">{% if route.actionable %}Actionable{% else %}No trade{% endif %}</span>
+    </div>
+    <div class="route-metrics">
+      <span>Confidence {{ "%.2f"|format(route.route_confidence or 0) }}</span>
+      <span>Transport {{ "%.2f"|format(route.transport_confidence or 0) }}</span>
+      <span>Capital lock {{ "%.2f"|format(route.capital_lock_risk or 0) }}</span>
+      <span>Expected profit {{ "%.0f"|format(route.expected_profit_total or 0) }} ISK</span>
+      <span>Picks {{ route.pick_count }}</span>
+    </div>
+    {% if route.calibration_warning or route.route_prune_reason %}
+    <ul class="plain-list">
+      {% if route.calibration_warning %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
+      {% if route.route_prune_reason %}<li>{{ route.route_prune_reason }}</li>{% endif %}
+    </ul>
+    {% endif %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Qty</th>
+            <th>Exit</th>
+            <th>Expected days</th>
+            <th>Confidence</th>
+            <th>Expected profit</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pick in route.picks %}
+          <tr>
+            <td>{{ pick.name or pick.item_name or "Unknown" }}</td>
+            <td>{{ pick.proposed_qty or pick.qty or "-" }}</td>
+            <td>{{ pick.proposed_exit_type or pick.exit_type or "-" }}</td>
+            <td>{{ pick.proposed_expected_days_to_sell or pick.expected_days_to_sell or "-" }}</td>
+            <td>{{ "%.2f"|format(pick.proposed_overall_confidence_raw or pick.overall_confidence or pick.strict_confidence_score or 0) }}</td>
+            <td>{{ "%.0f"|format(pick.proposed_expected_profit or pick.expected_realized_profit_90d or pick.profit or 0) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="panel">
+  <div class="panel-header">
+    <h3>No route cards</h3>
+  </div>
+  <p class="muted">This can be normal for snapshot-only runs or no-trade outcomes.</p>
+  {% if result.snapshot_path %}
+  <p>Snapshot written to {{ result.snapshot_path }}</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if result.no_trade_text or result.summary_text or result.leaderboard_text or result.execution_plan_text %}
+<section class="panel">
+  <div class="panel-header">
+    <h3>Detailed reports</h3>
+  </div>
+  {% if result.no_trade_text %}
+  <details open>
+    <summary>No-trade report</summary>
+    <pre>{{ result.no_trade_text }}</pre>
+  </details>
+  {% endif %}
+  {% if result.summary_text %}
+  <details>
+    <summary>Roundtrip summary</summary>
+    <pre>{{ result.summary_text }}</pre>
+  </details>
+  {% endif %}
+  {% if result.leaderboard_text %}
+  <details>
+    <summary>Route leaderboard</summary>
+    <pre>{{ result.leaderboard_text }}</pre>
+  </details>
+  {% endif %}
+  {% if result.execution_plan_text %}
+  <details>
+    <summary>Execution plan text</summary>
+    <pre>{{ result.execution_plan_text }}</pre>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

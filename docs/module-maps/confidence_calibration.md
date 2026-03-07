@@ -69,6 +69,7 @@ to `decision_overall_confidence` without rewriting the generic model.
 - `runtime_runner.py`
 - `execution_plan.py`
 - `journal_cli.py`
+- `webapp/services/dashboard_service.py`
 - `portfolio_builder.py`
 - `route_search.py`
 

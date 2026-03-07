@@ -31,6 +31,7 @@ Current module maps:
 - `docs/module-maps/eve_sso.md`
 - `docs/module-maps/eve_character_client.md`
 - `docs/module-maps/journal_reconciliation.md`
+- `docs/module-maps/webapp.md`
 
 Use the relevant module map before opening one of these larger files.
 
@@ -78,6 +79,8 @@ Use this section to avoid loading large unrelated modules.
 - Generic confidence calibration from journal outcomes: `confidence_calibration.py`
 - Personal trade analytics and personal decision-layer basis:
   `journal_reporting.py`, `confidence_calibration.py`
+- Local browser UI and service bridge: `webapp/app.py`, `webapp/routes/pages.py`,
+  `webapp/services/`
 - Startup node and chain resolution: `startup_helpers.py`
 
 ## Runtime Flow
@@ -110,6 +113,17 @@ Generic confidence calibration is fed by journal data:
 -> `confidence_calibration.py`
 -> `runtime_runner.py` applies calibrated confidence to candidates, picks, and
 route results
+
+Local web flow is separate from the CLI and intentionally thin:
+
+`webapp/app.py`
+-> `webapp/routes/pages.py`
+-> `webapp/services/*`
+-> direct calls into `character_profile.py`, `journal_reporting.py`,
+   `confidence_calibration.py`, and `journal_store.py`
+-> or `webapp/services/runtime_bridge.py`
+-> `runtime_runner.run_cli()` in-process for full analysis runs
+-> existing artifacts and manifest files rendered into templates
 
 Personal history flow is separate on purpose and only becomes decision-relevant
 through an explicit policy gate:
@@ -148,6 +162,8 @@ Local mutable state:
   wallet-reconciliation summaries on each entry, including wallet-snapshot
   quality fields that keep personal-history output independent from a fresh
   live sync
+- `webapp/` adds a local-only FastAPI/Jinja2 UI layer and does not replace the
+  CLI entry path
 
 ## Test Entry Points
 
@@ -176,6 +192,8 @@ Most recent focused work on 2026-03-07 touched:
   calibration basis with explicit fallback-to-generic guardrails
 - an opt-in personal decision layer with strict caps, explainability fields,
   and runtime / execution-plan visibility
+- a local FastAPI/Jinja2 browser UI that reuses runtime, journal, and
+  character services without rewriting trade logic
 
 Treat those areas as the most likely source of doc drift until targeted tests
 confirm the current branch state.
@@ -194,6 +212,7 @@ confirm the current branch state.
 - Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
 - Execution plan rendering: `execution_plan.py`
 - Runtime orchestration: `runtime_runner.py`
+- Local browser delivery and service glue: `webapp/`
 
 ## AI Navigation Notes
 

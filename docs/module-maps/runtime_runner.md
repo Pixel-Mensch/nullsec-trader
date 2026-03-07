@@ -64,6 +64,7 @@ not a full line-by-line review.
 
 - `main.py`
 - CLI wrapper scripts through `main.py`
+- `webapp/services/runtime_bridge.py`
 - integration-style runtime tests
 
 ## Common Change Types
@@ -82,6 +83,8 @@ not a full line-by-line review.
 - generic calibration and the personal layer must stay ordered and separate
 - easy to accidentally apply the personal layer twice or forget the relaxed
   candidate path in `portfolio_builder.py`
+- the local web UI currently bridges into `run_cli()` in-process, so stdout and
+  artifact output remain part of that contract
 
 ## Tests
 

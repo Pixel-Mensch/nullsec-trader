@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 10 personal decision layer)
+Last updated: 2026-03-07 (session 11 local web UI)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -269,3 +269,30 @@ full backlog scrape.
 - Expected result: calibration behavior remains explainable and safe as journal
   data grows, with targeted tests for scope selection, fallback behavior,
   personal-layer caps, and decision confidence application.
+
+### Task 7: Add a first local web UI without touching trading logic
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-07
+- What was done:
+  - Added `webapp/` with a local FastAPI app, Jinja2 templates, static assets,
+    and small service modules for dashboard, analysis, journal, character, and
+    config pages
+  - Kept the CLI intact and reused existing Python modules instead of building a
+    second trading core
+  - Added `webapp/services/runtime_bridge.py` to run full analyses in-process
+    through `runtime_runner.run_cli()` and render existing artifacts in the UI
+  - Added `nullsec-trader-web` packaging entry point plus FastAPI/Jinja2
+    dependencies
+  - Added route-level web tests in `tests/test_webapp.py`
+
+### Task 7b: Reduce runtime-bridge coupling for the web UI
+
+- Priority: P2
+- Status: ready
+- Relevant files: `runtime_runner.py`, `webapp/services/runtime_bridge.py`,
+  `webapp/services/analysis_service.py`, `tests/test_webapp.py`
+- Expected result: replace some stdout/artifact parsing in the web analysis path
+  with a smaller structured runtime service API, without rewriting CLI behavior
+  or duplicating trading logic.

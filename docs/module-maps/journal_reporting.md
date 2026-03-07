@@ -50,6 +50,8 @@ personal-history reports without owning journal persistence or wallet matching.
 ## Used By
 
 - `journal_cli.py`
+- `webapp/services/dashboard_service.py`
+- `webapp/services/journal_service.py`
 - tests and local tooling through `nullsectrader.py`
 
 ## Common Change Types

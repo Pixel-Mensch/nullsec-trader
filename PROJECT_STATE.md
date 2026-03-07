@@ -27,6 +27,13 @@ Reviewed this session:
 - `character_profile.py`
 - `eve_character_client.py`
 - `eve_sso.py`
+- `webapp/app.py`
+- `webapp/routes/pages.py`
+- `webapp/services/analysis_service.py`
+- `webapp/services/dashboard_service.py`
+- `webapp/services/journal_service.py`
+- `webapp/services/character_service.py`
+- `webapp/services/runtime_bridge.py`
 - `journal_reconciliation.py`
 - `journal_store.py`
 - `journal_reporting.py`
@@ -45,6 +52,7 @@ Reviewed this session:
 - `tests/test_portfolio.py`
 - `tests/test_route_search.py`
 - `tests/test_risk_profiles.py`
+- `tests/test_webapp.py`
 - current `git status`
 - `python -m pytest -q`
 
@@ -112,6 +120,13 @@ Not fully re-audited this session:
 - every personal decision-layer effect is explainable on records and route
   results via applied flag, scope, reason, and capped effect value; weak or
   sparse history still falls back to the generic path
+- a local FastAPI + Jinja2 web UI now exists under `webapp/` with dashboard,
+  analysis, journal, character, and config pages
+- the web UI reuses existing runtime, journal, calibration, and character
+  functions through a service layer; it does not replace or break the CLI
+- full analysis runs in the web UI currently use an in-process bridge to
+  `runtime_runner.run_cli()` and read the existing artifact files instead of
+  re-implementing trading logic
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
@@ -141,6 +156,9 @@ Not fully re-audited this session:
   so session docs need to stay aligned with that single location
 - module-map coverage is still partial; several large support modules remain
   unmapped
+- the web UI currently depends on stdout/artifact parsing for full analysis
+  runs; that is acceptable for an MVP but still tighter coupling than a future
+  structured runtime API
 - business docs are strong, but session-state docs were not keeping pace
 - legacy live market auth in `runtime_clients.py` and new private-character SSO
   in `eve_sso.py` are separate paths for now; that is intentional for low-risk
@@ -178,6 +196,7 @@ centered on:
   sample-size/data-quality guardrails and visible explainability
 - compact runtime visibility for personal-history quality, fallback reasons,
   and applied scoped personal adjustments
+- a first local browser UI over the existing runtime and journal workflows
 
 Files that indicate this focus:
 
@@ -202,6 +221,10 @@ Files that indicate this focus:
 - `tests/test_eve_sso.py`
 - `tests/test_execution_plan.py`
 - `tests/test_portfolio.py`
+- `webapp/app.py`
+- `webapp/routes/pages.py`
+- `webapp/services/runtime_bridge.py`
+- `tests/test_webapp.py`
 
 ## Known Issues And Uncertainties
 
@@ -230,6 +253,8 @@ Files that indicate this focus:
   `decision_overall_confidence` value they were designed to consume.
 - The personal decision layer currently scopes only by `exit_type`,
   `target_market`, and `route_id`. It is not a general personal market model.
+- The local web UI is now usable, but its full-run analysis page still depends
+  on CLI-style stdout and artifact contracts exposed by `runtime_runner.py`.
 - Matching remains intentionally honest rather than magical: ambiguous
   transactions stay visible as uncertain, and unmatched wallet activity is
   reported separately instead of being forced onto a trade entry.
