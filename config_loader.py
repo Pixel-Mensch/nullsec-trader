@@ -864,7 +864,12 @@ def validate_config(cfg: dict) -> dict:
         ):
             if bkey in character_context_cfg and not isinstance(character_context_cfg.get(bkey), bool):
                 err(f"character_context.{bkey} must be a boolean")
-        for nkey in ("wallet_journal_max_pages", "wallet_transactions_max_pages", "profile_cache_ttl_sec"):
+        for nkey in (
+            "wallet_journal_max_pages",
+            "wallet_transactions_max_pages",
+            "wallet_warn_stale_after_sec",
+            "profile_cache_ttl_sec",
+        ):
             if nkey in character_context_cfg:
                 try:
                     value = int(character_context_cfg.get(nkey, 0) or 0)

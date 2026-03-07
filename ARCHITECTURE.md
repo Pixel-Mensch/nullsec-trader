@@ -59,6 +59,8 @@ Use this section to avoid loading large unrelated modules.
   `character_profile.py`
 - Wallet-to-journal matching and personal trade reconciliation:
   `journal_reconciliation.py`
+- Wallet snapshot persistence and reconciliation state storage:
+  `journal_store.py`
 - Candidate generation, planned-sell math, route-wide candidate scoring:
   `candidate_engine.py`
 - Market plausibility heuristics: `market_plausibility.py`
@@ -93,7 +95,8 @@ The main runtime flow is:
 
 Journal reconciliation flow:
 
-`character_profile.py` wallet snapshot
+`eve_character_client.py` paged wallet fetches
+-> `character_profile.py` wallet snapshot with freshness / coverage metadata
 -> `journal_reconciliation.py`
 -> `journal_store.py`
 -> `journal_reporting.py` / `journal_cli.py`
@@ -123,7 +126,9 @@ Local mutable state:
 - `cache/` holds runtime cache, SSO token/metadata, character profile cache,
   and journal data
 - `trade_journal.sqlite3` now stores both manual trade events and optional
-  wallet-reconciliation summaries on each entry
+  wallet-reconciliation summaries on each entry, including wallet-snapshot
+  quality fields that keep personal-history output independent from a fresh
+  live sync
 
 ## Test Entry Points
 
@@ -146,6 +151,8 @@ Most recent focused work on 2026-03-07 touched:
 - optional private character context via EVE SSO / ESI
 - wallet-to-journal reconciliation and personal trade-history reporting
 - open-order warning tiers in output and journal views
+- wallet paging, freshness visibility, and conservative fee/ref matching for
+  older or truncated wallet snapshots
 
 Treat those areas as the most likely source of doc drift until targeted tests
 confirm the current branch state.

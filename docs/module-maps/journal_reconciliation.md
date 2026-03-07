@@ -8,9 +8,10 @@ entries with explicit confidence, reasons, and unmatched/ambiguous tracking.
 ## Responsibilities
 
 - normalize raw wallet transaction and journal snapshots
+- evaluate snapshot freshness, page coverage, and truncation before matching
 - score candidate matches against local journal entries
 - distinguish matched, ambiguous, and unmatched wallet activity
-- derive wallet-based realized profit, fee estimates, and reconciliation status
+- derive wallet-based realized profit, fee estimates, fee-match quality, and reconciliation status
 
 ## Inputs
 
@@ -24,6 +25,7 @@ entries with explicit confidence, reasons, and unmatched/ambiguous tracking.
 - unmatched wallet transaction list
 - ambiguous transaction list
 - unmatched wallet-journal fee list
+- wallet-data quality warnings and reconciliation-basis metadata
 
 ## Key Files
 
@@ -50,12 +52,14 @@ entries with explicit confidence, reasons, and unmatched/ambiguous tracking.
 
 - tighten or relax transaction matching thresholds
 - add new wallet-journal fee/ref-type handling
+- tune stale/truncated snapshot handling
 - refine reconciliation statuses or match reasons
 
 ## Risk Areas
 
 - false-positive matching when the same type is traded repeatedly
 - stale or paged wallet snapshots can make clean trades look unmatched
+- fee fallback must stay conservative; unique-candidate only is intentional
 - wallet-based profit excludes costs not visible in wallet data unless mixed in explicitly
 
 ## Tests

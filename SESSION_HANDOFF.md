@@ -1,106 +1,118 @@
 # Session Handoff
 
-Date: 2026-03-07 (session 6 wallet journal reconciliation)
+Date: 2026-03-07 (session 7 wallet history quality)
 Branch: `dev`
 
 ## Completed This Session
 
-### Task F - Wallet Journal / Transaction Reconciliation
+### Task 5b - Wallet Paging, Freshness, And Fee-Matching Quality
 
-New module:
+Wallet fetch / cache layer:
 
-- `journal_reconciliation.py` - normalizes cached wallet transactions and
-  wallet journal entries, scores candidate matches against local journal
-  entries, keeps ambiguous/unmatched activity explicit, and derives
-  wallet-based realized profit plus fee estimates
+- `eve_character_client.py` now supports optional paging metadata for wallet
+  journal and wallet transactions:
+  - `pages_loaded`
+  - `total_pages`
+  - `page_limit`
+  - `history_truncated`
+- `character_profile.py` now stores wallet snapshot metadata in the local
+  character profile:
+  - snapshot timestamp
+  - stale threshold
+  - journal/transaction page counts
+  - journal/transaction truncation flags
+  - oldest/newest wallet timestamps
+  - component status (`loaded`, `disabled`, `error`)
 
-Journal persistence:
+Reconciliation and persistence:
 
-- `journal_store.py` now patch-safely extends `journal_entries` with:
-  - matched wallet transaction IDs
-  - matched wallet journal IDs
-  - ambiguous wallet transaction IDs
-  - matched buy/sell qty and value
-  - first/last matched timestamps
-  - realized fee estimate
-  - realized wallet profit
-  - reconciliation status, confidence, reason
-  - source/target location IDs
-  - character ID and open-order warning fields
-- Reconciliation is opt-in. If no wallet data is available, no empty
-  reconciliation result is persisted over existing journal entries.
+- `journal_reconciliation.py` now evaluates wallet snapshot quality before
+  matching:
+  - fresh vs stale
+  - full vs partial vs truncated history
+  - transaction-window coverage for older journal entries
+- Entries can now stay `match_uncertain` when a truncated transaction window
+  does not actually cover the trade age, instead of being pushed toward a false
+  `suggested_not_bought`.
+- Fee matching is now explicitly tiered:
+  - `exact`
+  - `partial`
+  - `fallback`
+  - `uncertain`
+  - `unavailable`
+- Conservative fee fallback was added only for unique nearby wallet-journal
+  candidates. Multiple plausible candidates remain uncertain.
+- `journal_store.py` now persists the key wallet-quality fields on each journal
+  entry:
+  - `fee_match_quality`
+  - `wallet_snapshot_age_sec`
+  - `wallet_data_freshness`
+  - `wallet_history_quality`
+  - `wallet_history_truncated`
+  - `wallet_transactions_pages_loaded`
+  - `wallet_journal_pages_loaded`
+  - `reconciliation_basis`
 
-CLI and reporting:
+Reporting / CLI:
 
-- `journal_cli.py` adds:
+- Existing commands stayed the same:
   - `journal reconcile`
   - `journal personal`
   - `journal unmatched`
-- `journal_reporting.py` now uses reconciled wallet metrics when present,
-  while keeping manual journal data as fallback.
-- `execution_plan.py` now surfaces order-overlap warning tiers more clearly:
-  route header overlap counts plus per-pick `[WARN][ORDER-*]` lines.
-
-Plan/import metadata:
-
-- `journal_models.py` now stores character ID, source/target location IDs, and
-  open-order warning metadata in new trade-plan manifests so later wallet
-  matching has better context.
+- `journal_reporting.py` now shows wallet quality summary lines and warnings for:
+  - stale snapshot basis
+  - truncated history
+  - limited transaction window
+  - fee-match quality
+  - reconciliation basis
 
 ## Tests
 
-- New: `tests/test_journal_reconciliation.py`
-- Updated coverage via existing:
-  - `tests/test_journal.py`
+- Updated:
   - `tests/test_character_context.py`
-  - `tests/test_execution_plan.py`
-  - `tests/test_confidence_calibration.py`
-  - `tests/test_core.py`
-  - `tests/test_architecture.py`
-- Focused tests: **104 passed**
+  - `tests/test_journal_reconciliation.py`
+- Existing coverage still exercised:
+  - `tests/test_journal.py`
+- Focused tests after the patch:
+  - `python -m pytest -q tests/test_character_context.py tests/test_journal_reconciliation.py tests/test_journal.py`
+  - Result: **28 passed**
 
 ## Current Assessment
 
-- Wallet transactions and wallet journal data are now meaningfully linkable to
-  local trade-journal entries without requiring live ESI on every run.
-- Matching is intentionally conservative:
-  - clear matches are persisted
-  - ambiguous matches stay visible as uncertain
-  - unmatched wallet activity is reported separately
-- Personal trade history now has a first reliable base:
-  - wallet-based realized profit
-  - real sell duration from matched timestamps
-  - improved open-position visibility
-  - better suggested-vs-real comparison
-- Open-order overlap is now a warning tier in output and journal context, but
-  still not baked into route ranking.
+- Wallet history is now more honest and more useful:
+  - multi-page wallet snapshots retain page-depth metadata
+  - stale vs fresh cache/live basis is visible
+  - truncated history is surfaced instead of hidden
+  - fee linking is better for older or incomplete snapshots, without aggressive
+    guessing
+- The journal remains usable without live ESI.
+- Reconciliation is still intentionally conservative and snapshot-bound.
 
 ## Known Limits
 
-- Reconciliation is snapshot-based. If the cached/live wallet pages do not
-  cover the real trade window, entries can remain `wallet_unmatched` or
-  `match_uncertain`.
-- Wallet-derived profit currently only includes wallet-visible fee/tax refs.
-  Shipping and other off-wallet costs remain separate.
-- Confidence calibration still uses the existing journal model and was not
-  reworked to explicitly prefer reconciled wallet outcomes in this session.
+- This is still not a full historical sync. If the configured page window does
+  not reach the real trade age, older trades can remain uncertain.
+- Fee fallback only runs for unique nearby candidates. It will deliberately
+  miss some real fees rather than overmatch.
+- Wallet-based profit still excludes off-wallet costs like shipping.
 
 ## Next Recommended Task
 
-Deepen Task 5b from `TASK_QUEUE.md`:
+Use the cleaner reconciliation basis for higher-level analytics, not scoring:
 
-- improve wallet paging/freshness controls
-- extend fee/ref matching for older or multi-page histories
-- decide later, with evidence, whether reconciliation should feed confidence
-  calibration more directly
+- improve personal trade-history summaries from reconciled outcomes
+- evaluate whether confidence calibration should consume reconciled wallet
+  outcomes more directly
+- keep route ranking and candidate scoring unchanged unless a separate,
+  evidence-backed task requires it
 
 ## Relevant Files For The Next Session
 
+- `eve_character_client.py`
+- `character_profile.py`
 - `journal_reconciliation.py`
 - `journal_store.py`
 - `journal_reporting.py`
 - `journal_cli.py`
-- `character_profile.py`
-- `execution_plan.py`
-- `docs/module-maps/journal_reconciliation.md`
+- `tests/test_character_context.py`
 - `tests/test_journal_reconciliation.py`

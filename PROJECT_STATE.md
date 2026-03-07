@@ -89,6 +89,11 @@ Not fully re-audited this session:
 - wallet transactions and wallet journal can now be reconciled against local
   journal entries with persisted match IDs, match confidence, reconciliation
   status, and wallet-based realized-profit estimates
+- wallet snapshots now persist page-depth and freshness metadata, so
+  reconciliation can distinguish fresh vs stale snapshots and full vs truncated
+  wallet windows
+- wallet-journal fee matching is now tiered (`exact`, `partial`, `fallback`,
+  `uncertain`, `unavailable`) instead of silently treating all misses the same
 - journal CLI now supports `reconcile`, `personal`, and `unmatched` views for
   personal trade-history work without requiring live ESI
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
@@ -127,6 +132,9 @@ Not fully re-audited this session:
 - wallet reconciliation is intentionally conservative: it is snapshot-based and
   can only match the transaction/journal pages currently available in cache or
   live sync
+- wallet history is now more transparent, but still bounded by configured page
+  limits; very old trades can stay uncertain when the loaded transaction window
+  does not reach far enough back
 
 ## Current Focus
 
@@ -140,6 +148,8 @@ centered on:
 - targeted core-logic cleanup in portfolio construction
 - optional private character-context integration and cacheable ESI sync
 - wallet-to-journal reconciliation and personal trade-history reporting
+- wallet paging, freshness visibility, and conservative fee/ref matching for
+  older or truncated snapshots
 
 Files that indicate this focus:
 
@@ -178,6 +188,9 @@ Files that indicate this focus:
 - Journal reconciliation is also optional by design. Without wallet data, the
   manual journal remains usable and reconciliation does not persist empty
   results over existing entries.
+- Wallet reconciliation now exposes snapshot freshness, page coverage, and
+  truncation warnings in the journal views. This reduces false confidence, but
+  does not create a historical backfill system.
 - Matching remains intentionally honest rather than magical: ambiguous
   transactions stay visible as uncertain, and unmatched wallet activity is
   reported separately instead of being forced onto a trade entry.

@@ -53,6 +53,14 @@ JOURNAL_ENTRY_EXTRA_COLUMNS = {
     "reconciliation_status": "TEXT NOT NULL DEFAULT ''",
     "match_confidence": "REAL NOT NULL DEFAULT 0",
     "match_reason": "TEXT NOT NULL DEFAULT ''",
+    "fee_match_quality": "TEXT NOT NULL DEFAULT ''",
+    "wallet_snapshot_age_sec": "REAL NOT NULL DEFAULT -1",
+    "wallet_data_freshness": "TEXT NOT NULL DEFAULT ''",
+    "wallet_history_quality": "TEXT NOT NULL DEFAULT ''",
+    "wallet_history_truncated": "INTEGER NOT NULL DEFAULT 0",
+    "wallet_transactions_pages_loaded": "INTEGER NOT NULL DEFAULT 0",
+    "wallet_journal_pages_loaded": "INTEGER NOT NULL DEFAULT 0",
+    "reconciliation_basis": "TEXT NOT NULL DEFAULT ''",
     "reconciliation_updated_at": "TEXT NOT NULL DEFAULT ''",
 }
 
@@ -163,6 +171,14 @@ def initialize_journal_db(db_path: str | None = None) -> str:
                     reconciliation_status TEXT NOT NULL DEFAULT '',
                     match_confidence REAL NOT NULL DEFAULT 0,
                     match_reason TEXT NOT NULL DEFAULT '',
+                    fee_match_quality TEXT NOT NULL DEFAULT '',
+                    wallet_snapshot_age_sec REAL NOT NULL DEFAULT -1,
+                    wallet_data_freshness TEXT NOT NULL DEFAULT '',
+                    wallet_history_quality TEXT NOT NULL DEFAULT '',
+                    wallet_history_truncated INTEGER NOT NULL DEFAULT 0,
+                    wallet_transactions_pages_loaded INTEGER NOT NULL DEFAULT 0,
+                    wallet_journal_pages_loaded INTEGER NOT NULL DEFAULT 0,
+                    reconciliation_basis TEXT NOT NULL DEFAULT '',
                     reconciliation_updated_at TEXT NOT NULL DEFAULT '',
                     first_buy_at TEXT NOT NULL DEFAULT '',
                     last_sell_at TEXT NOT NULL DEFAULT '',
@@ -677,10 +693,16 @@ def reconcile_journal_with_wallet(
     wallet_snapshot: dict | None,
     *,
     character_id: int = 0,
+    context_source: str = "wallet",
 ) -> dict:
     path = initialize_journal_db(db_path)
     entries = fetch_journal_entries(path)
-    result = reconcile_wallet_snapshot(entries, wallet_snapshot, character_id=character_id)
+    result = reconcile_wallet_snapshot(
+        entries,
+        wallet_snapshot,
+        character_id=character_id,
+        context_source=context_source,
+    )
     result["db_path"] = path
     if not bool(result.get("wallet_available", False)):
         result["persisted"] = False
@@ -707,6 +729,14 @@ def reconcile_journal_with_wallet(
                         reconciliation_status = ?,
                         match_confidence = ?,
                         match_reason = ?,
+                        fee_match_quality = ?,
+                        wallet_snapshot_age_sec = ?,
+                        wallet_data_freshness = ?,
+                        wallet_history_quality = ?,
+                        wallet_history_truncated = ?,
+                        wallet_transactions_pages_loaded = ?,
+                        wallet_journal_pages_loaded = ?,
+                        reconciliation_basis = ?,
                         open_order_warning_tier = ?,
                         open_order_warning_text = ?,
                         reconciliation_updated_at = ?,
@@ -728,6 +758,14 @@ def reconcile_journal_with_wallet(
                         str(entry.get("reconciliation_status", "") or ""),
                         float(entry.get("match_confidence", 0.0) or 0.0),
                         str(entry.get("match_reason", "") or ""),
+                        str(entry.get("fee_match_quality", "") or ""),
+                        float(entry.get("wallet_snapshot_age_sec", -1.0) or -1.0),
+                        str(entry.get("wallet_data_freshness", "") or ""),
+                        str(entry.get("wallet_history_quality", "") or ""),
+                        1 if bool(entry.get("wallet_history_truncated", False)) else 0,
+                        int(entry.get("wallet_transactions_pages_loaded", 0) or 0),
+                        int(entry.get("wallet_journal_pages_loaded", 0) or 0),
+                        str(entry.get("reconciliation_basis", "") or ""),
                         str(entry.get("open_order_warning_tier", "") or ""),
                         str(entry.get("open_order_warning_text", "") or ""),
                         updated_at,
@@ -749,6 +787,7 @@ def reconcile_journal_with_character_context(db_path: str | None, context: dict 
         db_path,
         wallet_snapshot,
         character_id=int(ctx.get("character_id", profile.get("character_id", 0)) or 0),
+        context_source=str(ctx.get("source", "default") or "default"),
     )
     result["context_source"] = str(ctx.get("source", "default") or "default")
     result["context_available"] = bool(ctx.get("available", False))

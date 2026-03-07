@@ -89,7 +89,22 @@ def _import_manifest(db_path: str, *, duplicate_pick: bool = False, with_overlap
     return manifest, route_results
 
 
-def _wallet_snapshot(*, buy_qty: float = 10.0, sell_qty: float = 10.0, tx_type_id: int = 34) -> dict:
+def _wallet_snapshot(
+    *,
+    buy_qty: float = 10.0,
+    sell_qty: float = 10.0,
+    tx_type_id: int = 34,
+    snapshot_at: str = "2026-03-07T12:00:00+00:00",
+    warn_stale_after_sec: int = 86400,
+    transactions_pages_loaded: int = 1,
+    transactions_total_pages: int = 1,
+    transactions_history_truncated: bool = False,
+    journal_pages_loaded: int = 1,
+    journal_total_pages: int = 1,
+    journal_history_truncated: bool = False,
+    journal_status: str = "loaded",
+    transactions_status: str = "loaded",
+) -> dict:
     transactions = [
         {
             "transaction_id": 101,
@@ -116,7 +131,17 @@ def _wallet_snapshot(*, buy_qty: float = 10.0, sell_qty: float = 10.0, tx_type_i
             }
         )
     return {
+        "snapshot_at": snapshot_at,
+        "warn_stale_after_sec": int(warn_stale_after_sec),
+        "journal_status": journal_status,
+        "transactions_status": transactions_status,
         "balance": 125_000_000.0,
+        "transactions_pages_loaded": transactions_pages_loaded,
+        "transactions_total_pages": transactions_total_pages,
+        "transactions_history_truncated": transactions_history_truncated,
+        "journal_pages_loaded": journal_pages_loaded,
+        "journal_total_pages": journal_total_pages,
+        "journal_history_truncated": journal_history_truncated,
         "transactions": transactions,
         "journal_entries": [
             {"id": 9001, "ref_id": 5001, "ref_type": "brokers_fee", "amount": -5.0, "date": "2026-03-08T10:00:05+00:00"},
@@ -140,6 +165,8 @@ def test_reconcile_journal_with_wallet_matches_clear_buy_sell_flow() -> None:
     assert entry["reconciliation_status"] == "fully_sold"
     assert entry["matched_wallet_transaction_ids"] == [101, 102]
     assert entry["matched_wallet_journal_ids"] == [9001, 9002]
+    assert entry["fee_match_quality"] == "exact"
+    assert entry["reconciliation_basis"] == "wallet:full_window"
     assert abs(float(entry["matched_buy_qty"]) - 10.0) < 1e-9
     assert abs(float(entry["matched_sell_qty"]) - 10.0) < 1e-9
     assert abs(float(entry["realized_fee_estimate"]) - 11.0) < 1e-9
@@ -226,6 +253,7 @@ def test_reconciliation_overview_and_personal_history_include_wallet_status() ->
 
     assert "WALLET RECONCILIATION" in overview
     assert "Matched entries: 1" in overview
+    assert "Wallet quality:" in overview
     assert "PERSONAL TRADE HISTORY" in personal
     assert "Soll/Ist groesste Abweichungen" in personal
 
@@ -270,6 +298,171 @@ def test_run_journal_cli_reconcile_and_unmatched_use_cached_character_context() 
     assert "WALLET RECONCILIATION" in out
     assert "PERSONAL TRADE HISTORY" in out
     assert "UNGEMATCHTE WALLET-AKTIVITAET" in out
+
+
+def test_reconcile_reports_truncated_and_stale_wallet_history() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "journal.sqlite3")
+        _import_manifest(db_path)
+        result = nst.reconcile_journal_with_wallet(
+            db_path,
+            _wallet_snapshot(
+                snapshot_at="2026-03-01T12:00:00+00:00",
+                warn_stale_after_sec=3600,
+                transactions_pages_loaded=2,
+                transactions_total_pages=5,
+                transactions_history_truncated=True,
+                journal_pages_loaded=2,
+                journal_total_pages=4,
+                journal_history_truncated=True,
+            ),
+            character_id=90000001,
+        )
+        overview = nst.format_reconciliation_overview(result, limit=5)
+        unmatched = nst.format_unmatched_wallet_activity(result, limit=5)
+
+    assert result["wallet_history_truncated"] is True
+    assert result["wallet_data_freshness"] == "stale"
+    assert result["reconciliation_basis"] == "wallet:truncated_window"
+    assert any("truncated by page limit" in str(w) for w in result["data_quality_warnings"])
+    assert "history=truncated" in overview
+    assert "tx_pages=2/5" in overview
+    assert "journal_pages=2/4" in unmatched
+
+
+def test_reconcile_marks_old_entries_uncertain_when_transaction_window_is_truncated() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "journal.sqlite3")
+        manifest, _ = _import_manifest(db_path)
+        entry_id = manifest["routes"][0]["picks"][0]["journal_entry_id"]
+        result = nst.reconcile_journal_with_wallet(
+            db_path,
+            {
+                "snapshot_at": "2026-03-07T12:00:00+00:00",
+                "warn_stale_after_sec": 86400,
+                "transactions_status": "loaded",
+                "journal_status": "loaded",
+                "transactions_pages_loaded": 1,
+                "transactions_total_pages": 3,
+                "transactions_history_truncated": True,
+                "transactions": [
+                    {
+                        "transaction_id": 777,
+                        "date": "2026-03-14T10:00:00+00:00",
+                        "is_buy": True,
+                        "type_id": 35,
+                        "quantity": 2,
+                        "unit_price": 900.0,
+                        "location_id": 60003760,
+                    }
+                ],
+                "journal_entries": [],
+            },
+            character_id=90000001,
+        )
+        entry = nst.fetch_journal_entry(db_path, entry_id)
+
+    assert result["status_counts"]["match_uncertain"] == 1
+    assert entry["reconciliation_status"] == "match_uncertain"
+    assert "wallet transaction window does not cover this entry" in str(entry["match_reason"])
+
+
+def test_reconcile_uses_conservative_fee_fallback_for_unique_nearby_journal_entry() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "journal.sqlite3")
+        manifest, _ = _import_manifest(db_path)
+        entry_id = manifest["routes"][0]["picks"][0]["journal_entry_id"]
+        result = nst.reconcile_journal_with_wallet(
+            db_path,
+            {
+                "snapshot_at": "2026-03-07T12:00:00+00:00",
+                "warn_stale_after_sec": 86400,
+                "transactions_status": "loaded",
+                "journal_status": "loaded",
+                "transactions": [
+                    {
+                        "transaction_id": 101,
+                        "date": "2026-03-08T10:00:00+00:00",
+                        "is_buy": True,
+                        "type_id": 34,
+                        "quantity": 10,
+                        "unit_price": 100.0,
+                        "location_id": 60003760,
+                    },
+                    {
+                        "transaction_id": 102,
+                        "date": "2026-03-15T10:00:00+00:00",
+                        "is_buy": False,
+                        "type_id": 34,
+                        "quantity": 10,
+                        "unit_price": 150.0,
+                        "location_id": 1040804972352,
+                    },
+                ],
+                "journal_entries": [
+                    {
+                        "id": 9501,
+                        "ref_type": "transaction_tax",
+                        "amount": -6.0,
+                        "date": "2026-03-15T10:00:15+00:00",
+                    }
+                ],
+            },
+            character_id=90000001,
+        )
+        entry = nst.fetch_journal_entry(db_path, entry_id)
+
+    assert result["fee_match_quality"] == "partial"
+    assert entry["fee_match_quality"] == "partial"
+    assert entry["matched_wallet_journal_ids"] == [9501]
+    assert abs(float(entry["realized_fee_estimate"]) - 6.0) < 1e-9
+
+
+def test_reconcile_marks_fee_matching_uncertain_when_multiple_nearby_fee_candidates_exist() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "journal.sqlite3")
+        manifest, _ = _import_manifest(db_path)
+        entry_id = manifest["routes"][0]["picks"][0]["journal_entry_id"]
+        nst.reconcile_journal_with_wallet(
+            db_path,
+            {
+                "snapshot_at": "2026-03-07T12:00:00+00:00",
+                "warn_stale_after_sec": 86400,
+                "transactions_status": "loaded",
+                "journal_status": "loaded",
+                "transactions": [
+                    {
+                        "transaction_id": 101,
+                        "date": "2026-03-08T10:00:00+00:00",
+                        "is_buy": True,
+                        "type_id": 34,
+                        "quantity": 10,
+                        "unit_price": 100.0,
+                        "location_id": 60003760,
+                    }
+                ],
+                "journal_entries": [
+                    {
+                        "id": 9601,
+                        "ref_type": "brokers_fee",
+                        "amount": -4.0,
+                        "date": "2026-03-08T10:00:10+00:00",
+                    },
+                    {
+                        "id": 9602,
+                        "ref_type": "brokers_fee",
+                        "amount": -4.5,
+                        "date": "2026-03-08T10:00:15+00:00",
+                    },
+                ],
+            },
+            character_id=90000001,
+        )
+        entry = nst.fetch_journal_entry(db_path, entry_id)
+
+    assert entry["fee_match_quality"] == "uncertain"
+    assert entry["matched_wallet_journal_ids"] == []
+    assert "fee matching uncertain" in str(entry["match_reason"]) or "fee:uncertain" in str(entry["match_reason"])
 
 
 def test_execution_plan_surfaces_order_overlap_warning_tier() -> None:

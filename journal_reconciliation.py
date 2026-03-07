@@ -8,6 +8,9 @@ from journal_models import normalize_journal_timestamp
 
 MATCH_THRESHOLD = 0.58
 AMBIGUOUS_MARGIN = 0.08
+DEFAULT_WALLET_STALE_AFTER_SEC = 21600
+FEE_FALLBACK_WINDOW_SEC = 180
+FEE_FALLBACK_MAX_SHARE = 0.20
 
 _FEE_REF_TYPES = {
     "brokers_fee",
@@ -271,21 +274,273 @@ def _is_fee_like_journal_entry(item: dict) -> bool:
     return ("fee" in ref_type) or ("tax" in ref_type)
 
 
-def _linked_journal_entries(journal_entries: list[dict], matched_txs: list[dict]) -> tuple[list[dict], float]:
-    ref_ids = {
-        _as_int(tx.get("journal_ref_id", 0))
-        for tx in list(matched_txs or [])
-        if _as_int(tx.get("journal_ref_id", 0)) > 0
+def _wallet_snapshot_available(wallet: dict, transactions: list[dict], journal_entries: list[dict]) -> bool:
+    snap = dict(wallet or {}) if isinstance(wallet, dict) else {}
+    if not snap:
+        return False
+    if str(snap.get("snapshot_at", snap.get("last_successful_sync", "")) or "").strip():
+        return True
+    if transactions or journal_entries:
+        return True
+    if "balance" in snap or bool(snap.get("balance_requested", False)):
+        return True
+    return False
+
+
+def _wallet_snapshot_age_sec(wallet: dict, *, now: datetime | None = None) -> float | None:
+    snap_dt = _parse_dt(wallet.get("snapshot_at", wallet.get("last_successful_sync", "")))
+    if snap_dt is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    return max(0.0, (current - snap_dt).total_seconds())
+
+
+def _wallet_component_status(wallet: dict, key: str, rows: list[dict]) -> str:
+    status_key = f"{key}_status"
+    raw = str(wallet.get(status_key, "") or "").strip().lower()
+    if raw:
+        return raw
+    if rows or f"{key}_count" in wallet or f"{key}_pages_loaded" in wallet:
+        return "loaded"
+    return "unknown"
+
+
+def _wallet_component_pages_loaded(wallet: dict, key: str, rows: list[dict], status: str) -> int:
+    raw = _as_int(wallet.get(f"{key}_pages_loaded", 0))
+    if raw > 0:
+        return raw
+    if status == "loaded":
+        return 1
+    return 0
+
+
+def _wallet_component_total_pages(wallet: dict, key: str, pages_loaded: int) -> int:
+    raw = _as_int(wallet.get(f"{key}_total_pages", 0))
+    if raw > 0:
+        return raw
+    return int(max(0, pages_loaded))
+
+
+def _wallet_component_oldest_dt(wallet: dict, key: str, rows: list[dict]) -> datetime | None:
+    stored = _parse_dt(wallet.get(f"{key}_oldest_at", ""))
+    if stored is not None:
+        return stored
+    dts = [row.get("dt") for row in list(rows or []) if row.get("dt") is not None]
+    return min(dts, default=None)
+
+
+def _wallet_component_newest_dt(wallet: dict, key: str, rows: list[dict]) -> datetime | None:
+    stored = _parse_dt(wallet.get(f"{key}_newest_at", ""))
+    if stored is not None:
+        return stored
+    dts = [row.get("dt") for row in list(rows or []) if row.get("dt") is not None]
+    return max(dts, default=None)
+
+
+def _wallet_snapshot_meta(wallet: dict, transactions: list[dict], journal_entries: list[dict]) -> dict:
+    wallet_available = _wallet_snapshot_available(wallet, transactions, journal_entries)
+    age_sec = _wallet_snapshot_age_sec(wallet)
+    stale_after_sec = _as_int(wallet.get("warn_stale_after_sec", DEFAULT_WALLET_STALE_AFTER_SEC), DEFAULT_WALLET_STALE_AFTER_SEC)
+    data_freshness = "unknown"
+    if age_sec is not None:
+        data_freshness = "stale" if stale_after_sec > 0 and age_sec > float(stale_after_sec) else "fresh"
+    transactions_status = _wallet_component_status(wallet, "transactions", transactions)
+    journal_status = _wallet_component_status(wallet, "journal", journal_entries)
+    transactions_pages_loaded = _wallet_component_pages_loaded(wallet, "transactions", transactions, transactions_status)
+    journal_pages_loaded = _wallet_component_pages_loaded(wallet, "journal", journal_entries, journal_status)
+    transactions_total_pages = _wallet_component_total_pages(wallet, "transactions", transactions_pages_loaded)
+    journal_total_pages = _wallet_component_total_pages(wallet, "journal", journal_pages_loaded)
+    transactions_history_truncated = bool(wallet.get("transactions_history_truncated", False))
+    journal_history_truncated = bool(wallet.get("journal_history_truncated", False))
+    history_truncated = bool(
+        wallet.get("history_truncated", transactions_history_truncated or journal_history_truncated)
+    )
+    history_quality = "missing"
+    if wallet_available:
+        if history_truncated:
+            history_quality = "truncated"
+        elif transactions_status != "loaded" or journal_status != "loaded":
+            history_quality = "partial"
+        elif data_freshness == "stale":
+            history_quality = "stale"
+        else:
+            history_quality = "full"
+    return {
+        "wallet_available": bool(wallet_available),
+        "age_sec": age_sec,
+        "stale_after_sec": int(max(0, stale_after_sec)),
+        "data_freshness": data_freshness,
+        "history_quality": history_quality,
+        "history_truncated": history_truncated,
+        "transactions_status": transactions_status,
+        "journal_status": journal_status,
+        "transactions_pages_loaded": int(transactions_pages_loaded),
+        "transactions_total_pages": int(transactions_total_pages),
+        "transactions_page_limit": _as_int(wallet.get("transactions_page_limit", 0)),
+        "transactions_history_truncated": bool(transactions_history_truncated),
+        "transactions_oldest_dt": _wallet_component_oldest_dt(wallet, "transactions", transactions),
+        "transactions_newest_dt": _wallet_component_newest_dt(wallet, "transactions", transactions),
+        "journal_pages_loaded": int(journal_pages_loaded),
+        "journal_total_pages": int(journal_total_pages),
+        "journal_page_limit": _as_int(wallet.get("journal_page_limit", 0)),
+        "journal_history_truncated": bool(journal_history_truncated),
+        "journal_oldest_dt": _wallet_component_oldest_dt(wallet, "journal", journal_entries),
+        "journal_newest_dt": _wallet_component_newest_dt(wallet, "journal", journal_entries),
     }
-    if not ref_ids:
-        return [], 0.0
-    linked = [
-        item
-        for item in list(journal_entries or [])
-        if _as_int(item.get("ref_id", 0)) in ref_ids or _as_int(item.get("journal_id", 0)) in ref_ids
+
+
+def _entry_history_is_covered(entry: dict, wallet_meta: dict) -> bool:
+    if not bool(wallet_meta.get("transactions_history_truncated", False)):
+        return True
+    oldest_tx_dt = wallet_meta.get("transactions_oldest_dt")
+    if oldest_tx_dt is None:
+        return True
+    anchors = [
+        _parse_dt(entry.get("first_buy_at")),
+        _parse_dt(entry.get("created_at")),
     ]
+    anchor_dt = min((dt for dt in anchors if dt is not None), default=None)
+    if anchor_dt is None:
+        return True
+    return bool(anchor_dt >= (oldest_tx_dt - timedelta(hours=12)))
+
+
+def _ref_links_journal_item(item: dict, ref_id: int) -> bool:
+    if ref_id <= 0:
+        return False
+    return _as_int(item.get("ref_id", 0)) == ref_id or _as_int(item.get("journal_id", 0)) == ref_id
+
+
+def _fee_fallback_candidates(journal_entries: list[dict], tx: dict, excluded_ids: set[int]) -> list[dict]:
+    tx_dt = tx.get("dt")
+    if tx_dt is None:
+        return []
+    tx_total_value = max(_as_float(tx.get("total_value", 0.0)), 1.0)
+    direction = str(tx.get("direction", "") or "").strip().lower()
+    out: list[dict] = []
+    for item in list(journal_entries or []):
+        journal_id = _as_int(item.get("journal_id", 0))
+        if journal_id in excluded_ids:
+            continue
+        if not _is_fee_like_journal_entry(item):
+            continue
+        item_dt = item.get("dt")
+        if item_dt is None:
+            continue
+        delta_sec = abs((item_dt - tx_dt).total_seconds())
+        if delta_sec > float(FEE_FALLBACK_WINDOW_SEC):
+            continue
+        amount_abs = abs(_as_float(item.get("amount", 0.0)))
+        if amount_abs <= 0.0 or amount_abs > (tx_total_value * FEE_FALLBACK_MAX_SHARE):
+            continue
+        ref_type = str(item.get("ref_type", "") or "").strip().lower()
+        if direction == "buy" and ("tax" in ref_type) and ("fee" not in ref_type):
+            continue
+        candidate = dict(item)
+        candidate["_fallback_delta_sec"] = float(delta_sec)
+        out.append(candidate)
+    out.sort(
+        key=lambda item: (
+            float(item.get("_fallback_delta_sec", 0.0)),
+            abs(_as_float(item.get("amount", 0.0))),
+            int(item.get("journal_id", 0)),
+        )
+    )
+    return out
+
+
+def _linked_journal_entries(journal_entries: list[dict], matched_txs: list[dict], *, wallet_meta: dict) -> dict:
+    if not matched_txs:
+        return {
+            "linked_entries": [],
+            "fee_estimate": 0.0,
+            "quality": "not_applicable",
+            "warnings": [],
+        }
+
+    linked_by_id: dict[int, dict] = {}
+    exact_fee_tx_ids: set[int] = set()
+    matched_tx_list = list(matched_txs or [])
+    txs_without_fee_link: list[dict] = []
+    for tx in matched_tx_list:
+        ref_id = _as_int(tx.get("journal_ref_id", 0))
+        exact_links = []
+        if ref_id > 0:
+            exact_links = [item for item in list(journal_entries or []) if _ref_links_journal_item(item, ref_id)]
+        for item in exact_links:
+            journal_id = _as_int(item.get("journal_id", 0))
+            if journal_id != 0:
+                linked_by_id[journal_id] = dict(item)
+        if any(_is_fee_like_journal_entry(item) for item in exact_links):
+            exact_fee_tx_ids.add(_as_int(tx.get("transaction_id", 0)))
+        else:
+            txs_without_fee_link.append(tx)
+
+    linked_exact = list(linked_by_id.values())
+    excluded_ids = {int(item.get("journal_id", 0)) for item in linked_exact if _as_int(item.get("journal_id", 0)) != 0}
+    candidate_map: dict[int, list[dict]] = {}
+    candidate_frequency: dict[int, int] = {}
+    for tx in txs_without_fee_link:
+        tx_id = _as_int(tx.get("transaction_id", 0))
+        candidates = _fee_fallback_candidates(journal_entries, tx, excluded_ids)
+        candidate_map[tx_id] = candidates
+        for item in candidates:
+            journal_id = _as_int(item.get("journal_id", 0))
+            if journal_id == 0:
+                continue
+            candidate_frequency[journal_id] = int(candidate_frequency.get(journal_id, 0) or 0) + 1
+
+    fallback_linked: list[dict] = []
+    fallback_uncertain = False
+    for tx in txs_without_fee_link:
+        tx_id = _as_int(tx.get("transaction_id", 0))
+        candidates = list(candidate_map.get(tx_id, []) or [])
+        if len(candidates) != 1:
+            fallback_uncertain = fallback_uncertain or len(candidates) > 1
+            continue
+        candidate = dict(candidates[0])
+        journal_id = _as_int(candidate.get("journal_id", 0))
+        if journal_id == 0 or int(candidate_frequency.get(journal_id, 0) or 0) != 1:
+            fallback_uncertain = True
+            continue
+        fallback_linked.append(candidate)
+        linked_by_id[journal_id] = dict(candidate)
+
+    linked = list(linked_by_id.values())
     fee_estimate = sum(abs(_as_float(item.get("amount", 0.0))) for item in linked if _is_fee_like_journal_entry(item))
-    return linked, float(fee_estimate)
+    warnings: list[str] = []
+    journal_status = str(wallet_meta.get("journal_status", "unknown") or "unknown").strip().lower()
+    if fallback_uncertain:
+        warnings.append("fee matching uncertain due to multiple nearby wallet journal candidates")
+    unresolved_fee_links = len(txs_without_fee_link) - len(fallback_linked)
+    if unresolved_fee_links > 0:
+        if journal_status != "loaded":
+            warnings.append("fee matching incomplete because wallet journal snapshot is unavailable")
+        elif bool(wallet_meta.get("journal_history_truncated", False)):
+            warnings.append("fee matching incomplete because wallet journal history is truncated")
+        else:
+            warnings.append("fee matching incomplete due to missing wallet journal refs")
+
+    quality = "not_applicable"
+    if journal_status != "loaded" and not journal_entries:
+        quality = "unavailable"
+    elif fallback_uncertain:
+        quality = "uncertain"
+    elif not txs_without_fee_link:
+        quality = "exact"
+    elif fallback_linked and not exact_fee_tx_ids and len(fallback_linked) == len(txs_without_fee_link):
+        quality = "fallback"
+    elif exact_fee_tx_ids or fallback_linked:
+        quality = "partial"
+    else:
+        quality = "partial" if journal_status == "loaded" else "unavailable"
+
+    return {
+        "linked_entries": linked,
+        "fee_estimate": float(fee_estimate),
+        "quality": quality,
+        "warnings": warnings,
+    }
 
 
 def _match_confidence(matched_txs: list[dict], ambiguous_ids: set[int]) -> float:
@@ -302,13 +557,23 @@ def _match_confidence(matched_txs: list[dict], ambiguous_ids: set[int]) -> float
     return _clamp01(confidence)
 
 
-def _reconciliation_status(entry: dict, *, tx_count: int, matched_buy_qty: float, matched_sell_qty: float, match_confidence: float, ambiguous_ids: set[int]) -> str:
+def _reconciliation_status(
+    entry: dict,
+    *,
+    wallet_available: bool,
+    transactions_available: bool,
+    history_covers_entry: bool,
+    matched_buy_qty: float,
+    matched_sell_qty: float,
+    match_confidence: float,
+    ambiguous_ids: set[int],
+) -> str:
     manual_buy = _as_float(entry.get("actual_buy_qty", 0.0))
     manual_sell = _as_float(entry.get("actual_sell_qty", 0.0))
-    if tx_count <= 0:
+    if not wallet_available or not transactions_available:
         return "wallet_unavailable"
     if matched_buy_qty <= 0.0 and matched_sell_qty <= 0.0:
-        if ambiguous_ids:
+        if ambiguous_ids or not history_covers_entry:
             return "match_uncertain"
         if manual_buy > 0.0 or manual_sell > 0.0:
             return "wallet_unmatched"
@@ -342,11 +607,13 @@ def reconcile_wallet_snapshot(
     wallet_snapshot: dict | None,
     *,
     character_id: int = 0,
+    context_source: str = "wallet",
 ) -> dict:
     base_entries = [dict(entry or {}) for entry in list(entries or []) if isinstance(entry, dict)]
     wallet = dict(wallet_snapshot or {}) if isinstance(wallet_snapshot, dict) else {}
     transactions = _normalize_wallet_transactions(wallet)
     wallet_journal = _normalize_wallet_journal(wallet)
+    wallet_meta = _wallet_snapshot_meta(wallet, transactions, wallet_journal)
 
     entry_by_id = {
         str(entry.get("journal_entry_id", "")): entry
@@ -392,6 +659,8 @@ def reconcile_wallet_snapshot(
     enriched_entries: list[dict] = []
     matched_entry_count = 0
     uncertain_entry_count = 0
+    fee_match_qualities: list[str] = []
+    entry_quality_warnings: list[str] = []
 
     for entry in base_entries:
         entry_id = str(entry.get("journal_entry_id", "") or "")
@@ -399,8 +668,15 @@ def reconcile_wallet_snapshot(
         ambiguous_ids = set(ambiguous_by_entry.get(entry_id, set()) or set())
         buy_txs = [tx for tx in matched_txs if str(tx.get("direction", "")) == "buy"]
         sell_txs = [tx for tx in matched_txs if str(tx.get("direction", "")) == "sell"]
-        linked_journal, fee_estimate = _linked_journal_entries(wallet_journal, matched_txs)
+        fee_match = _linked_journal_entries(wallet_journal, matched_txs, wallet_meta=wallet_meta)
+        linked_journal = list(fee_match.get("linked_entries", []) or [])
+        fee_estimate = float(fee_match.get("fee_estimate", 0.0) or 0.0)
+        fee_match_quality = str(fee_match.get("quality", "not_applicable") or "not_applicable")
+        fee_match_warnings = [str(w) for w in list(fee_match.get("warnings", []) or []) if str(w).strip()]
         matched_journal_ids.update(_as_int(item.get("journal_id", 0)) for item in linked_journal)
+        if fee_match_quality and fee_match_quality != "not_applicable":
+            fee_match_qualities.append(fee_match_quality)
+        entry_quality_warnings.extend(fee_match_warnings)
 
         matched_buy_qty = sum(_as_float(tx.get("quantity", 0.0)) for tx in buy_txs)
         matched_sell_qty = sum(_as_float(tx.get("quantity", 0.0)) for tx in sell_txs)
@@ -410,9 +686,12 @@ def reconcile_wallet_snapshot(
         realized_profit_net = matched_sell_value - matched_buy_value - fee_estimate
         first_buy_dt = min((tx.get("dt") for tx in buy_txs if tx.get("dt") is not None), default=None)
         last_sell_dt = max((tx.get("dt") for tx in sell_txs if tx.get("dt") is not None), default=None)
+        history_covers_entry = _entry_history_is_covered(entry, wallet_meta)
         status = _reconciliation_status(
             entry,
-            tx_count=len(transactions),
+            wallet_available=bool(wallet_meta.get("wallet_available", False)),
+            transactions_available=str(wallet_meta.get("transactions_status", "unknown")) == "loaded",
+            history_covers_entry=history_covers_entry,
             matched_buy_qty=matched_buy_qty,
             matched_sell_qty=matched_sell_qty,
             match_confidence=match_confidence,
@@ -427,6 +706,8 @@ def reconcile_wallet_snapshot(
             reason_parts.append(f"sell:{len(sell_txs)}")
         if linked_journal:
             reason_parts.append(f"wallet_journal:{len(linked_journal)}")
+        if fee_match_quality and fee_match_quality != "not_applicable":
+            reason_parts.append(f"fee:{fee_match_quality}")
         top_reason = ""
         if matched_txs:
             tx_reasons = [str(tx.get("_match_reason", "") or "").strip() for tx in matched_txs if str(tx.get("_match_reason", "")).strip()]
@@ -436,6 +717,10 @@ def reconcile_wallet_snapshot(
             reason_parts.append(top_reason)
         if ambiguous_ids:
             reason_parts.append(f"ambiguous:{len(ambiguous_ids)}")
+        if not history_covers_entry and bool(wallet_meta.get("transactions_history_truncated", False)):
+            reason_parts.append("wallet transaction window does not cover this entry")
+        if bool(wallet_meta.get("history_truncated", False)):
+            reason_parts.append("wallet history truncated")
         if not reason_parts:
             if status == "wallet_unavailable":
                 reason_parts.append("wallet snapshot unavailable")
@@ -460,6 +745,16 @@ def reconcile_wallet_snapshot(
                 "reconciliation_status": str(status),
                 "match_confidence": float(match_confidence),
                 "match_reason": "; ".join(reason_parts),
+                "fee_match_quality": fee_match_quality,
+                "wallet_snapshot_age_sec": (
+                    float(wallet_meta.get("age_sec")) if wallet_meta.get("age_sec") is not None else -1.0
+                ),
+                "wallet_data_freshness": str(wallet_meta.get("data_freshness", "unknown") or "unknown"),
+                "wallet_history_quality": str(wallet_meta.get("history_quality", "missing") or "missing"),
+                "wallet_history_truncated": bool(wallet_meta.get("history_truncated", False)),
+                "wallet_transactions_pages_loaded": int(wallet_meta.get("transactions_pages_loaded", 0) or 0),
+                "wallet_journal_pages_loaded": int(wallet_meta.get("journal_pages_loaded", 0) or 0),
+                "reconciliation_basis": "",
                 "ambiguous_wallet_transaction_ids": sorted(int(x) for x in ambiguous_ids if int(x) != 0),
                 "open_order_warning_tier": str(entry.get("open_order_warning_tier", "") or warning_tier),
                 "open_order_warning_text": str(entry.get("open_order_warning_text", "") or warning_text),
@@ -481,11 +776,66 @@ def reconcile_wallet_snapshot(
         status = str(entry.get("reconciliation_status", "") or "").strip().lower() or "unknown"
         status_counts[status] = int(status_counts.get(status, 0) or 0) + 1
 
+    applicable_fee_qualities = sorted({quality for quality in fee_match_qualities if quality and quality != "not_applicable"})
+    if not applicable_fee_qualities:
+        fee_match_quality = "not_applicable"
+    elif len(applicable_fee_qualities) == 1:
+        fee_match_quality = applicable_fee_qualities[0]
+    else:
+        fee_match_quality = "mixed"
+
+    reconciliation_basis_suffix = "full_window"
+    if not bool(wallet_meta.get("wallet_available", False)):
+        reconciliation_basis_suffix = "unavailable"
+    elif str(wallet_meta.get("transactions_status", "unknown")) != "loaded":
+        reconciliation_basis_suffix = "partial_snapshot"
+    elif bool(wallet_meta.get("history_truncated", False)):
+        reconciliation_basis_suffix = "truncated_window"
+    elif str(wallet_meta.get("history_quality", "missing")) == "stale":
+        reconciliation_basis_suffix = "stale_snapshot"
+    elif str(wallet_meta.get("journal_status", "unknown")) != "loaded":
+        reconciliation_basis_suffix = "partial_snapshot"
+    basis_prefix = str(context_source or "wallet").strip().lower() or "wallet"
+    reconciliation_basis = f"{basis_prefix}:{reconciliation_basis_suffix}"
+
+    data_quality_warnings: list[str] = []
+    if str(wallet_meta.get("data_freshness", "unknown")) == "stale":
+        age_sec = wallet_meta.get("age_sec")
+        if age_sec is not None:
+            data_quality_warnings.append(f"wallet snapshot stale ({float(age_sec) / 3600.0:.1f}h old)")
+        else:
+            data_quality_warnings.append("wallet snapshot stale")
+    if bool(wallet_meta.get("history_truncated", False)):
+        data_quality_warnings.append("wallet history truncated by page limit")
+    if bool(wallet_meta.get("transactions_history_truncated", False)) and wallet_meta.get("transactions_oldest_dt") is not None:
+        data_quality_warnings.append(
+            f"reconciliation based on limited transaction window since {_to_iso(wallet_meta.get('transactions_oldest_dt'))}"
+        )
+    if str(wallet_meta.get("journal_status", "unknown")) != "loaded":
+        data_quality_warnings.append("fee matching incomplete because wallet journal snapshot is unavailable")
+    for warning in entry_quality_warnings:
+        if warning not in data_quality_warnings:
+            data_quality_warnings.append(warning)
+
+    for entry in enriched_entries:
+        entry["reconciliation_basis"] = reconciliation_basis
+
     return {
-        "wallet_available": bool(transactions or wallet_journal or _as_float(wallet.get("balance", 0.0)) > 0.0),
+        "wallet_available": bool(wallet_meta.get("wallet_available", False)),
         "wallet_balance": _as_float(wallet.get("balance", 0.0)),
         "wallet_transaction_count": len(transactions),
         "wallet_journal_count": len(wallet_journal),
+        "wallet_snapshot_age_sec": wallet_meta.get("age_sec"),
+        "wallet_data_freshness": str(wallet_meta.get("data_freshness", "unknown") or "unknown"),
+        "wallet_history_quality": str(wallet_meta.get("history_quality", "missing") or "missing"),
+        "wallet_history_truncated": bool(wallet_meta.get("history_truncated", False)),
+        "wallet_transactions_pages_loaded": int(wallet_meta.get("transactions_pages_loaded", 0) or 0),
+        "wallet_transactions_total_pages": int(wallet_meta.get("transactions_total_pages", 0) or 0),
+        "wallet_journal_pages_loaded": int(wallet_meta.get("journal_pages_loaded", 0) or 0),
+        "wallet_journal_total_pages": int(wallet_meta.get("journal_total_pages", 0) or 0),
+        "fee_match_quality": fee_match_quality,
+        "reconciliation_basis": reconciliation_basis,
+        "data_quality_warnings": data_quality_warnings,
         "character_id": int(character_id),
         "entries": enriched_entries,
         "matched_entry_count": int(matched_entry_count),

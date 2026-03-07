@@ -37,6 +37,16 @@ def _fmt_days(value: float | None) -> str:
     return f"{float(value):.1f}d"
 
 
+def _fmt_age_hours(value: object) -> str:
+    try:
+        age_sec = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if age_sec < 0.0:
+        return "-"
+    return f"{age_sec / 3600.0:.1f}h"
+
+
 def _effective_status(entry: dict) -> str:
     raw_status = str(entry.get("status", "") or "").strip().lower()
     reconciliation_status = str(entry.get("reconciliation_status", "") or "").strip().lower()
@@ -58,6 +68,68 @@ def _effective_qty(entry: dict, direction: str) -> float:
         matched = _as_float(entry.get("matched_sell_qty", 0.0))
         actual = _as_float(entry.get("actual_sell_qty", 0.0))
     return matched if matched > 0.0 else actual
+
+
+def _entries_wallet_quality(entries: list[dict]) -> dict:
+    for entry in list(entries or []):
+        if not isinstance(entry, dict):
+            continue
+        if (
+            str(entry.get("wallet_data_freshness", "") or "").strip()
+            or str(entry.get("wallet_history_quality", "") or "").strip()
+            or str(entry.get("reconciliation_basis", "") or "").strip()
+        ):
+            return {
+                "wallet_data_freshness": str(entry.get("wallet_data_freshness", "unknown") or "unknown"),
+                "wallet_history_quality": str(entry.get("wallet_history_quality", "missing") or "missing"),
+                "wallet_history_truncated": bool(entry.get("wallet_history_truncated", False)),
+                "wallet_snapshot_age_sec": entry.get("wallet_snapshot_age_sec"),
+                "wallet_transactions_pages_loaded": int(entry.get("wallet_transactions_pages_loaded", 0) or 0),
+                "wallet_journal_pages_loaded": int(entry.get("wallet_journal_pages_loaded", 0) or 0),
+                "fee_match_quality": str(entry.get("fee_match_quality", "") or ""),
+                "reconciliation_basis": str(entry.get("reconciliation_basis", "") or ""),
+            }
+    return {}
+
+
+def _append_wallet_quality_lines(
+    lines: list[str],
+    *,
+    freshness: str,
+    age_sec: object,
+    history_quality: str,
+    history_truncated: bool,
+    tx_pages_loaded: int,
+    tx_total_pages: int = 0,
+    journal_pages_loaded: int,
+    journal_total_pages: int = 0,
+    fee_match_quality: str = "",
+    reconciliation_basis: str = "",
+    warnings: list[str] | None = None,
+) -> None:
+    if freshness or history_quality or reconciliation_basis:
+        tx_pages_txt = (
+            f"{int(tx_pages_loaded)}/{int(tx_total_pages)}"
+            if int(tx_total_pages or 0) > 0
+            else str(int(tx_pages_loaded))
+        )
+        journal_pages_txt = (
+            f"{int(journal_pages_loaded)}/{int(journal_total_pages)}"
+            if int(journal_total_pages or 0) > 0
+            else str(int(journal_pages_loaded))
+        )
+        basis_txt = f" | Basis: {reconciliation_basis}" if str(reconciliation_basis or "").strip() else ""
+        fee_txt = f" | Fee match: {fee_match_quality}" if str(fee_match_quality or "").strip() else ""
+        trunc_txt = " | truncated=yes" if bool(history_truncated) else ""
+        lines.append(
+            (
+                f"Wallet quality: freshness={str(freshness or 'unknown')} ({_fmt_age_hours(age_sec)}) | "
+                f"history={str(history_quality or 'missing')} | tx_pages={tx_pages_txt} | journal_pages={journal_pages_txt}"
+                f"{fee_txt}{basis_txt}{trunc_txt}"
+            )
+        )
+    for warning in list(warnings or []):
+        lines.append(f"[WARN] {warning}")
 
 
 def _effective_profit(entry: dict) -> float:
@@ -449,6 +521,20 @@ def format_reconciliation_overview(result: dict, limit: int = 10, now: datetime 
             f"Unmatched transactions: {len(list(result.get('unmatched_transactions', []) or []))}"
         ),
     ]
+    _append_wallet_quality_lines(
+        lines,
+        freshness=str(result.get("wallet_data_freshness", "unknown") or "unknown"),
+        age_sec=result.get("wallet_snapshot_age_sec"),
+        history_quality=str(result.get("wallet_history_quality", "missing") or "missing"),
+        history_truncated=bool(result.get("wallet_history_truncated", False)),
+        tx_pages_loaded=int(result.get("wallet_transactions_pages_loaded", 0) or 0),
+        tx_total_pages=int(result.get("wallet_transactions_total_pages", 0) or 0),
+        journal_pages_loaded=int(result.get("wallet_journal_pages_loaded", 0) or 0),
+        journal_total_pages=int(result.get("wallet_journal_total_pages", 0) or 0),
+        fee_match_quality=str(result.get("fee_match_quality", "") or ""),
+        reconciliation_basis=str(result.get("reconciliation_basis", "") or ""),
+        warnings=[str(w) for w in list(result.get("data_quality_warnings", []) or []) if str(w).strip()],
+    )
     if status_counts:
         lines.append("Statuses: " + ", ".join(f"{key}={int(value)}" for key, value in sorted(status_counts.items())))
     if result.get("context_source") is not None:
@@ -467,6 +553,20 @@ def format_reconciliation_overview(result: dict, limit: int = 10, now: datetime 
 
 def format_unmatched_wallet_activity(result: dict, limit: int = 20) -> str:
     lines = ["=" * 70, "UNGEMATCHTE WALLET-AKTIVITAET", "=" * 70]
+    _append_wallet_quality_lines(
+        lines,
+        freshness=str(result.get("wallet_data_freshness", "unknown") or "unknown"),
+        age_sec=result.get("wallet_snapshot_age_sec"),
+        history_quality=str(result.get("wallet_history_quality", "missing") or "missing"),
+        history_truncated=bool(result.get("wallet_history_truncated", False)),
+        tx_pages_loaded=int(result.get("wallet_transactions_pages_loaded", 0) or 0),
+        tx_total_pages=int(result.get("wallet_transactions_total_pages", 0) or 0),
+        journal_pages_loaded=int(result.get("wallet_journal_pages_loaded", 0) or 0),
+        journal_total_pages=int(result.get("wallet_journal_total_pages", 0) or 0),
+        fee_match_quality=str(result.get("fee_match_quality", "") or ""),
+        reconciliation_basis=str(result.get("reconciliation_basis", "") or ""),
+        warnings=[str(w) for w in list(result.get("data_quality_warnings", []) or []) if str(w).strip()],
+    )
     unmatched_transactions = list(result.get("unmatched_transactions", []) or [])
     ambiguous_transactions = list(result.get("ambiguous_transactions", []) or [])
     unmatched_journal_entries = list(result.get("unmatched_journal_entries", []) or [])
@@ -509,6 +609,7 @@ def format_unmatched_wallet_activity(result: dict, limit: int = 20) -> str:
 def format_personal_trade_history(entries: list[dict], limit: int = 10, now: datetime | None = None) -> str:
     report = build_journal_report(entries, limit=limit, now=now)
     summary = report["summary"]
+    wallet_quality = _entries_wallet_quality(list(report.get("entries", []) or []))
     lines = [
         "=" * 70,
         "PERSONAL TRADE HISTORY",
@@ -522,6 +623,19 @@ def format_personal_trade_history(entries: list[dict], limit: int = 10, now: dat
         "",
         "Soll/Ist groesste Abweichungen:",
     ]
+    if wallet_quality:
+        _append_wallet_quality_lines(
+            lines,
+            freshness=str(wallet_quality.get("wallet_data_freshness", "unknown") or "unknown"),
+            age_sec=wallet_quality.get("wallet_snapshot_age_sec"),
+            history_quality=str(wallet_quality.get("wallet_history_quality", "missing") or "missing"),
+            history_truncated=bool(wallet_quality.get("wallet_history_truncated", False)),
+            tx_pages_loaded=int(wallet_quality.get("wallet_transactions_pages_loaded", 0) or 0),
+            journal_pages_loaded=int(wallet_quality.get("wallet_journal_pages_loaded", 0) or 0),
+            fee_match_quality=str(wallet_quality.get("fee_match_quality", "") or ""),
+            reconciliation_basis=str(wallet_quality.get("reconciliation_basis", "") or ""),
+        )
+        lines.append("")
     mismatches = sorted(
         list(report.get("entries", []) or []),
         key=lambda entry: abs(_as_float(entry.get("comparison_profit_delta", 0.0))),
@@ -553,7 +667,7 @@ def format_personal_trade_history(entries: list[dict], limit: int = 10, now: dat
         lines.append(
             f"- {entry.get('item_name', '')} | recon={entry.get('reconciliation_status', '')} | "
             f"confidence={_as_float(entry.get('match_confidence', 0.0)):.2f} | "
-            f"reason={entry.get('match_reason', '')}"
+            f"fee={entry.get('fee_match_quality', '')} | reason={entry.get('match_reason', '')}"
         )
     if not uncertain:
         lines.append("- Keine unsicheren Matches.")

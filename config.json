@@ -565,6 +565,7 @@
         "include_wallet_transactions": true,
         "wallet_journal_max_pages": 2,
         "wallet_transactions_max_pages": 2,
+        "wallet_warn_stale_after_sec": 21600,
         "profile_cache_ttl_sec": 3600,
         "show_order_exposure_in_output": true,
         "warn_if_budget_exceeds_wallet": true

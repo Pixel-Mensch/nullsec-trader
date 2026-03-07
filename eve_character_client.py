@@ -63,14 +63,18 @@ class EveCharacterClient:
         params: dict | None = None,
         max_pages: int | None = None,
         allow_login: bool = True,
-    ) -> list[dict]:
+        with_meta: bool = False,
+    ) -> list[dict] | tuple[list[dict], dict]:
         out: list[dict] = []
         page = 1
         page_cap = int(max_pages) if max_pages is not None else 0
+        pages_loaded = 0
+        total_pages_seen = 0
         while True:
             merged_params = dict(params or {})
             merged_params["page"] = int(page)
             data, headers = self._get_json(path, scopes=scopes, params=merged_params, allow_login=allow_login)
+            pages_loaded += 1
             if isinstance(data, list):
                 out.extend(data)
             total_pages = 1
@@ -78,11 +82,22 @@ class EveCharacterClient:
                 total_pages = int(headers.get("X-Pages", "1") or "1")
             except Exception:
                 total_pages = 1
+            total_pages_seen = max(total_pages_seen, total_pages)
             if page >= total_pages:
                 break
             if page_cap > 0 and page >= page_cap:
                 break
             page += 1
+        meta = {
+            "pages_loaded": int(pages_loaded),
+            "total_pages": int(max(total_pages_seen, pages_loaded)),
+            "page_limit": int(max(0, page_cap)),
+            "history_truncated": bool(page_cap > 0 and total_pages_seen > page_cap),
+            "page_limit_hit": bool(page_cap > 0 and total_pages_seen > page_cap and pages_loaded >= page_cap),
+            "item_count": len(out),
+        }
+        if with_meta:
+            return out, meta
         return out
 
     def get_identity(self, requested_scopes, *, allow_login: bool = True) -> dict:
@@ -130,20 +145,36 @@ class EveCharacterClient:
         except Exception:
             return 0.0
 
-    def get_wallet_journal(self, character_id: int, *, max_pages: int | None = None, allow_login: bool = True) -> list[dict]:
+    def get_wallet_journal(
+        self,
+        character_id: int,
+        *,
+        max_pages: int | None = None,
+        allow_login: bool = True,
+        with_meta: bool = False,
+    ) -> list[dict] | tuple[list[dict], dict]:
         return self._get_paginated_json(
             f"/characters/{int(character_id)}/wallet/journal/",
             scopes=["esi-wallet.read_character_wallet.v1"],
             max_pages=max_pages,
             allow_login=allow_login,
+            with_meta=with_meta,
         )
 
-    def get_wallet_transactions(self, character_id: int, *, max_pages: int | None = None, allow_login: bool = True) -> list[dict]:
+    def get_wallet_transactions(
+        self,
+        character_id: int,
+        *,
+        max_pages: int | None = None,
+        allow_login: bool = True,
+        with_meta: bool = False,
+    ) -> list[dict] | tuple[list[dict], dict]:
         return self._get_paginated_json(
             f"/characters/{int(character_id)}/wallet/transactions/",
             scopes=["esi-wallet.read_character_wallet.v1"],
             max_pages=max_pages,
             allow_login=allow_login,
+            with_meta=with_meta,
         )
 
     def resolve_names(self, ids: list[int]) -> dict[int, str]:

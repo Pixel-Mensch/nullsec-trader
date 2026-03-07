@@ -250,7 +250,10 @@ Beispiel fuer `config.local.json`:
   },
   "character_context": {
     "enabled": true,
-    "include_skill_queue": false
+    "include_skill_queue": false,
+    "wallet_journal_max_pages": 2,
+    "wallet_transactions_max_pages": 2,
+    "wallet_warn_stale_after_sec": 21600
   }
 }
 ```
@@ -292,7 +295,10 @@ Was `journal reconcile` aktuell macht:
 - laedt Character Context wie gewohnt live oder aus Cache
 - nutzt `wallet_snapshot.transactions` und `wallet_snapshot.journal_entries`
 - matched Wallet-Transactions gegen lokale Journal-Eintraege
-- speichert Match-Ergebnis, Match-Confidence, Wallet-IDs und Reconciliation-Status im lokalen Journal
+- speichert Match-Ergebnis, Match-Confidence, Wallet-IDs, Fee-Match-Qualitaet,
+  Snapshot-Freshness und Reconciliation-Status im lokalen Journal
+- zeigt an, ob die Wallet-Historie frisch, alt, teilweise oder durch
+  Page-Limits abgeschnitten ist
 
 Aktuelle Matching-Signale:
 
@@ -304,13 +310,25 @@ Aktuelle Matching-Signale:
 - Zeitfenster relativ zu Plan-/Trade-Zeit
 - Markt-/Location-ID, wenn im Plan vorhanden
 - verknuepfte Wallet-Journal-Refs fuer Gebuehren, wenn ESI diese liefert
+- konservativer Zeitfenster-Fallback fuer Gebuehren nur dann, wenn genau ein
+  plausibler Journal-Kandidat existiert
 
 Wichtige Ehrlichkeit:
 
 - Matching ist absichtlich nicht als perfekt modelliert
 - unklare Faelle bleiben als `match_uncertain`
 - nicht zuordenbare Wallet-Events bleiben in `journal unmatched` sichtbar
-- Wallet-basierter Profit ist nur so gut wie die vorhandenen Wallet-Seiten und die verknuepfbaren Fee-/Tax-Refs
+- Wallet-basierter Profit ist nur so gut wie die vorhandenen Wallet-Seiten und
+  die verknuepfbaren Fee-/Tax-Refs
+- Wallet-Reconciliation bleibt snapshot-basiert; alte Trades koennen trotz
+  Paging-Verbesserungen unsicher bleiben, wenn die geladene Historie das echte
+  Trade-Fenster nicht mehr abdeckt
+- `wallet_journal_max_pages` und `wallet_transactions_max_pages` begrenzen
+  bewusst den Abruf; wenn die Historie dadurch abgeschnitten wird, erscheint das
+  als `truncated`-Hinweis im Output
+- Fee-Matches werden jetzt als `exact`, `partial`, `fallback`, `uncertain` oder
+  `unavailable` kenntlich gemacht, statt schwache Verknuepfungen still zu
+  erzwingen
 - Shipping und andere Kosten ausserhalb von Wallet-Daten bleiben separat
 
 ### Trade Journal

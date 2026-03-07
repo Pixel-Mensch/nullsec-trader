@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 6 wallet journal reconciliation)
+Last updated: 2026-03-07 (session 7 wallet history quality)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -159,12 +159,38 @@ full backlog scrape.
 ### Task 5b: Deepen wallet-history quality without forcing heuristics
 
 - Priority: P1
+- Status: DONE
+- Completed: 2026-03-07
+- What was done:
+  - `eve_character_client.py` now returns optional paging metadata for wallet
+    journal and wallet transactions (`pages_loaded`, `total_pages`,
+    `history_truncated`)
+  - `character_profile.py` now stores wallet snapshot freshness and coverage
+    metadata in the local character profile, including page counts, oldest/newest
+    timestamps, and truncation hints
+  - `journal_reconciliation.py` now distinguishes fresh/stale and
+    full/partial/truncated wallet bases, marks entries uncertain when a
+    truncated transaction window does not cover the trade, and makes fee
+    matching explicitly `exact`, `partial`, `fallback`, `uncertain`, or
+    `unavailable`
+  - `journal_store.py` now persists the key reconciliation quality fields so
+    `journal personal` and related views can show them without reopening the
+    raw wallet snapshot
+  - `journal_reporting.py` now surfaces wallet freshness, page coverage,
+    truncation, fee-match quality, and reconciliation basis in the existing
+    journal views
+  - Targeted tests were extended in `tests/test_character_context.py` and
+    `tests/test_journal_reconciliation.py`
+
+### Task 5c: Use reconciled history for deeper journal analytics without changing ranking
+
+- Priority: P1
 - Status: ready
-- Relevant files: `journal_reconciliation.py`, `character_profile.py`,
-  `eve_character_client.py`, `journal_store.py`, `journal_reporting.py`
-- Expected result: improve paging/freshness controls and extend wallet-journal
-  fee/ref matching so older trades and multi-page histories reconcile more
-  reliably without silently overmatching.
+- Relevant files: `journal_reporting.py`, `journal_models.py`,
+  `confidence_calibration.py`, `journal_store.py`, `README.md`
+- Expected result: build richer personal-trade summaries or calibration inputs
+  from reconciled outcomes, but keep route ranking and candidate scoring
+  untouched unless a separate evidence-backed task justifies it.
 
 ## P2
 
