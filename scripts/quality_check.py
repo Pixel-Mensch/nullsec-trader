@@ -15,6 +15,12 @@ MODULES = [
     "runtime_clients.py",
     "runtime_reports.py",
     "runtime_runner.py",
+    "journal_cli.py",
+    "journal_models.py",
+    "journal_reporting.py",
+    "journal_store.py",
+    "confidence_calibration.py",
+    "explainability.py",
     "startup_helpers.py",
     "config_loader.py",
     "shipping.py",
@@ -26,6 +32,7 @@ MODULES = [
     "fee_engine.py",
     "market_fetch.py",
     "market_normalization.py",
+    "market_plausibility.py",
     "scoring.py",
     "models.py",
     "location_utils.py",
@@ -42,6 +49,10 @@ TEST_MODULES = [
     "tests/test_route_search.py",
     "tests/test_integration.py",
     "tests/test_architecture.py",
+    "tests/test_journal.py",
+    "tests/test_confidence_calibration.py",
+    "tests/test_explainability.py",
+    "tests/test_market_plausibility.py",
 ]
 
 

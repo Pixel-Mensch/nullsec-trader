@@ -1,3 +1,5 @@
+from confidence_calibration import transport_confidence_to_score
+from explainability import build_route_explainability
 from shipping import (
     _policy_provider_for_route,
     resolve_shipping_lane_cfg,
@@ -6,12 +8,55 @@ from location_utils import label_to_slug, normalize_location_label
 
 
 def _confidence_to_score(label: str) -> float:
-    txt = str(label or "").strip().lower()
-    if txt in ("blocked", "none"):
-        return 0.0
-    if txt in ("exception", "low"):
-        return 0.55 if txt == "exception" else 0.35
-    return 1.0
+    return float(transport_confidence_to_score(label))
+
+
+def _pick_raw_confidence(pick: dict) -> float:
+    return max(
+        0.0,
+        min(
+            1.0,
+            float(
+                pick.get(
+                    "raw_overall_confidence",
+                    pick.get("raw_confidence", pick.get("overall_confidence", pick.get("strict_confidence_score", pick.get("fill_probability", 0.0)))),
+                )
+                or 0.0
+            ),
+        ),
+    )
+
+
+def _pick_calibrated_confidence(pick: dict) -> float:
+    return max(
+        0.0,
+        min(
+            1.0,
+            float(
+                pick.get(
+                    "calibrated_overall_confidence",
+                    pick.get("calibrated_confidence", pick.get("raw_overall_confidence", pick.get("overall_confidence", pick.get("strict_confidence_score", pick.get("fill_probability", 0.0))))),
+                )
+                or 0.0
+            ),
+        ),
+    )
+
+
+def _pick_decision_confidence(pick: dict) -> float:
+    return max(
+        0.0,
+        min(
+            1.0,
+            float(
+                pick.get(
+                    "decision_overall_confidence",
+                    pick.get("calibrated_overall_confidence", pick.get("overall_confidence", pick.get("strict_confidence_score", pick.get("fill_probability", 0.0)))),
+                )
+                or 0.0
+            ),
+        ),
+    )
 
 
 def _route_pick_expected_profit(pick: dict) -> float:
@@ -30,12 +75,21 @@ def summarize_route_for_ranking(route: dict) -> dict:
         if float(p.get("expected_days_to_sell", 0.0) or 0.0) > 0.0
     ]
     avg_days = (sum(expected_days) / len(expected_days)) if expected_days else 0.0
-    pick_confidences = [
-        max(0.0, min(1.0, float(p.get("overall_confidence", p.get("strict_confidence_score", p.get("fill_probability", 0.0))) or 0.0)))
-        for p in picks
-    ]
-    avg_pick_conf = (sum(pick_confidences) / len(pick_confidences)) if pick_confidences else 0.0
-    transport_conf = _confidence_to_score(route.get("cost_model_confidence", "normal"))
+    raw_pick_confidences = [_pick_raw_confidence(p) for p in picks]
+    calibrated_pick_confidences = [_pick_calibrated_confidence(p) for p in picks]
+    decision_pick_confidences = [_pick_decision_confidence(p) for p in picks]
+    avg_pick_raw_conf = (sum(raw_pick_confidences) / len(raw_pick_confidences)) if raw_pick_confidences else 0.0
+    avg_pick_calibrated_conf = (sum(calibrated_pick_confidences) / len(calibrated_pick_confidences)) if calibrated_pick_confidences else avg_pick_raw_conf
+    avg_pick_conf = (sum(decision_pick_confidences) / len(decision_pick_confidences)) if decision_pick_confidences else avg_pick_calibrated_conf
+    raw_transport_conf = transport_confidence_to_score(
+        route.get("raw_transport_confidence", route.get("cost_model_confidence", "normal"))
+    )
+    calibrated_transport_conf = transport_confidence_to_score(
+        route.get("calibrated_transport_confidence", raw_transport_conf)
+    )
+    transport_conf = transport_confidence_to_score(
+        route.get("transport_confidence_for_decision", calibrated_transport_conf)
+    )
     route_blocked = bool(route.get("route_blocked_due_to_transport", False))
     prune_reason = str(route.get("route_prune_reason", "") or "")
     actionable = bool(not route_blocked and picks)
@@ -44,34 +98,93 @@ def summarize_route_for_ranking(route: dict) -> dict:
     top_share = (profits[0] / total_expected) if profits else 0.0
     concentration_penalty = max(0.0, top_share - 0.40)
     liquidation_speed = 1.0 / (1.0 + (avg_days / 45.0)) if avg_days > 0.0 else 1.0
-    route_confidence = max(0.0, min(1.0, min(avg_pick_conf if picks else 0.0, transport_conf)))
+    stale_market_penalty = 0.0
+    if picks:
+        stale_hits = sum(1 for p in picks if bool(p.get("used_volume_fallback", False)))
+        stale_market_penalty = min(0.30, (float(stale_hits) / float(len(picks))) * 0.20)
+    planned_count = sum(1 for p in picks if str(p.get("exit_type", p.get("mode", "instant")) or "").strip().lower() in {"planned", "planned_sell"})
+    speculative_count = sum(1 for p in picks if str(p.get("exit_type", p.get("mode", "instant")) or "").strip().lower() == "speculative")
+    speculative_penalty = 0.0
+    if picks:
+        speculative_penalty = min(0.35, ((float(planned_count) / float(len(picks))) * 0.08) + ((float(speculative_count) / float(len(picks))) * 0.22))
+    raw_route_confidence = max(0.0, min(1.0, min(avg_pick_raw_conf if picks else 0.0, raw_transport_conf)))
+    calibrated_route_confidence = max(0.0, min(1.0, min(avg_pick_calibrated_conf if picks else 0.0, calibrated_transport_conf)))
+    route_confidence = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                route.get(
+                    "route_confidence_for_decision",
+                    min(avg_pick_conf if picks else 0.0, transport_conf),
+                )
+                or 0.0
+            ),
+        ),
+    )
     capital_lock_risk = max(0.0, min(1.0, (avg_days / 90.0) + concentration_penalty))
     risk_adjusted_score = (
         float(expected_realized_profit)
         * max(0.0, route_confidence)
         * max(0.0, liquidation_speed)
         * max(0.0, 1.0 - (concentration_penalty * 0.75))
+        * max(0.0, 1.0 - stale_market_penalty)
+        * max(0.0, 1.0 - speculative_penalty)
         * max(0.0, transport_conf)
     )
     if route_blocked:
         risk_adjusted_score = -1.0
-    return {
+    summary = {
         "actionable": bool(actionable),
         "route_confidence": float(route_confidence),
+        "raw_route_confidence": float(raw_route_confidence),
+        "calibrated_route_confidence": float(calibrated_route_confidence),
         "transport_confidence": float(transport_conf),
+        "raw_transport_confidence": float(raw_transport_conf),
+        "calibrated_transport_confidence": float(calibrated_transport_conf),
+        "raw_pick_confidence": float(avg_pick_raw_conf),
+        "calibrated_pick_confidence": float(avg_pick_calibrated_conf),
         "total_expected_realized_profit": float(expected_realized_profit),
         "total_full_sell_profit": float(full_sell_profit),
         "average_expected_days_to_sell": float(avg_days),
         "capital_lock_risk": float(capital_lock_risk),
         "concentration_penalty": float(concentration_penalty),
+        "stale_market_penalty": float(stale_market_penalty),
+        "speculative_penalty": float(speculative_penalty),
         "risk_adjusted_score": float(risk_adjusted_score),
         "route_prune_reason": prune_reason,
+        "calibration_warning": str(route.get("calibration_warning", "") or ""),
     }
+    summary.update(
+        build_route_explainability(
+            route,
+            base_profit_score=float(expected_realized_profit),
+            route_confidence=float(route_confidence),
+            liquidation_speed=float(liquidation_speed),
+            transport_confidence=float(transport_conf),
+            concentration_penalty=float(concentration_penalty),
+            stale_market_penalty=float(stale_market_penalty),
+            speculative_penalty=float(speculative_penalty),
+            risk_adjusted_score=float(risk_adjusted_score),
+            average_expected_days_to_sell=float(avg_days),
+            capital_lock_risk=float(capital_lock_risk),
+            prune_reason=prune_reason,
+        )
+    )
+    return summary
 
 
 def route_ranking_value(route: dict, metric: str) -> float:
-    summary = summarize_route_for_ranking(route)
     m = str(metric or "risk_adjusted_expected_profit").strip().lower()
+    # For the default metric, use the pre-computed profile-adjusted score when available.
+    # This lets runtime_runner store a profile-weighted score without re-running the summary.
+    if m not in ("profit_total", "full_sell_profit", "expected_profit", "expected_realized_profit",
+                 "expected_realized_profit_90d", "confidence", "route_confidence",
+                 "liquidation_speed", "speed"):
+        pre = route.get("_profile_risk_adjusted_score")
+        if pre is not None:
+            return float(pre)
+    summary = summarize_route_for_ranking(route)
     if m in ("profit_total", "full_sell_profit"):
         return float(summary["total_full_sell_profit"])
     if m in ("expected_profit", "expected_realized_profit", "expected_realized_profit_90d"):

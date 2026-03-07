@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -63,9 +63,36 @@ class TradeCandidate:
     expected_units_unsold_90d: float = 0.0
     expected_realized_profit_90d: float = 0.0
     expected_realized_profit_per_m3_90d: float = 0.0
+    transport_confidence: float = 1.0
     exit_confidence: float = 0.0
     liquidity_confidence: float = 0.0
     overall_confidence: float = 0.0
+    raw_exit_confidence: float = 0.0
+    raw_liquidity_confidence: float = 0.0
+    raw_transport_confidence: float = 1.0
+    raw_overall_confidence: float = 0.0
+    calibrated_exit_confidence: float = 0.0
+    calibrated_liquidity_confidence: float = 0.0
+    calibrated_transport_confidence: float = 1.0
+    calibrated_overall_confidence: float = 0.0
+    raw_confidence: float = 0.0
+    calibrated_confidence: float = 0.0
+    decision_overall_confidence: float = 0.0
+    calibration_warning: str = ""
+    market_plausibility: dict = field(default_factory=dict)
+    market_plausibility_score: float = 1.0
+    manipulation_risk_score: float = 0.0
+    profit_at_top_of_book: float = 0.0
+    profit_at_usable_depth: float = 0.0
+    profit_at_conservative_executable_price: float = 0.0
+    positive_reasons: list[dict] = field(default_factory=list)
+    negative_reasons: list[dict] = field(default_factory=list)
+    gating_failures: list[dict] = field(default_factory=list)
+    score_contributors: list[dict] = field(default_factory=list)
+    confidence_contributors: list[dict] = field(default_factory=list)
+    pruned_reason: dict | None = None
+    warnings: list[dict] = field(default_factory=list)
+    explainability_score: float | None = None
     expected_profit_90d: float = 0.0
     expected_profit_per_m3_90d: float = 0.0
     used_volume_fallback: bool = False
@@ -138,6 +165,39 @@ class TradeCandidate:
                     else min(float(self.exit_confidence), float(self.liquidity_confidence)),
                 ),
             )
+        if self.transport_confidence <= 0.0:
+            self.transport_confidence = 1.0
+        if self.raw_exit_confidence <= 0.0:
+            self.raw_exit_confidence = float(self.exit_confidence)
+        if self.raw_liquidity_confidence <= 0.0:
+            self.raw_liquidity_confidence = float(self.liquidity_confidence)
+        if self.raw_transport_confidence <= 0.0:
+            self.raw_transport_confidence = float(self.transport_confidence)
+        if self.raw_overall_confidence <= 0.0:
+            self.raw_overall_confidence = min(
+                float(self.overall_confidence),
+                float(self.raw_exit_confidence),
+                float(self.raw_liquidity_confidence),
+                float(self.raw_transport_confidence),
+            )
+        if self.calibrated_exit_confidence <= 0.0:
+            self.calibrated_exit_confidence = float(self.raw_exit_confidence)
+        if self.calibrated_liquidity_confidence <= 0.0:
+            self.calibrated_liquidity_confidence = float(self.raw_liquidity_confidence)
+        if self.calibrated_transport_confidence <= 0.0:
+            self.calibrated_transport_confidence = float(self.raw_transport_confidence)
+        if self.calibrated_overall_confidence <= 0.0:
+            self.calibrated_overall_confidence = float(self.raw_overall_confidence)
+        if self.raw_confidence <= 0.0:
+            self.raw_confidence = float(self.raw_overall_confidence)
+        if self.calibrated_confidence <= 0.0:
+            self.calibrated_confidence = float(self.calibrated_overall_confidence)
+        if self.decision_overall_confidence <= 0.0:
+            self.decision_overall_confidence = float(self.calibrated_overall_confidence or self.raw_overall_confidence)
+        if self.market_plausibility_score <= 0.0 and self.manipulation_risk_score <= 0.0:
+            self.market_plausibility_score = 1.0
+        if self.manipulation_risk_score <= 0.0 and self.market_plausibility_score < 1.0:
+            self.manipulation_risk_score = max(0.0, min(1.0, 1.0 - float(self.market_plausibility_score)))
 
 
 class FilterFunnel:

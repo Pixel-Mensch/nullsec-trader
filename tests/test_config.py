@@ -79,7 +79,8 @@ def test_load_config_merges_local_overlay_and_env_overrides() -> None:
     assert str(runtime_meta.get("client_secret_source", "")) == "env"
 
 def test_parse_cli_args_supports_non_interactive_budget_and_cargo() -> None:
-    args = nst.parse_cli_args(["--cargo-m3", "12345.6", "--budget-isk", "750m"])
+    args = nst.parse_cli_args(["--detail", "--cargo-m3", "12345.6", "--budget-isk", "750m"])
+    assert bool(args.get("detail", False)) is True
     assert abs(float(args.get("cargo_m3", 0.0)) - 12345.6) < 1e-9
     assert int(args.get("budget_isk", 0) or 0) == 750_000_000
 

@@ -4,7 +4,24 @@ import os
 import sys
 import time
 
-from candidate_engine import compute_candidates, compute_route_wide_candidates_for_source
+from candidate_engine import _route_adjusted_candidate_score, compute_candidates, compute_route_wide_candidates_for_source
+from character_profile import (
+    apply_character_fee_overrides,
+    attach_character_context_to_result,
+    build_character_context_summary,
+    character_status_lines,
+    requested_character_scopes,
+    resolve_character_context,
+    resolve_character_context_cfg,
+    sync_character_profile,
+)
+from confidence_calibration import (
+    apply_calibration_to_record,
+    build_confidence_calibration,
+    calibrate_confidence_value,
+    resolve_confidence_calibration_cfg,
+)
+from explainability import build_rejected_candidate_table
 from config_loader import (
     _prepare_trade_filters,
     _resolve_strict_mode_cfg,
@@ -17,6 +34,9 @@ from config_loader import (
     validate_config,
 )
 from execution_plan import write_execution_plan_profiles, write_route_leaderboard
+from journal_cli import run_journal_cli
+from journal_models import attach_plan_metadata, build_trade_plan_manifest, make_run_id, utc_now_iso
+from journal_store import fetch_journal_entries
 from location_utils import label_to_slug, normalize_location_label
 from market_fetch import _fetch_orders_for_node
 from market_normalization import make_snapshot_payload, normalize_replay_snapshot
@@ -42,6 +62,7 @@ from runtime_clients import ESIClient, ReplayESIClient
 from runtime_common import (
     CONFIG_PATH,
     HTTP_CACHE_PATH,
+    JOURNAL_DB_PATH,
     TYPE_CACHE_PATH,
     _has_live_esi_credentials,
     die,
@@ -58,6 +79,7 @@ from runtime_reports import (
     write_execution_plan_chain,
     write_top_candidate_dump,
 )
+from eve_sso import EveSSOAuth
 
 
 def run_snapshot_only(cfg: dict, structure_ids: list[int], snapshot_out: str | None = None) -> None:
@@ -381,6 +403,128 @@ def _resolve_route_wide_scan_cfg(cfg: dict) -> dict:
     }
 
 
+def _build_confidence_calibration_runtime(cfg: dict) -> dict:
+    cal_cfg = resolve_confidence_calibration_cfg(cfg)
+    runtime = {"config": cal_cfg, "model": None, "db_path": "", "warning": ""}
+    if not isinstance(cfg, dict):
+        return runtime
+    if not bool(cal_cfg.get("enabled", False)):
+        cfg["_confidence_calibration_runtime"] = runtime
+        return runtime
+    db_path = str(cal_cfg.get("journal_db_path", "") or JOURNAL_DB_PATH)
+    runtime["db_path"] = db_path
+    try:
+        entries = fetch_journal_entries(db_path)
+    except Exception as exc:
+        runtime["warning"] = f"confidence calibration disabled: {exc}"
+        cfg["_confidence_calibration_runtime"] = runtime
+        return runtime
+    runtime["model"] = build_confidence_calibration(entries, {"confidence_calibration": cal_cfg})
+    if runtime["model"] is not None and list(runtime["model"].get("warnings", []) or []):
+        runtime["warning"] = "; ".join(str(w) for w in list(runtime["model"].get("warnings", []) or []))
+    cfg["_confidence_calibration_runtime"] = runtime
+    return runtime
+
+
+def _confidence_calibration_runtime(cfg: dict) -> dict:
+    existing = cfg.get("_confidence_calibration_runtime")
+    if isinstance(existing, dict):
+        return existing
+    return _build_confidence_calibration_runtime(cfg)
+
+
+def _apply_confidence_calibration_to_candidates(
+    candidates: list[TradeCandidate],
+    cfg: dict,
+    *,
+    route_id: str,
+    source_market: str,
+    target_market: str,
+    scan_cfg: dict | None = None,
+) -> None:
+    runtime = _confidence_calibration_runtime(cfg)
+    model = runtime.get("model")
+    for candidate in list(candidates or []):
+        apply_calibration_to_record(
+            candidate,
+            model,
+            route_id=route_id,
+            source_market=source_market,
+            target_market=target_market,
+            exit_type=str(getattr(candidate, "exit_type", "")),
+            transport_confidence=1.0,
+        )
+        if scan_cfg is not None and bool(getattr(candidate, "route_wide_selected", False)):
+            hop_count = int(getattr(candidate, "dest_hop_count", 1) or 1)
+            candidate.route_adjusted_score = _route_adjusted_candidate_score(candidate, hop_count, scan_cfg)
+
+
+def _apply_confidence_calibration_to_picks(
+    picks: list[dict],
+    cfg: dict,
+    *,
+    route_id: str,
+    source_market: str,
+    target_market: str,
+    transport_confidence: object,
+) -> None:
+    runtime = _confidence_calibration_runtime(cfg)
+    model = runtime.get("model")
+    for pick in list(picks or []):
+        apply_calibration_to_record(
+            pick,
+            model,
+            route_id=route_id,
+            source_market=source_market,
+            target_market=str(pick.get("sell_at", target_market) or target_market),
+            exit_type=str(pick.get("exit_type", "") or ""),
+            transport_confidence=transport_confidence,
+        )
+
+
+def _apply_confidence_calibration_to_route_result(result: dict, cfg: dict) -> dict:
+    runtime = _confidence_calibration_runtime(cfg)
+    cal_cfg = runtime.get("config", {})
+    model = runtime.get("model")
+    raw_transport_conf = str(result.get("cost_model_confidence", "normal") or "normal")
+    transport_info = calibrate_confidence_value(
+        raw_confidence=float(result.get("raw_transport_confidence", 0.0) or 0.0) if "raw_transport_confidence" in result else 0.0,
+        calibration=model,
+        dimension="transport",
+        route_id=str(result.get("route_id", result.get("route_tag", "")) or ""),
+        source_market=str(result.get("source_label", "") or ""),
+        target_market=str(result.get("dest_label", "") or ""),
+        exit_type="route",
+    )
+    if "raw_transport_confidence" not in result:
+        from confidence_calibration import transport_confidence_to_score
+
+        transport_info = calibrate_confidence_value(
+            transport_confidence_to_score(raw_transport_conf),
+            model,
+            dimension="transport",
+            route_id=str(result.get("route_id", result.get("route_tag", "")) or ""),
+            source_market=str(result.get("source_label", "") or ""),
+            target_market=str(result.get("dest_label", "") or ""),
+            exit_type="route",
+        )
+    result["raw_transport_confidence"] = float(transport_info.get("raw_confidence", 0.0) or 0.0)
+    result["calibrated_transport_confidence"] = float(transport_info.get("calibrated_confidence", result["raw_transport_confidence"]) or result["raw_transport_confidence"])
+    result["transport_confidence_for_decision"] = (
+        float(result["calibrated_transport_confidence"])
+        if bool(cal_cfg.get("apply_to_decisions", True))
+        else float(result["raw_transport_confidence"])
+    )
+    pick_warnings = [str(p.get("calibration_warning", "") or "") for p in list(result.get("picks", []) or []) if str(p.get("calibration_warning", "") or "")]
+    route_warning = str(transport_info.get("warning", "") or "")
+    if pick_warnings:
+        route_warning = "; ".join(dict.fromkeys([route_warning] + pick_warnings if route_warning else pick_warnings))
+    if str(runtime.get("warning", "") or ""):
+        route_warning = "; ".join(dict.fromkeys([route_warning, str(runtime.get("warning", ""))] if route_warning else [str(runtime.get("warning", ""))]))
+    result["calibration_warning"] = route_warning
+    return result
+
+
 def make_skipped_chain_leg(
     src_label: str,
     dst_label: str,
@@ -486,7 +630,7 @@ def _finalize_route_result(
     source_node_meta: dict | None = None,
     dest_node_meta: dict | None = None,
     funnel: FilterFunnel | None = None,
-) -> dict:
+    ) -> dict:
     warn_msg = str(transport_summary.get("cost_model_warning", "") or "")
     if bool(transport_summary.get("route_blocked_due_to_transport", False)):
         if warn_msg:
@@ -510,6 +654,8 @@ def _finalize_route_result(
     write_top_candidate_dump(dump_path, candidates, route_label, filters_used, explain)
 
     reason_counts = dict(explain.get("reason_counts", {}))
+    reason_code_counts = dict(explain.get("reason_code_counts", {}))
+    top_rejected_candidates = build_rejected_candidate_table(explain, limit=10)
     passed_all = int(reason_counts.get("passed_all_filters", 0))
     budget_util_pct = (float(total_cost) / float(budget_isk) * 100.0) if float(budget_isk) > 0 else 0.0
     cargo_util_pct = (float(total_m3) / float(cargo_m3) * 100.0) if float(cargo_m3) > 0 else 0.0
@@ -580,10 +726,33 @@ def _finalize_route_result(
         "route_prune_reason": str(route_prune_reason),
         "total_candidates": len(candidates),
         "why_out_summary": reason_counts,
+        "why_out_reason_codes": reason_code_counts,
         "passed_all_filters": passed_all,
         "funnel": funnel or FilterFunnel(),
         "explain": explain,
+        "top_rejected_candidates": top_rejected_candidates,
     }
+
+
+def _write_trade_plan_artifact(
+    route_results: list[dict],
+    *,
+    plan_id: str,
+    created_at: str,
+    runtime_mode: str,
+    primary_output_path: str,
+    out_dir: str,
+) -> str:
+    plan_payload = build_trade_plan_manifest(
+        route_results=route_results,
+        plan_id=plan_id,
+        created_at=created_at,
+        runtime_mode=runtime_mode,
+        primary_output_path=primary_output_path,
+    )
+    plan_path = os.path.join(out_dir, f"trade_plan_{plan_id}.json")
+    save_json(plan_path, plan_payload)
+    return plan_path
 
 
 def run_route_wide_leg(
@@ -645,6 +814,14 @@ def run_route_wide_leg(
             scan_cfg=scan_cfg,
             cfg=cfg,
         )
+        _apply_confidence_calibration_to_candidates(
+            instant_candidates,
+            cfg,
+            route_id=str(route_tag),
+            source_market=str(source_node["label"]),
+            target_market="",
+            scan_cfg=scan_cfg,
+        )
         for k, v in dict(instant_explain.get("reason_counts", {})).items():
             explain["reason_counts"][k] = int(explain["reason_counts"].get(k, 0)) + int(v)
         candidates.extend(instant_candidates)
@@ -677,6 +854,14 @@ def run_route_wide_leg(
             filters=planned_filters,
             scan_cfg=scan_cfg,
             cfg=cfg,
+        )
+        _apply_confidence_calibration_to_candidates(
+            planned_candidates,
+            cfg,
+            route_id=str(route_tag),
+            source_market=str(source_node["label"]),
+            target_market="",
+            scan_cfg=scan_cfg,
         )
         for k, v in dict(planned_explain.get("reason_counts", {})).items():
             explain["reason_counts"][k] = int(explain["reason_counts"].get(k, 0)) + int(v)
@@ -715,6 +900,14 @@ def run_route_wide_leg(
             filters=filters_used,
             scan_cfg=scan_cfg,
             cfg=cfg,
+        )
+        _apply_confidence_calibration_to_candidates(
+            candidates,
+            cfg,
+            route_id=str(route_tag),
+            source_market=str(source_node["label"]),
+            target_market="",
+            scan_cfg=scan_cfg,
         )
         picks, total_cost, total_profit, total_m3, selected_mode = _choose_portfolio_from_candidates_only(
             route_label=route_label,
@@ -755,7 +948,15 @@ def run_route_wide_leg(
         dest_id=int(immediate_dest_node.get("id", 0) or 0),
     )
     picks, transport_summary = apply_route_costs_and_prune(picks, route_context, filters_used)
-    return _finalize_route_result(
+    _apply_confidence_calibration_to_picks(
+        picks,
+        cfg,
+        route_id=str(route_tag),
+        source_market=str(source_node["label"]),
+        target_market=str(immediate_dest_node["label"]),
+        transport_confidence=transport_summary.get("cost_model_confidence", "normal"),
+    )
+    result = _finalize_route_result(
         route_tag=route_tag,
         route_label=route_label,
         source_id=int(source_node["id"]),
@@ -775,6 +976,7 @@ def run_route_wide_leg(
         explain=explain,
         funnel=FilterFunnel(),
     )
+    return _apply_confidence_calibration_to_route_result(result, cfg)
 
 
 def run_route(
@@ -858,6 +1060,13 @@ def run_route(
             funnel=instant_funnel,
             explain=instant_explain,
         )
+        _apply_confidence_calibration_to_candidates(
+            instant_candidates,
+            cfg,
+            route_id=str(route_tag),
+            source_market=source_label,
+            target_market=dest_label,
+        )
         merge_reason_counts(combined_reason_counts, dict(instant_explain.get("reason_counts", {})))
         print(f"Baue {route_label} Portfolio (Instant-Phase)...")
         instant_picks, total_cost, total_profit, total_m3, instant_selected = choose_portfolio_for_route(
@@ -880,7 +1089,8 @@ def run_route(
 
         remaining_budget = max(0.0, float(budget_isk) - total_cost)
         remaining_cargo = max(0.0, float(cargo_m3) - total_m3)
-        if remaining_budget > 1e-6 and remaining_cargo > 1e-6:
+        _allow_planned = bool(filters_used.get("_profile_allow_planned_sell", True))
+        if remaining_budget > 1e-6 and remaining_cargo > 1e-6 and _allow_planned:
             planned_filters = dict(filters_used)
             planned_filters["mode"] = "planned_sell"
             planned_funnel = FilterFunnel()
@@ -895,6 +1105,13 @@ def run_route(
                 route_context=route_context,
                 funnel=planned_funnel,
                 explain=planned_explain,
+            )
+            _apply_confidence_calibration_to_candidates(
+                planned_candidates,
+                cfg,
+                route_id=str(route_tag),
+                source_market=source_label,
+                target_market=dest_label,
             )
             merge_reason_counts(combined_reason_counts, dict(planned_explain.get("reason_counts", {})))
             instant_type_ids = {int(p.get("type_id")) for p in picks if p.get("type_id") is not None}
@@ -940,6 +1157,13 @@ def run_route(
             funnel=funnel,
             explain=explain,
         )
+        _apply_confidence_calibration_to_candidates(
+            candidates,
+            cfg,
+            route_id=str(route_tag),
+            source_market=source_label,
+            target_market=dest_label,
+        )
         print(f"Baue {route_label} Portfolio...")
         picks, _, _, _, selected_mode = choose_portfolio_for_route(
             esi,
@@ -959,7 +1183,45 @@ def run_route(
         print("    * Hinweis: es wurden keine passenden Kaufauftraege gefunden, Vorschlaege basieren auf Verkaufsorder-Preisen.")
 
     picks, transport_summary = apply_route_costs_and_prune(picks, route_context, filters_used)
-    return _finalize_route_result(
+    _apply_confidence_calibration_to_picks(
+        picks,
+        cfg,
+        route_id=str(route_tag),
+        source_market=source_label,
+        target_market=dest_label,
+        transport_confidence=transport_summary.get("cost_model_confidence", "normal"),
+    )
+
+    # --- Profile post-build filters (applied after calibration so confidence is final) ---
+    # Gap 1: min_profit_per_m3 gate (set by apply_profile_to_filters as _profile_min_profit_per_m3)
+    from risk_profiles import filter_picks_by_profile
+    picks, _profile_rejected_picks = filter_picks_by_profile(picks, filters_used)
+    if _profile_rejected_picks:
+        _profile_name = str(filters_used.get("_profile_name", "") or "")
+        print(f"    [Profile:{_profile_name}] {len(_profile_rejected_picks)} Pick(s) nach Profit/m3-Gate entfernt.")
+
+    # Gap 2: min_confidence gate — confidence values are final after calibration
+    _profile_min_conf = float(filters_used.get("_profile_min_confidence", 0.0) or 0.0)
+    if _profile_min_conf > 0.0:
+        _conf_kept: list[dict] = []
+        _conf_dropped = 0
+        for _p in picks:
+            _conf = float(
+                _p.get("decision_overall_confidence",
+                    _p.get("calibrated_overall_confidence",
+                        _p.get("overall_confidence", 0.0))) or 0.0
+            )
+            if _conf >= _profile_min_conf:
+                _conf_kept.append(_p)
+            else:
+                _conf_dropped += 1
+        if _conf_dropped:
+            _profile_name = str(filters_used.get("_profile_name", "") or "")
+            print(f"    [Profile:{_profile_name}] {_conf_dropped} Pick(s) unter min_confidence={_profile_min_conf:.0%} entfernt.")
+        picks = _conf_kept
+    # ---------------------------------------------------------------------------------
+
+    result = _finalize_route_result(
         route_tag=route_tag,
         route_label=route_label,
         source_id=int(source_structure_id),
@@ -981,19 +1243,122 @@ def run_route(
         dest_node_meta=dest_node_meta,
         funnel=funnel,
     )
+    return _apply_confidence_calibration_to_route_result(result, cfg)
+
+
+def _cfg_with_enabled_character_context(cfg: dict) -> dict:
+    out = dict(cfg or {})
+    char_cfg = out.get("character_context", {})
+    if not isinstance(char_cfg, dict):
+        char_cfg = {}
+    char_cfg = dict(char_cfg)
+    char_cfg["enabled"] = True
+    out["character_context"] = char_cfg
+    return out
+
+
+def _run_auth_command(cfg: dict, action: str) -> None:
+    cfg_for_auth = _cfg_with_enabled_character_context(cfg)
+    char_cfg = resolve_character_context_cfg(cfg_for_auth)
+    esi_cfg = cfg_for_auth.get("esi", {}) if isinstance(cfg_for_auth, dict) else {}
+    if not isinstance(esi_cfg, dict):
+        esi_cfg = {}
+    client_id = str(esi_cfg.get("client_id", "") or "").strip()
+    if not client_id:
+        die("ESI client_id fehlt. Lege ihn lokal in config.local.json oder via ESI_CLIENT_ID an.")
+    sso = EveSSOAuth(
+        client_id=client_id,
+        client_secret=str(esi_cfg.get("client_secret", "") or ""),
+        callback_url=str(esi_cfg.get("callback_url", "http://localhost:12563/callback") or "http://localhost:12563/callback"),
+        user_agent=str(esi_cfg.get("user_agent", "NullsecTrader/1.0") or "NullsecTrader/1.0"),
+        token_path=str(char_cfg.get("token_path", "") or ""),
+        metadata_path=str(char_cfg.get("metadata_path", "") or ""),
+    )
+    act = str(action or "status").strip().lower()
+    if act in ("login", "authorize", "sync"):
+        sso.ensure_token(requested_character_scopes(cfg_for_auth), allow_login=True)
+    elif act not in ("status", "info"):
+        die("Unbekannte auth-Aktion. Nutze 'login' oder 'status'.")
+    status = sso.describe_token_status()
+    print("EVE SSO")
+    print(f"  Token Path: {status.get('token_path', '')}")
+    print(f"  Token Present: {'yes' if bool(status.get('has_token', False)) else 'no'}")
+    print(f"  Valid: {'yes' if bool(status.get('valid', False)) else 'no'}")
+    if int(status.get("character_id", 0) or 0) > 0:
+        print(f"  Character: {status.get('character_name', '')} ({int(status.get('character_id', 0) or 0)})")
+    scopes = list(status.get("scopes", []) or [])
+    if scopes:
+        print(f"  Scopes: {' '.join(scopes)}")
+    expires_at = int(status.get("expires_at", 0) or 0)
+    if expires_at > 0:
+        print(f"  Expires At (unix): {expires_at}")
+
+
+def _run_character_command(cfg: dict, action: str) -> None:
+    cfg_for_char = _cfg_with_enabled_character_context(cfg)
+    act = str(action or "status").strip().lower()
+    if act in ("sync", "refresh"):
+        context = sync_character_profile(cfg_for_char, allow_login=True)
+    elif act in ("status", "info"):
+        context = resolve_character_context(cfg_for_char, replay_enabled=False, allow_live=False)
+    else:
+        die("Unbekannte character-Aktion. Nutze 'sync' oder 'status'.")
+    for line in character_status_lines(context):
+        print(line)
 
 
 def run_cli() -> None:
     ensure_dirs()
     cli = parse_cli_args(sys.argv[1:])
+    command = str(cli.get("command", "run") or "run").strip().lower()
+    if command == "journal":
+        run_journal_cli(list(cli.get("journal_argv", []) or []))
+        return
     cfg = load_config(CONFIG_PATH)
     if not cfg:
         die("config.json fehlt oder ist unlesbar.")
     validation_result = validate_config(cfg)
     fail_on_invalid_config(validation_result)
+    if command == "auth":
+        _run_auth_command(cfg, str(cli.get("auth_action", "") or "status"))
+        return
+    if command == "character":
+        _run_character_command(cfg, str(cli.get("character_action", "") or "status"))
+        return
+
+    # --- Risk Profile resolution ---
+    from risk_profiles import (
+        BUILTIN_PROFILES,
+        apply_profile_to_portfolio_cfg,
+        apply_profile_to_route_result,
+        profile_header_lines,
+        resolve_active_profile,
+    )
+    cli_profile = cli.get("profile") or None
+    if cli_profile:
+        cfg["_cli_risk_profile"] = str(cli_profile).strip().lower()
+    active_profile_name, active_profile_params = resolve_active_profile(cfg)
+    cfg["_active_risk_profile_name"] = active_profile_name
+    cfg["_active_risk_profile_params"] = active_profile_params
+    print("")
+    for line in profile_header_lines(active_profile_name, active_profile_params):
+        print(line)
+    print("")
+    # --------------------------------
+
+    calibration_runtime = _build_confidence_calibration_runtime(cfg)
+    if str(calibration_runtime.get("warning", "") or ""):
+        print(f"Kalibrierung: {calibration_runtime['warning']}")
 
     replay_cfg = cfg.get("replay", {})
     replay_enabled = bool(replay_cfg.get("enabled", False))
+    character_context = resolve_character_context(cfg, replay_enabled=replay_enabled)
+    cfg["_character_context"] = character_context
+    if bool(character_context.get("enabled", False)) or bool(character_context.get("available", False)):
+        print("")
+        for line in character_status_lines(character_context):
+            print(line)
+        print("")
 
     o4t_id, cj6_id = _resolve_primary_structure_ids(cfg)
     route_mode = _normalize_route_mode(cfg.get("route_mode", "roundtrip"))
@@ -1043,6 +1408,14 @@ def run_cli() -> None:
 
     if cargo_m3 <= 0 or budget_isk <= 0:
         die("Cargo und Budget muessen positiv sein.")
+
+    character_summary = build_character_context_summary(character_context, budget_isk=budget_isk)
+    cfg["_character_context_summary"] = character_summary
+    if bool(character_summary.get("budget_exceeds_wallet", False)):
+        print(
+            "WARN: Budget liegt ueber Wallet-Balance um "
+            f"{fmt_isk(float(character_summary.get('budget_gap_isk', 0.0) or 0.0))}."
+        )
 
     structure_labels, required_structure_ids = _build_structure_context(o4t_id, cj6_id, chain_enabled, chain_nodes)
     node_catalog = _resolve_node_catalog(cfg, chain_nodes)
@@ -1166,12 +1539,30 @@ def run_cli() -> None:
         save_json(replay_path, replay_payload)
         print(f"Replay-Snapshot geschrieben: {replay_path}")
 
-    fees = cfg["fees"]
-    port_cfg = cfg["portfolio"]
+    if bool(resolve_character_context_cfg(cfg).get("apply_skill_fee_overrides", True)):
+        fees, fee_override_meta = apply_character_fee_overrides(cfg["fees"], character_context)
+    else:
+        fees, fee_override_meta = dict(cfg["fees"]), {"applied": False, "source": str(character_context.get("source", "default") or "default"), "skills": {}}
+    cfg["_character_fee_override_meta"] = fee_override_meta
+    if bool(fee_override_meta.get("applied", False)):
+        print(
+            "Character Fee Override aktiv: "
+            f"{fee_override_meta['skills']}"
+        )
+    # Apply active risk profile to portfolio config (tighten-only)
+    port_cfg = apply_profile_to_portfolio_cfg(active_profile_params, dict(cfg["portfolio"]))
     capital_flow_cfg = _resolve_capital_flow_cfg(cfg)
     strict_mode_cfg = _resolve_strict_mode_cfg(cfg)
     route_wide_scan_cfg = _resolve_route_wide_scan_cfg(cfg)
     forward_filters, return_filters, forward_mode, return_mode = _prepare_trade_filters(cfg)
+
+    # Block planned_sell phase if profile disallows it
+    _profile_allows_planned = bool(active_profile_params.get("allow_planned_sell", True))
+    if not _profile_allows_planned:
+        if str(forward_mode).lower() in ("planned_sell",):
+            forward_mode = "instant"
+        if str(return_mode).lower() in ("planned_sell",):
+            return_mode = "instant"
     structure_region_map = _resolve_structure_region_map(cfg, emit_info=True)
     if structure_region_map and hasattr(esi, "type_cache") and isinstance(getattr(esi, "type_cache", None), dict):
         esi.type_cache["_structure_region_map"] = {str(int(k)): int(v) for k, v in structure_region_map.items()}
@@ -1189,6 +1580,8 @@ def run_cli() -> None:
     from datetime import datetime
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    plan_id = make_run_id(timestamp)
+    plan_created_at = utc_now_iso()
     created_files = []
     route_profiles_active = False
 
@@ -1251,6 +1644,10 @@ def run_cli() -> None:
                 result["cargo_util_pct"] = (float(m3_used) / cargo_total * 100.0) if cargo_total > 0 else 0.0
                 result["route_actionable"] = bool(filtered_picks and not bool(result.get("route_blocked_due_to_transport", False)))
                 result["route_prune_reason"] = str(result.get("route_prune_reason", "")) or ("no_picks" if not filtered_picks else "")
+            # Apply profile-adjusted route score for leaderboard ranking
+            apply_profile_to_route_result(active_profile_name, active_profile_params, result)
+            result["_active_risk_profile"] = active_profile_name
+            attach_character_context_to_result(result, character_context, budget_isk=budget_isk)
             route_results.append(result)
             if "csv_path" in result:
                 created_files.append(result["csv_path"])
@@ -1259,9 +1656,42 @@ def run_cli() -> None:
 
         if route_results:
             route_profiles_active = True
+            attach_plan_metadata(route_results, plan_id=plan_id, created_at=plan_created_at)
+
+            # --- Do Not Trade evaluation ---
+            from no_trade import evaluate_no_trade
+            from execution_plan import write_no_trade_report
+            from risk_profiles import BUILTIN_PROFILES as _ALL_PROFILES
+            _no_trade_result = evaluate_no_trade(
+                route_results,
+                active_profile_name,
+                active_profile_params,
+                all_profiles=_ALL_PROFILES,
+            )
+            if not _no_trade_result["should_trade"]:
+                _no_trade_path = os.path.join(out_dir, f"no_trade_{timestamp}.txt")
+                write_no_trade_report(
+                    _no_trade_path, timestamp,
+                    _no_trade_result, active_profile_name, active_profile_params,
+                )
+                created_files.append(_no_trade_path)
+                _rc_summary = ", ".join(r["code"] for r in _no_trade_result["reason_codes"][:3])
+                print(f"  [DO NOT TRADE] Gründe: {_rc_summary}")
+                print(f"  [DO NOT TRADE] Bericht: {_no_trade_path}")
+            # --------------------------------
+
             execution_plan_path = os.path.join(out_dir, f"execution_plan_{timestamp}.txt")
-            write_execution_plan_profiles(execution_plan_path, timestamp, route_results)
+            write_execution_plan_profiles(execution_plan_path, timestamp, route_results, detail_mode=bool(cli.get("detail", False)), compact_mode=bool(cli.get("compact", False)))
             created_files.append(execution_plan_path)
+            plan_path = _write_trade_plan_artifact(
+                route_results,
+                plan_id=plan_id,
+                created_at=plan_created_at,
+                runtime_mode="route_profiles",
+                primary_output_path=execution_plan_path,
+                out_dir=out_dir,
+            )
+            created_files.append(plan_path)
             if bool(route_search_cfg.get("enabled", False)):
                 leaderboard_path = os.path.join(out_dir, f"route_leaderboard_{timestamp}.txt")
                 write_route_leaderboard(
@@ -1270,6 +1700,7 @@ def run_cli() -> None:
                     route_results=route_results,
                     ranking_metric=str(route_search_cfg.get("ranking_metric", "risk_adjusted_expected_profit")),
                     max_routes=int(route_search_cfg.get("max_routes", 10)),
+                    detail_mode=bool(cli.get("detail", False)),
                 )
                 created_files.append(leaderboard_path)
 
@@ -1346,10 +1777,12 @@ def run_cli() -> None:
             disabled, reason = evaluate_leg_disabled(leg, chain_leg_budget_util_min_pct)
             leg["leg_disabled"] = disabled
             leg["leg_disabled_reason"] = reason
+            attach_character_context_to_result(leg, character_context, budget_isk=budget_isk)
             forward_legs_for_summary.append(leg)
             emitted_legs.append(leg)
 
         forward_active = any(not bool(leg.get("leg_disabled", False)) for leg in forward_legs_for_summary)
+        attach_plan_metadata(forward_legs_for_summary, plan_id=plan_id, created_at=plan_created_at)
         forward_chain_summary = os.path.join(out_dir, f"forward_chain_summary_{timestamp}.txt")
         return_chain_summary = os.path.join(out_dir, f"return_chain_summary_{timestamp}.txt")
         write_chain_summary(forward_chain_summary, "Forward", timestamp, forward_legs_for_summary)
@@ -1467,18 +1900,34 @@ def run_cli() -> None:
                 disabled, reason = evaluate_leg_disabled(leg, chain_leg_budget_util_min_pct)
                 leg["leg_disabled"] = disabled
                 leg["leg_disabled_reason"] = reason
+                attach_character_context_to_result(leg, character_context, budget_isk=budget_isk)
                 return_legs_for_summary.append(leg)
                 emitted_legs.append(leg)
 
+        attach_plan_metadata(return_legs_for_summary, plan_id=plan_id, created_at=plan_created_at)
         write_chain_summary(return_chain_summary, "Return", timestamp, return_legs_for_summary)
         execution_plan_path = os.path.join(out_dir, f"execution_plan_{timestamp}.txt")
-        write_execution_plan_chain(execution_plan_path, timestamp, forward_legs_for_summary, return_legs_for_summary)
+        write_execution_plan_chain(
+            execution_plan_path,
+            timestamp,
+            forward_legs_for_summary,
+            return_legs_for_summary,
+            detail_mode=bool(cli.get("detail", False)),
+        )
+        plan_path = _write_trade_plan_artifact(
+            forward_legs_for_summary + return_legs_for_summary,
+            plan_id=plan_id,
+            created_at=plan_created_at,
+            runtime_mode="chain",
+            primary_output_path=execution_plan_path,
+            out_dir=out_dir,
+        )
         for leg in emitted_legs:
             if "csv_path" in leg:
                 created_files.append(leg["csv_path"])
             if "dump_path" in leg:
                 created_files.append(leg["dump_path"])
-        created_files.extend([forward_chain_summary, return_chain_summary, execution_plan_path])
+        created_files.extend([forward_chain_summary, return_chain_summary, execution_plan_path, plan_path])
     else:
         capital_available = float(budget_isk)
         forward_budget_isk = capital_available if bool(capital_flow_cfg.get("enabled", False)) else float(budget_isk)
@@ -1502,6 +1951,7 @@ def run_cli() -> None:
             timestamp,
             out_dir,
         )
+        attach_character_context_to_result(forward_result, character_context, budget_isk=budget_isk)
         capital_available = _apply_capital_flow_to_leg(forward_result, forward_mode, capital_available, capital_flow_cfg)
         if route_mode == "forward_only":
             print("route_mode=forward_only -> Return-Route wird uebersprungen.")
@@ -1528,8 +1978,10 @@ def run_cli() -> None:
                 timestamp,
                 out_dir,
             )
+            attach_character_context_to_result(return_result, character_context, budget_isk=budget_isk)
             capital_available = _apply_capital_flow_to_leg(return_result, return_mode, capital_available, capital_flow_cfg)
 
+        attach_plan_metadata([forward_result, return_result], plan_id=plan_id, created_at=plan_created_at)
         summary_path = os.path.join(out_dir, f"roundtrip_plan_{timestamp}.txt")
         write_enhanced_summary(
             summary_path,
@@ -1543,9 +1995,18 @@ def run_cli() -> None:
             budget_isk,
             forward_funnel=forward_result.get("funnel"),
             return_funnel=return_result.get("funnel"),
-            run_uuid="",
+            run_uuid=plan_id,
+        )
+        plan_path = _write_trade_plan_artifact(
+            [forward_result, return_result],
+            plan_id=plan_id,
+            created_at=plan_created_at,
+            runtime_mode="roundtrip",
+            primary_output_path=summary_path,
+            out_dir=out_dir,
         )
         created_files.append(summary_path)
+        created_files.append(plan_path)
         created_files.append(forward_result["csv_path"])
         created_files.append(forward_result["dump_path"])
         if route_mode != "forward_only":
@@ -1568,6 +2029,7 @@ def run_cli() -> None:
         except Exception:
             pass
         print("")
+    print(f"Plan ID: {plan_id}")
     print("Fertig!")
     print("=== ERSTELLTE DATEIEN ===")
     for p in created_files:

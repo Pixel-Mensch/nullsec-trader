@@ -1,0 +1,28 @@
+{
+  "history_30": 1400,
+  "history_7": 320,
+  "reference_price": 100.0,
+  "source_orders": [
+    {"type_id": 42, "is_buy_order": false, "price": 90.0, "volume_remain": 60},
+    {"type_id": 42, "is_buy_order": false, "price": 91.0, "volume_remain": 60}
+  ],
+  "dest_orders": [
+    {"type_id": 42, "is_buy_order": false, "price": 190.0, "volume_remain": 40},
+    {"type_id": 42, "is_buy_order": false, "price": 190.5, "volume_remain": 40},
+    {"type_id": 42, "is_buy_order": false, "price": 191.0, "volume_remain": 40}
+  ],
+  "filters_override": {
+    "strict_mode": {"enabled": false},
+    "strict_require_reference_price_for_planned": false,
+    "strict_disable_fallback_volume_for_planned": false,
+    "reference_price": {
+      "enabled": true,
+      "prefer": "average_price",
+      "fallback_to_adjusted": true,
+      "soft_sell_markup_vs_ref_planned": 1.5,
+      "max_sell_markup_vs_ref_planned": 2.5,
+      "hard_max_sell_markup_vs_ref_planned": 3.0,
+      "ranking_penalty_strength": 0.2
+    }
+  }
+}

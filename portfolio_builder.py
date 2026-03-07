@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from confidence_calibration import apply_calibration_to_record
+from explainability import build_pick_score_breakdown, ensure_record_explainability
 from fee_engine import FeeEngine
 from models import TradeCandidate
 from candidate_engine import compute_candidates
@@ -49,12 +51,170 @@ def _candidate_expected_realized_profit_per_m3(c) -> float:
 def _candidate_confidence(c) -> float:
     raw = getattr(
         c,
-        "overall_confidence",
-        c.get("overall_confidence", c.get("strict_confidence_score", c.get("fill_probability", 0.0)))
+        "decision_overall_confidence",
+        c.get(
+            "decision_overall_confidence",
+            c.get("calibrated_overall_confidence", c.get("overall_confidence", c.get("strict_confidence_score", c.get("fill_probability", 0.0))))
+        )
         if isinstance(c, dict)
-        else getattr(c, "strict_confidence_score", getattr(c, "fill_probability", 0.0)),
+        else getattr(c, "calibrated_overall_confidence", getattr(c, "strict_confidence_score", getattr(c, "fill_probability", 0.0))),
     )
     return max(0.0, min(1.0, float(raw or 0.0)))
+
+
+def _candidate_raw_confidence(c) -> float:
+    raw = getattr(
+        c,
+        "raw_overall_confidence",
+        c.get("raw_overall_confidence", c.get("raw_confidence", c.get("overall_confidence", c.get("strict_confidence_score", c.get("fill_probability", 0.0)))))
+        if isinstance(c, dict)
+        else getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", getattr(c, "fill_probability", 0.0))),
+    )
+    return max(0.0, min(1.0, float(raw or 0.0)))
+
+
+def _candidate_calibrated_confidence(c) -> float:
+    raw = getattr(
+        c,
+        "calibrated_overall_confidence",
+        c.get("calibrated_overall_confidence", c.get("calibrated_confidence", c.get("raw_overall_confidence", c.get("overall_confidence", 0.0))))
+        if isinstance(c, dict)
+        else getattr(c, "raw_overall_confidence", getattr(c, "overall_confidence", 0.0)),
+    )
+    return max(0.0, min(1.0, float(raw or 0.0)))
+
+
+def _candidate_transport_confidence(c) -> float:
+    raw = getattr(
+        c,
+        "raw_transport_confidence",
+        c.get("raw_transport_confidence", c.get("transport_confidence", 1.0))
+        if isinstance(c, dict)
+        else getattr(c, "transport_confidence", 1.0),
+    )
+    return max(0.0, min(1.0, float(raw or 0.0)))
+
+
+def _candidate_calibration_warning(c) -> str:
+    raw = getattr(
+        c,
+        "calibration_warning",
+        c.get("calibration_warning", "")
+        if isinstance(c, dict)
+        else "",
+    )
+    return str(raw or "")
+
+
+def _candidate_confidence_payload(c) -> dict[str, object]:
+    raw_exit = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(
+                    c,
+                    "raw_exit_confidence",
+                    c.get("raw_exit_confidence", c.get("exit_confidence", 0.0))
+                    if isinstance(c, dict)
+                    else getattr(c, "exit_confidence", 0.0),
+                )
+                or 0.0
+            ),
+        ),
+    )
+    raw_liquidity = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(
+                    c,
+                    "raw_liquidity_confidence",
+                    c.get("raw_liquidity_confidence", c.get("liquidity_confidence", 0.0))
+                    if isinstance(c, dict)
+                    else getattr(c, "liquidity_confidence", 0.0),
+                )
+                or 0.0
+            ),
+        ),
+    )
+    raw_transport = _candidate_transport_confidence(c)
+    raw_overall = _candidate_raw_confidence(c)
+    calibrated_exit = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(
+                    c,
+                    "calibrated_exit_confidence",
+                    c.get("calibrated_exit_confidence", raw_exit)
+                    if isinstance(c, dict)
+                    else raw_exit,
+                )
+                or 0.0
+            ),
+        ),
+    )
+    calibrated_liquidity = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(
+                    c,
+                    "calibrated_liquidity_confidence",
+                    c.get("calibrated_liquidity_confidence", raw_liquidity)
+                    if isinstance(c, dict)
+                    else raw_liquidity,
+                )
+                or 0.0
+            ),
+        ),
+    )
+    calibrated_transport = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(
+                    c,
+                    "calibrated_transport_confidence",
+                    c.get("calibrated_transport_confidence", raw_transport)
+                    if isinstance(c, dict)
+                    else raw_transport,
+                )
+                or 0.0
+            ),
+        ),
+    )
+    calibrated_overall = _candidate_calibrated_confidence(c)
+    decision_overall = _candidate_confidence(c)
+    return {
+        "transport_confidence": raw_transport,
+        "raw_exit_confidence": raw_exit,
+        "raw_liquidity_confidence": raw_liquidity,
+        "raw_transport_confidence": raw_transport,
+        "raw_overall_confidence": raw_overall,
+        "calibrated_exit_confidence": calibrated_exit,
+        "calibrated_liquidity_confidence": calibrated_liquidity,
+        "calibrated_transport_confidence": calibrated_transport,
+        "calibrated_overall_confidence": calibrated_overall,
+        "raw_confidence": raw_overall,
+        "calibrated_confidence": calibrated_overall,
+        "decision_overall_confidence": decision_overall,
+        "calibration_warning": _candidate_calibration_warning(c),
+    }
+
+
+def _confidence_calibration_model(cfg: dict | None) -> dict | None:
+    if not isinstance(cfg, dict):
+        return None
+    runtime = cfg.get("_confidence_calibration_runtime", {})
+    if not isinstance(runtime, dict):
+        return None
+    return runtime.get("model")
 
 
 def _candidate_expected_days(c) -> float:
@@ -99,6 +259,24 @@ def _candidate_scale_ratio(c, qty: int) -> float:
     return max(0.0, min(1.0, float(qty) / max_units))
 
 
+def _candidate_scaled_expected_days(c, qty: int) -> float:
+    expected_days = _candidate_expected_days(c)
+    if expected_days <= 0.0 or int(qty) <= 0:
+        return 0.0
+    max_units = float(getattr(c, "max_units", c.get("max_units", 0) if isinstance(c, dict) else 0) or 0.0)
+    if max_units <= 0.0:
+        return float(expected_days)
+    queue_ahead_units = max(
+        0.0,
+        float(getattr(c, "queue_ahead_units", c.get("queue_ahead_units", 0) if isinstance(c, dict) else 0) or 0.0),
+    )
+    scaled_qty = max(0.0, min(float(qty), max_units))
+    denom = queue_ahead_units + max_units
+    if denom <= 0.0:
+        return float(expected_days)
+    return float(expected_days) * ((queue_ahead_units + scaled_qty) / denom)
+
+
 def _portfolio_expected_realized_profit(picks: list[dict]) -> float:
     return sum(float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0) for p in picks)
 
@@ -115,17 +293,17 @@ def _portfolio_objective(picks: list[dict], budget_isk: float, portfolio_cfg: di
         share = (cost / max(1e-9, float(budget_isk))) if float(budget_isk) > 0 else 0.0
         over = max(0.0, share - (max_share * 0.70))
         concentration_penalty += over * max(0.0, float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0))
-        liquidity_penalty += max(0.0, float(p.get("expected_days_to_sell", 0.0) or 0.0) - 30.0) * 1000.0
+        # Penalty proportional to expected profit: 0.5% of realized profit per extra day over 30d.
+        # Flat-ISK (1000/day) was ~0.06% of a typical position — functionally zero vs million-ISK profits.
+        extra_days = max(0.0, float(p.get("expected_days_to_sell", 0.0) or 0.0) - 30.0)
+        pick_expected = max(0.0, float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0))
+        liquidity_penalty += extra_days * pick_expected * 0.005
     return float(total_expected) - float(concentration_penalty * 0.25) - float(liquidity_penalty)
 
 
 def _candidate_selection_score(c, max_liq_days: float) -> float:
-    expected_profit = _candidate_expected_realized_profit(c)
-    confidence = _candidate_confidence(c)
-    expected_days = _candidate_expected_days(c)
-    per_m3 = _candidate_expected_realized_profit_per_m3(c)
-    days_penalty = 1.0 + (max(0.0, expected_days) / max(1.0, float(max_liq_days))) if max_liq_days > 0 else 1.0
-    return ((expected_profit * (0.70 + (0.30 * confidence))) / days_penalty) + (per_m3 * 0.05)
+    score, _ = build_pick_score_breakdown(c, max_liq_days=float(max_liq_days))
+    return float(score)
 
 
 def portfolio_stats(picks: list[dict]) -> tuple[float, float, float, dict]:
@@ -188,7 +366,7 @@ def local_search_optimize(
         candidates,
         key=lambda c: (
             float(c.get("expected_realized_profit_90d", c.get("expected_profit_90d", c.get("profit", 0.0))) or 0.0),
-            float(c.get("overall_confidence", c.get("strict_confidence_score", c.get("fill_probability", 0.0))) or 0.0),
+            _candidate_confidence(c),
         ),
         reverse=True,
     )[:top_k]
@@ -222,7 +400,7 @@ def sort_picks_for_output(picks: list[dict], filters_used: dict) -> None:
             key=lambda x: (
                 x.get("expected_realized_profit_per_m3_90d", x.get("expected_profit_per_m3_90d", 0.0)),
                 x.get("expected_realized_profit_90d", x.get("expected_profit_90d", 0.0)),
-                x.get("overall_confidence", x.get("strict_confidence_score", 0.0)),
+                x.get("decision_overall_confidence", x.get("calibrated_overall_confidence", x.get("overall_confidence", x.get("strict_confidence_score", 0.0)))),
                 -x.get("expected_days_to_sell", 0.0),
             ),
             reverse=True
@@ -256,7 +434,7 @@ def _sort_candidates_for_cargo_fill(candidates: list[TradeCandidate], ranking_me
             key=lambda c: (
                 float(getattr(c, "expected_realized_profit_per_m3_90d", getattr(c, "expected_profit_per_m3_90d", 0.0))),
                 float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", 0.0))),
-                float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", 0.0))),
+                _candidate_confidence(c),
                 -float(getattr(c, "expected_days_to_sell", 0.0)),
                 -float(getattr(c, "risk_score", 0.0))
             ),
@@ -339,7 +517,12 @@ def try_cargo_fill(
     added = 0
     added_new_types = 0
     base_total_m3 = sum(float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0)) for p in base_picks)
-    base_total_profit = sum(float(p.get("profit", 0.0)) for p in base_picks)
+    # Use expected_realized_profit_90d (risk-adjusted) if available, otherwise fall back to gross profit.
+    # Gross `profit` field overstates the baseline for planned_sell routes where sell-through < 100%.
+    base_total_profit = sum(
+        float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0)
+        for p in base_picks
+    )
     base_profit_per_m3 = (base_total_profit / base_total_m3) if base_total_m3 > 0 else 0.0
     for c in sorted_fill_pool:
         if remaining_budget <= 1e-6 or remaining_cargo <= 1e-6:
@@ -378,6 +561,7 @@ def try_cargo_fill(
 
         total_qty_after = existing_qty + qty
         scale_ratio = _candidate_scale_ratio(c, qty)
+        scaled_expected_realized_profit = _candidate_expected_realized_profit(c) * float(scale_ratio or 1.0)
         if bool(getattr(c, "instant", True)):
             instant_fill_ratio_after = min(1.0, float(getattr(c, "dest_buy_depth_units", 0)) / max(1.0, float(total_qty_after)))
             if instant_fill_ratio_after < min_instant_fill_ratio:
@@ -410,11 +594,13 @@ def try_cargo_fill(
             continue
         if float(profit) < max(0.0, cargo_fill_min_profit_abs_isk):
             continue
-        candidate_profit_per_m3 = (float(profit) / max(1e-9, unit_vol * qty))
+        candidate_profit_per_m3 = float(scaled_expected_realized_profit) / max(1e-9, unit_vol * qty)
         if base_profit_per_m3 > 0 and candidate_profit_per_m3 < (base_profit_per_m3 * max(0.0, cargo_fill_min_profit_per_m3_ratio)):
             continue
 
         if is_existing:
+            confidence_payload = _candidate_confidence_payload(c)
+            scaled_expected_days_total = _candidate_scaled_expected_days(c, total_qty_after)
             existing_pick["qty"] = int(existing_pick.get("qty", 0)) + qty
             existing_pick["cost"] = float(existing_pick.get("cost", 0.0)) + cost
             existing_pick["revenue_net"] = float(existing_pick.get("revenue_net", 0.0)) + revenue_net
@@ -436,6 +622,10 @@ def try_cargo_fill(
             existing_pick["gross_profit_if_full_sell"] = float(existing_pick.get("gross_profit_if_full_sell", 0.0)) + (
                 float(getattr(c, "gross_profit_if_full_sell", float(profit))) * float(scale_ratio)
             )
+            existing_pick["expected_days_to_sell"] = max(
+                float(existing_pick.get("expected_days_to_sell", 0.0) or 0.0),
+                float(scaled_expected_days_total),
+            )
             existing_pick["expected_units_sold_90d"] = float(existing_pick.get("expected_units_sold_90d", 0.0)) + (
                 float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability_after))) * float(scale_ratio or 1.0)
             )
@@ -443,7 +633,7 @@ def try_cargo_fill(
                 float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio)
             )
             existing_pick["expected_realized_profit_90d"] = float(existing_pick.get("expected_realized_profit_90d", 0.0)) + (
-                float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio)
+                float(scaled_expected_realized_profit)
             )
             existing_pick["estimated_sellable_units_90d"] = max(
                 float(existing_pick.get("estimated_sellable_units_90d", 0.0)),
@@ -467,6 +657,59 @@ def try_cargo_fill(
                     float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability_after))),
                 )
             )
+            existing_pick["transport_confidence"] = float(
+                min(float(existing_pick.get("transport_confidence", 1.0)), float(confidence_payload["transport_confidence"]))
+            )
+            existing_pick["raw_exit_confidence"] = float(
+                min(float(existing_pick.get("raw_exit_confidence", 1.0)), float(confidence_payload["raw_exit_confidence"]))
+            )
+            existing_pick["raw_liquidity_confidence"] = float(
+                min(float(existing_pick.get("raw_liquidity_confidence", 1.0)), float(confidence_payload["raw_liquidity_confidence"]))
+            )
+            existing_pick["raw_transport_confidence"] = float(
+                min(float(existing_pick.get("raw_transport_confidence", 1.0)), float(confidence_payload["raw_transport_confidence"]))
+            )
+            existing_pick["raw_overall_confidence"] = float(
+                min(float(existing_pick.get("raw_overall_confidence", 1.0)), float(confidence_payload["raw_overall_confidence"]))
+            )
+            existing_pick["calibrated_exit_confidence"] = float(
+                min(float(existing_pick.get("calibrated_exit_confidence", 1.0)), float(confidence_payload["calibrated_exit_confidence"]))
+            )
+            existing_pick["calibrated_liquidity_confidence"] = float(
+                min(float(existing_pick.get("calibrated_liquidity_confidence", 1.0)), float(confidence_payload["calibrated_liquidity_confidence"]))
+            )
+            existing_pick["calibrated_transport_confidence"] = float(
+                min(float(existing_pick.get("calibrated_transport_confidence", 1.0)), float(confidence_payload["calibrated_transport_confidence"]))
+            )
+            existing_pick["calibrated_overall_confidence"] = float(
+                min(float(existing_pick.get("calibrated_overall_confidence", 1.0)), float(confidence_payload["calibrated_overall_confidence"]))
+            )
+            existing_pick["raw_confidence"] = float(existing_pick.get("raw_overall_confidence", confidence_payload["raw_overall_confidence"]))
+            existing_pick["calibrated_confidence"] = float(
+                existing_pick.get("calibrated_overall_confidence", confidence_payload["calibrated_overall_confidence"])
+            )
+            existing_pick["decision_overall_confidence"] = float(
+                min(float(existing_pick.get("decision_overall_confidence", 1.0)), float(confidence_payload["decision_overall_confidence"]))
+            )
+            if str(confidence_payload["calibration_warning"]):
+                existing_pick["calibration_warning"] = str(confidence_payload["calibration_warning"])
+            existing_pick["market_plausibility_score"] = float(
+                min(float(existing_pick.get("market_plausibility_score", 1.0)), float(getattr(c, "market_plausibility_score", 1.0)))
+            )
+            existing_pick["manipulation_risk_score"] = float(
+                max(float(existing_pick.get("manipulation_risk_score", 0.0)), float(getattr(c, "manipulation_risk_score", 0.0)))
+            )
+            existing_pick["profit_at_top_of_book"] = float(existing_pick.get("profit_at_top_of_book", 0.0)) + (
+                float(getattr(c, "profit_at_top_of_book", float(profit))) * float(scale_ratio or 1.0)
+            )
+            existing_pick["profit_at_usable_depth"] = float(existing_pick.get("profit_at_usable_depth", 0.0)) + (
+                float(getattr(c, "profit_at_usable_depth", float(profit))) * float(scale_ratio or 1.0)
+            )
+            existing_pick["profit_at_conservative_executable_price"] = float(
+                existing_pick.get("profit_at_conservative_executable_price", 0.0)
+            ) + (float(getattr(c, "profit_at_conservative_executable_price", float(profit))) * float(scale_ratio or 1.0))
+            if isinstance(getattr(c, "market_plausibility", {}), dict) and getattr(c, "market_plausibility", {}):
+                existing_pick["market_plausibility"] = dict(getattr(c, "market_plausibility", {}))
             existing_pick["expected_profit_90d"] = float(existing_pick.get("expected_realized_profit_90d", 0.0))
             if "buy_at" not in existing_pick:
                 existing_pick["buy_at"] = str(getattr(c, "route_src_label", ""))
@@ -492,9 +735,12 @@ def try_cargo_fill(
                 float(existing_pick.get("expected_realized_profit_90d", 0.0)) / total_pick_m3
             ) if total_pick_m3 > 0 else 0.0
             existing_pick["expected_profit_per_m3_90d"] = float(existing_pick["expected_realized_profit_per_m3_90d"])
+            ensure_record_explainability(existing_pick, max_liq_days=float(max_liq_days))
         else:
+            confidence_payload = _candidate_confidence_payload(c)
             pick_profit_per_m3 = (float(profit) / float(qty) / unit_vol)
             pick_profit_per_m3_per_day = pick_profit_per_m3 * turnover_factor_after
+            scaled_expected_days = _candidate_scaled_expected_days(c, qty)
             new_pick = {
                 "type_id": c.type_id,
                 "name": c.name,
@@ -533,23 +779,32 @@ def try_cargo_fill(
                 "target_sell_price": float(getattr(c, "target_sell_price", 0.0)),
                 "avg_daily_volume_30d": float(getattr(c, "avg_daily_volume_30d", 0.0)),
                 "avg_daily_volume_7d": float(getattr(c, "avg_daily_volume_7d", 0.0)),
-                "expected_days_to_sell": float(getattr(c, "expected_days_to_sell", 0.0)) * float(scale_ratio or 1.0),
+                "expected_days_to_sell": float(scaled_expected_days),
                 "sell_through_ratio_90d": float(getattr(c, "sell_through_ratio_90d", 0.0)),
                 "risk_score": float(getattr(c, "risk_score", 0.0)),
                 "gross_profit_if_full_sell": float(getattr(c, "gross_profit_if_full_sell", float(profit))) * float(scale_ratio or 1.0),
                 "expected_units_sold_90d": float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability_after))) * float(scale_ratio or 1.0),
                 "expected_units_unsold_90d": float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio or 1.0),
-                "expected_realized_profit_90d": float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio or 1.0),
+                "expected_realized_profit_90d": float(scaled_expected_realized_profit),
                 "expected_realized_profit_per_m3_90d": float(
-                    getattr(c, "expected_realized_profit_90d", float(profit)) * float(scale_ratio or 1.0)
+                    float(scaled_expected_realized_profit)
                 ) / max(1e-9, float(qty) * float(unit_vol)),
                 "estimated_sellable_units_90d": float(getattr(c, "estimated_sellable_units_90d", float(qty))),
                 "exit_confidence": float(getattr(c, "exit_confidence", fill_probability_after)),
                 "liquidity_confidence": float(getattr(c, "liquidity_confidence", fill_probability_after)),
                 "overall_confidence": float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability_after))),
-                "expected_profit_90d": float(getattr(c, "expected_realized_profit_90d", float(profit))) * float(scale_ratio or 1.0),
+                "market_plausibility": dict(getattr(c, "market_plausibility", {})),
+                "market_plausibility_score": float(getattr(c, "market_plausibility_score", 1.0)),
+                "manipulation_risk_score": float(getattr(c, "manipulation_risk_score", 0.0)),
+                "profit_at_top_of_book": float(getattr(c, "profit_at_top_of_book", float(profit))) * float(scale_ratio or 1.0),
+                "profit_at_usable_depth": float(getattr(c, "profit_at_usable_depth", float(profit))) * float(scale_ratio or 1.0),
+                "profit_at_conservative_executable_price": float(
+                    getattr(c, "profit_at_conservative_executable_price", float(profit))
+                ) * float(scale_ratio or 1.0),
+                **confidence_payload,
+                "expected_profit_90d": float(scaled_expected_realized_profit),
                 "expected_profit_per_m3_90d": float(
-                    (getattr(c, "expected_realized_profit_90d", float(profit)) * float(scale_ratio or 1.0))
+                    float(scaled_expected_realized_profit)
                     / max(1e-9, float(qty) * float(unit_vol))
                 ),
                 "used_volume_fallback": bool(getattr(c, "used_volume_fallback", False)),
@@ -578,14 +833,13 @@ def try_cargo_fill(
                 "route_adjusted_score": float(getattr(c, "route_adjusted_score", 0.0)),
                 "release_leg_index": int(getattr(c, "route_dst_index", 0) - 1) if int(getattr(c, "route_dst_index", 0)) > 0 else -1
             }
+            ensure_record_explainability(new_pick, max_liq_days=float(max_liq_days))
             picks.append(new_pick)
             picks_by_type[tid] = new_pick
             added_new_types += 1
 
         total_cost += cost
-        total_profit += float(
-            getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", profit))
-        ) * float(scale_ratio or 1.0)
+        total_profit += float(scaled_expected_realized_profit)
         total_m3 += (unit_vol * qty)
         remaining_budget -= cost
         remaining_cargo -= (unit_vol * qty)
@@ -687,9 +941,7 @@ def build_portfolio(
                 continue
 
             scale_ratio = _candidate_scale_ratio(c, qty)
-            scaled_expected_days = float(getattr(c, "expected_days_to_sell", 0.0) or 0.0)
-            if scaled_expected_days > 0.0 and int(getattr(c, "max_units", 0) or 0) > 0:
-                scaled_expected_days *= float(scale_ratio)
+            scaled_expected_days = _candidate_scaled_expected_days(c, qty)
             if scaled_expected_days > max_liq_days:
                 continue
 
@@ -701,13 +953,14 @@ def build_portfolio(
                 turnover_factor = min(max_turnover_factor, max(0.0, instant_fill_ratio))
                 fill_probability = instant_fill_ratio
             else:
-                instant_fill_ratio = 1.0
+                instant_fill_ratio = 0.0  # not applicable for planned/listed sells
                 turnover_factor = float(c.turnover_factor)
                 fill_probability = float(c.fill_probability)
             pick_profit_per_m3_per_day = pick_profit_per_m3 * turnover_factor
             expected_realized_profit = float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", profit))) * float(scale_ratio or 1.0)
             expected_units_sold = float(getattr(c, "expected_units_sold_90d", float(qty) * float(fill_probability))) * float(scale_ratio or 1.0)
             expected_units_unsold = float(getattr(c, "expected_units_unsold_90d", 0.0)) * float(scale_ratio or 1.0)
+            confidence_payload = _candidate_confidence_payload(c)
             new_pick = {
                 "type_id": c.type_id,
                 "name": c.name,
@@ -767,6 +1020,15 @@ def build_portfolio(
                 "exit_confidence": float(getattr(c, "exit_confidence", fill_probability)),
                 "liquidity_confidence": float(getattr(c, "liquidity_confidence", fill_probability)),
                 "overall_confidence": float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability))),
+                "market_plausibility": dict(getattr(c, "market_plausibility", {})),
+                "market_plausibility_score": float(getattr(c, "market_plausibility_score", 1.0)),
+                "manipulation_risk_score": float(getattr(c, "manipulation_risk_score", 0.0)),
+                "profit_at_top_of_book": float(getattr(c, "profit_at_top_of_book", float(profit))) * float(scale_ratio or 1.0),
+                "profit_at_usable_depth": float(getattr(c, "profit_at_usable_depth", float(profit))) * float(scale_ratio or 1.0),
+                "profit_at_conservative_executable_price": float(
+                    getattr(c, "profit_at_conservative_executable_price", float(profit))
+                ) * float(scale_ratio or 1.0),
+                **confidence_payload,
                 "expected_profit_90d": float(expected_realized_profit),
                 "expected_profit_per_m3_90d": float(expected_realized_profit / max(1e-9, float(qty) * float(c.unit_volume))),
                 "used_volume_fallback": bool(getattr(c, "used_volume_fallback", False)),
@@ -792,6 +1054,7 @@ def build_portfolio(
                 "route_adjusted_score": float(getattr(c, "route_adjusted_score", 0.0)),
                 "release_leg_index": int(getattr(c, "route_dst_index", 0) - 1) if int(getattr(c, "route_dst_index", 0)) > 0 else -1
             }
+            ensure_record_explainability(new_pick, max_liq_days=float(max_liq_days))
             if not validate_portfolio(picks + [new_pick], budget_isk, cargo_m3, portfolio_cfg):
                 continue
 
@@ -854,7 +1117,8 @@ def build_portfolio(
         profit = float(breakdown.profit)
         scale_ratio = _candidate_scale_ratio(c, proto_qty)
         expected_realized_profit = _candidate_expected_realized_profit(c) * float(scale_ratio or 1.0)
-        candidate_dicts.append({
+        confidence_payload = _candidate_confidence_payload(c)
+        candidate_dict = {
             'type_id': int(type_id), 'name': name, 'qty': proto_qty,
             'unit_volume': unit_volume, 'buy_avg': buy_avg, 'sell_avg': sell_avg,
             'cost': cost, 'revenue_net': revenue_net, 'profit': profit,
@@ -898,6 +1162,13 @@ def build_portfolio(
             'exit_confidence': getattr(c, 'exit_confidence', c.get('exit_confidence', 0.0) if isinstance(c, dict) else 0.0),
             'liquidity_confidence': getattr(c, 'liquidity_confidence', c.get('liquidity_confidence', 0.0) if isinstance(c, dict) else 0.0),
             'overall_confidence': getattr(c, 'overall_confidence', c.get('overall_confidence', 0.0) if isinstance(c, dict) else 0.0),
+            'market_plausibility': dict(getattr(c, 'market_plausibility', c.get('market_plausibility', {}) if isinstance(c, dict) else {})),
+            'market_plausibility_score': getattr(c, 'market_plausibility_score', c.get('market_plausibility_score', 1.0) if isinstance(c, dict) else 1.0),
+            'manipulation_risk_score': getattr(c, 'manipulation_risk_score', c.get('manipulation_risk_score', 0.0) if isinstance(c, dict) else 0.0),
+            'profit_at_top_of_book': getattr(c, 'profit_at_top_of_book', c.get('profit_at_top_of_book', profit) if isinstance(c, dict) else profit),
+            'profit_at_usable_depth': getattr(c, 'profit_at_usable_depth', c.get('profit_at_usable_depth', profit) if isinstance(c, dict) else profit),
+            'profit_at_conservative_executable_price': getattr(c, 'profit_at_conservative_executable_price', c.get('profit_at_conservative_executable_price', profit) if isinstance(c, dict) else profit),
+            **confidence_payload,
             'expected_profit_90d': expected_realized_profit,
             'expected_profit_per_m3_90d': expected_realized_profit / max(1e-9, unit_volume * proto_qty),
             'used_volume_fallback': getattr(c, 'used_volume_fallback', c.get('used_volume_fallback', False) if isinstance(c, dict) else False),
@@ -924,7 +1195,9 @@ def build_portfolio(
             'extra_leg_penalty': getattr(c, 'extra_leg_penalty', c.get('extra_leg_penalty', 0.0) if isinstance(c, dict) else 0.0),
             'route_wide_selected': getattr(c, 'route_wide_selected', c.get('route_wide_selected', False) if isinstance(c, dict) else False),
             'route_adjusted_score': getattr(c, 'route_adjusted_score', c.get('route_adjusted_score', 0.0) if isinstance(c, dict) else 0.0)
-        })
+        }
+        ensure_record_explainability(candidate_dict, max_liq_days=float(max_liq_days))
+        candidate_dicts.append(candidate_dict)
 
     optimized = local_search_optimize(picks, candidate_dicts, budget_isk, cargo_m3, portfolio_cfg)
     if optimized is not picks:
@@ -968,7 +1241,7 @@ def choose_portfolio_for_route(
         p.sort(
             key=lambda x: (
                 float(x.get("expected_realized_profit_90d", x.get("expected_profit_90d", x.get("profit", 0.0))) or 0.0),
-                float(x.get("overall_confidence", x.get("strict_confidence_score", 0.0)) or 0.0),
+                float(x.get("decision_overall_confidence", x.get("calibrated_overall_confidence", x.get("overall_confidence", x.get("strict_confidence_score", 0.0)))) or 0.0),
                 -float(x.get("expected_days_to_sell", 0.0) or 0.0),
             ),
             reverse=True,
@@ -990,6 +1263,18 @@ def choose_portfolio_for_route(
         relaxed_candidates = compute_candidates(
             esi, source_orders, dest_orders, fees, relaxed, dest_structure_id=dest_structure_id
         )
+        calibration_model = _confidence_calibration_model(cfg)
+        src_label, _, dst_label = route_label.partition("->")
+        for candidate in list(relaxed_candidates or []):
+            apply_calibration_to_record(
+                candidate,
+                calibration_model,
+                route_id=str(route_label),
+                source_market=str(src_label).strip(),
+                target_market=str(dst_label).strip(),
+                exit_type=str(getattr(candidate, "exit_type", "") or ""),
+                transport_confidence=1.0,
+            )
         r_picks, r_cost, r_profit, r_m3, r_mode = build_from_candidates(relaxed_candidates, relaxed)
         if r_cost > cost and r_profit >= (profit * 0.95):
             print("    Gelockerte Schwellwerte liefern bessere Auslastung, Portfolio wurde aktualisiert.")

@@ -1,54 +1,173 @@
 # Architecture
 
-## Productive Runtime Path
+Last updated: 2026-03-07
+
+## Evidence And Limits
+
+This map is intentionally narrow.
+It is based on the root control files, `README.md`, `pyproject.toml`,
+`config.json`, `main.py`, `runtime_runner.py`, `candidate_engine.py`,
+`confidence_calibration.py`, `risk_profiles.py`, targeted tests, and current
+`git status`.
+
+It is meant to reduce future repository scanning, not to be a full code index.
+If a module is not listed here, assume it was not re-audited in this session.
+
+## Module Map System
+
+Detailed hotspot maps live under `docs/module-maps/`.
+
+Current module maps:
+
+- `docs/module-maps/runtime_runner.md`
+- `docs/module-maps/candidate_engine.md`
+- `docs/module-maps/execution_plan.md`
+- `docs/module-maps/route_search.md`
+- `docs/module-maps/runtime_common.md`
+- `docs/module-maps/risk_profiles.md`
+- `docs/module-maps/confidence_calibration.md`
+- `docs/module-maps/character_profile.md`
+- `docs/module-maps/eve_sso.md`
+- `docs/module-maps/eve_character_client.md`
+
+Use the relevant module map before opening one of these larger files.
+
+## True Runtime Entry Path
 
 The productive startup path is:
 
 1. `run.bat` or `run_trader.ps1`
-2. [`main.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/main.py)
-3. [`runtime_runner.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_runner.py): `run_cli()`
+2. `main.py`
+3. `runtime_runner.run_cli()`
 
-[`nullsectrader.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/nullsectrader.py) is not part of the CLI path. It remains only as the stable top-level import surface used by tests and local tooling. It contains no business logic.
+`nullsectrader.py` is not the main CLI path. It is a thin compatibility and
+import facade used by tests and local tooling.
 
-## Productive Modules
+## High-Value Files By Task
 
-Productive runtime/orchestration:
+Use this section to avoid loading large unrelated modules.
 
-- [`runtime_common.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_common.py): CLI parsing, runtime paths, shared helpers
-- [`runtime_clients.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_clients.py): live and replay ESI clients
-- [`runtime_runner.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_runner.py): replay/live loading, route execution, chain orchestration
-- [`runtime_reports.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_reports.py): CSV and chain/summary outputs
+- CLI argument parsing and shared runtime helpers: `runtime_common.py`
+- Runtime orchestration, mode selection, replay/live flow, output fan-out:
+  `runtime_runner.py`
+- Config loading, validation, overrides, and directory setup: `config_loader.py`
+- Live and replay clients: `runtime_clients.py`
+- Private character SSO and token lifecycle: `eve_sso.py`
+- Private character ESI fetches: `eve_character_client.py`
+- Character profile mapping, cache fallback, and fee/order integration:
+  `character_profile.py`
+- Candidate generation, planned-sell math, route-wide candidate scoring:
+  `candidate_engine.py`
+- Market plausibility heuristics: `market_plausibility.py`
+- Route ranking and route summary scoring: `route_search.py`
+- Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
+- Shipping costs, route blocking, and transport context: `shipping.py`
+- Fee calculations: `fees.py`, `fee_engine.py`
+- Human-readable output, route plan rendering, and no-trade reports: `execution_plan.py`
+- Do Not Trade decision engine (reason codes, near-misses, profile comparison): `no_trade.py`
+- CSV and summary writers: `runtime_reports.py`
+- Journal CLI and persistence: `journal_cli.py`, `journal_store.py`,
+  `journal_models.py`, `journal_reporting.py`
+- Confidence calibration from journal outcomes: `confidence_calibration.py`
+- Startup node and chain resolution: `startup_helpers.py`
 
-Trading/domain source of truth:
+## Runtime Flow
 
-- [`candidate_engine.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/candidate_engine.py): candidate generation, planned-sell logic, route-wide candidate scoring
-- [`shipping.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/shipping.py): transport pricing, route blocking, per-pick transport allocation
-- [`portfolio_builder.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/portfolio_builder.py): risk-weighted portfolio construction
-- [`route_search.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/route_search.py): route search profile generation and risk-adjusted ranking inputs
-- [`execution_plan.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/execution_plan.py): route-profile execution plan and leaderboard rendering
-- [`fees.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/fees.py) and [`fee_engine.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/fee_engine.py): fee calculations
-- [`market_fetch.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/market_fetch.py): node order loading
-- [`market_normalization.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/market_normalization.py): replay snapshot normalization
-- [`startup_helpers.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/startup_helpers.py): structure/node/chain resolution
+The main runtime flow is:
 
-## Thin Facades
+`config.json` + local/env overrides
+-> `runtime_common.py` / `config_loader.py`
+-> `runtime_runner.py`
+-> `runtime_clients.py`
+-> optional `eve_sso.py` / `eve_character_client.py` / `character_profile.py`
+-> `candidate_engine.py`
+-> `portfolio_builder.py`
+-> `shipping.py`
+-> `route_search.py`
+-> `execution_plan.py` / `runtime_reports.py`
+-> journal artifacts and report files
 
-- [`nullsectrader.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/nullsectrader.py): stable top-level import surface and direct module entrypoint
-- [`test_nullsectrader.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/test_nullsectrader.py): lightweight compatibility test launcher
+Confidence calibration is fed by journal data:
 
-## Source Of Truth By Core Rule
+`journal_store.py`
+-> `confidence_calibration.py`
+-> `runtime_runner.py` applies calibrated confidence to candidates, picks, and
+route results
 
-- Fees: `fees.py` / `fee_engine.py`
+## Output And State Files
+
+Confirmed output families from the current docs and entry modules:
+
+- `execution_plan_<timestamp>.txt`
+- `route_leaderboard_<timestamp>.txt`
+- `roundtrip_plan_<timestamp>.txt`
+- `*_to_*_<timestamp>.csv`
+- `*_top_candidates_<timestamp>.txt`
+- `trade_plan_<plan_id>.json`
+- `market_snapshot.json`
+
+Local mutable state:
+
+- `config.local.json` is local-only and ignored by Git
+- `cache/` holds runtime cache, SSO token/metadata, character profile cache,
+  and journal data
+
+## Test Entry Points
+
+Known test and quality entry points:
+
+- `python -m pytest -q`
+- `python tests/run_all.py`
+- `python test_nullsectrader.py`
+- `python scripts/quality_check.py`
+
+`tests/run_all.py` currently imports targeted test modules instead of scanning
+the repository dynamically.
+
+## Current Hotspots
+
+Observed on branch `dev` on 2026-03-07:
+
+- modified: `README.md`, `candidate_engine.py`, `execution_plan.py`,
+  `portfolio_builder.py`, `route_search.py`, `runtime_common.py`,
+  `runtime_runner.py`, `config_loader.py`, `config.json`
+- untracked: `character_profile.py`, `eve_sso.py`, `eve_character_client.py`,
+  `local_cache.py`, `tests/test_character_context.py`, `tests/test_eve_sso.py`,
+  `docs/module-maps/character_profile.md`, `docs/module-maps/eve_sso.md`,
+  `docs/module-maps/eve_character_client.md`
+
+This strongly suggests active in-flight work around:
+
+- risk profiles and profile-aware ranking/output
+- execution-plan presentation
+- CLI/runtime integration for the new profile surface
+- optional private character context via EVE SSO / ESI
+
+Treat those areas as the most likely source of doc drift until targeted tests
+confirm the worktree state.
+
+## Source Of Truth By Concern
+
+- Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
-- Candidate generation and planned sell modeling: `candidate_engine.py`
-- Route scoring/search ranking: `route_search.py`
-- Portfolio building: `portfolio_builder.py`
-- Route-profile execution-plan rendering: `execution_plan.py`
+- Candidate generation and planned-sell modeling: `candidate_engine.py`
+- Confidence calibration logic: `confidence_calibration.py`
+- Private character auth and cacheable profile sync: `eve_sso.py`,
+  `eve_character_client.py`, `character_profile.py`
+- Route ranking: `route_search.py`
+- Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
+- Execution plan rendering: `execution_plan.py`
 - Runtime orchestration: `runtime_runner.py`
 
-## Runtime Notes
+## AI Navigation Notes
 
-- Missing shipping models block routes by default in `shipping.py`.
-- Route-profile and chain outputs are rendered by separate modules, but the route decision path is single-source:
-  candidate generation -> portfolio building -> shipping adjustment/blocking -> execution-plan/report rendering.
-- Replay and live mode share the same orchestration path. Only the client implementation changes.
+To keep context small:
+
+- start with this file before opening large modules
+- read a relevant file in `docs/module-maps/` before opening a covered large module
+- read `README.md` for product behavior, not code ownership
+- prefer targeted tests and targeted modules over repo-wide search
+- avoid opening `runtime_runner.py` or `candidate_engine.py` unless the task
+  actually changes orchestration or candidate math
+
+If behavior changes, update this file in the same session.

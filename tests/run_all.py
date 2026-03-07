@@ -8,7 +8,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-MODULES = ['test_core', 'test_portfolio', 'test_config', 'test_shipping', 'test_route_search', 'test_integration', 'test_architecture']
+MODULES = ['test_core', 'test_portfolio', 'test_config', 'test_shipping', 'test_route_search', 'test_integration', 'test_architecture', 'test_journal', 'test_confidence_calibration', 'test_explainability', 'test_market_plausibility']
 
 def _iter_tests(module):
     for name, obj in module.__dict__.items():
