@@ -13,6 +13,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Route Search mit risikoadjustiertem Ranking statt reinem Papier-Profit
 - Portfolio-Bau unter Budget-, Cargo-, Liquidations- und Nachfragelimits
 - Execution Plans, Route Leaderboard, CSV-Exporte und Candidate-Dumps
+- Lokales Trade Journal fuer Soll/Ist-Abgleich von vorgeschlagenen und tatsaechlich ausgefuehrten Trades
 - Replay-Unterstuetzung fuer reproduzierbare Analysen und Regressionstests
 - Snapshot-Only-Modus zum Bauen neuer Replay-Snapshots aus Live-Daten
 
@@ -105,6 +106,22 @@ Wenn `--cargo-m3` oder `--budget-isk` fehlen, fragt die CLI interaktiv nach Carg
 - `NULLSEC_REPLAY_ENABLED=1` erzwingt Replay, `NULLSEC_REPLAY_ENABLED=0` erzwingt Live.
 - Live-Runs koennen nach dem Fetch ein Replay-Snapshot schreiben, wenn `replay.write_snapshot_after_fetch=true` gesetzt ist.
 - Vorhandene Replay-Fixtures fuer Regressionen liegen unter [`tests/fixtures`](./tests/fixtures).
+
+### Trade Journal
+
+Normale Runs schreiben jetzt zusaetzlich eine maschinenlesbare Plan-Datei `trade_plan_<plan_id>.json`. Darin stehen `plan_id`, `route_id` und stabile `pick_id`s fuer die vorgeschlagenen Picks.
+
+Damit kann ein Plan spaeter ins lokale Journal uebernommen werden:
+
+```powershell
+python .\main.py journal import-plan --plan-file .\trade_plan_plan_2026-03-07_12-00-00_ab12cd34.json
+python .\main.py journal buy --entry-id pick_ab12cd34ef56 --qty 10 --price 1250000 --fees-paid 5m
+python .\main.py journal sell --entry-id pick_ab12cd34ef56 --qty 10 --price 1550000 --fees-paid 6m
+python .\main.py journal overview
+python .\main.py journal open
+python .\main.py journal closed
+python .\main.py journal report
+```
 
 ### Wichtige Konfigurationsstellen
 
@@ -204,6 +221,7 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 
 - [`candidate_engine.py`](./candidate_engine.py): Candidate-Erzeugung, `planned_sell`-Logik, Queue- und Nachfragebewertung
 - [`fees.py`](./fees.py), [`fee_engine.py`](./fee_engine.py): Gebuehrenmodell
+- [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
 - [`route_search.py`](./route_search.py): Route Search, Ranking und Route-Summary fuer das Leaderboard
 - [`portfolio_builder.py`](./portfolio_builder.py): Portfolio-Bau unter Risiko-, Nachfrage-, Budget- und Cargo-Grenzen

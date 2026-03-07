@@ -647,7 +647,7 @@ def validate_config(cfg: dict) -> dict:
         err("config root must be an object")
         return result
 
-    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search"):
+    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration"):
         if key in cfg and not isinstance(cfg.get(key), dict):
             err(f"{key} must be an object")
 
@@ -935,6 +935,70 @@ def validate_config(cfg: dict) -> dict:
         ):
             err("route_search.allow_zero_transport_cost_for_routes must be a list")
 
+    confidence_calibration_cfg = cfg.get("confidence_calibration", {})
+    if confidence_calibration_cfg is not None and not isinstance(confidence_calibration_cfg, dict):
+        err("confidence_calibration must be an object")
+    elif isinstance(confidence_calibration_cfg, dict):
+        for bkey in ("enabled", "apply_to_decisions", "scope_fallback_to_global"):
+            if bkey in confidence_calibration_cfg and not isinstance(confidence_calibration_cfg.get(bkey), bool):
+                err(f"confidence_calibration.{bkey} must be a boolean")
+        for nkey in (
+            "min_samples",
+            "min_samples_per_bucket",
+            "profit_close_ratio",
+            "profit_close_tolerance_isk",
+            "open_position_horizon_factor",
+            "stale_open_position_days",
+            "optimism_gap_warn",
+        ):
+            if nkey in confidence_calibration_cfg and (not _is_num(confidence_calibration_cfg.get(nkey)) or float(confidence_calibration_cfg.get(nkey)) < 0):
+                err(f"confidence_calibration.{nkey} must be a non-negative number")
+        if "scope" in confidence_calibration_cfg:
+            scope = str(confidence_calibration_cfg.get("scope", "")).strip().lower()
+            if scope not in ("global", "target_market", "route_id", "market_pair", "exit_type"):
+                err("confidence_calibration.scope must be one of: global, target_market, route_id, market_pair, exit_type")
+        if "buckets" in confidence_calibration_cfg:
+            buckets = confidence_calibration_cfg.get("buckets")
+            if not isinstance(buckets, list) or not buckets:
+                err("confidence_calibration.buckets must be a non-empty list")
+            else:
+                previous = 0.0
+                for idx, raw_value in enumerate(buckets):
+                    if not _is_num(raw_value):
+                        err(f"confidence_calibration.buckets[{idx}] must be numeric")
+                        continue
+                    value = float(raw_value)
+                    if value <= 0.0 or value > 1.0:
+                        err(f"confidence_calibration.buckets[{idx}] must be in range (0..1]")
+                        continue
+                    if value <= previous:
+                        err("confidence_calibration.buckets must be strictly increasing")
+                    previous = value
+
+    market_plausibility_cfg = cfg.get("market_plausibility", {})
+    if market_plausibility_cfg is not None and not isinstance(market_plausibility_cfg, dict):
+        err("market_plausibility must be an object")
+    elif isinstance(market_plausibility_cfg, dict):
+        for bkey in ("enabled", "hard_reject_on_unusable_depth", "hard_reject_on_extreme_reference_deviation"):
+            if bkey in market_plausibility_cfg and not isinstance(market_plausibility_cfg.get(bkey), bool):
+                err(f"market_plausibility.{bkey} must be a boolean")
+        for nkey in (
+            "visible_levels",
+            "min_usable_units",
+            "min_usable_ratio",
+            "thin_top_of_book_ratio",
+            "price_gap_after_top_levels_pct",
+            "depth_decay_floor",
+            "order_concentration_ratio",
+            "extreme_reference_deviation",
+            "fake_spread_profit_ratio",
+            "hard_reject_manipulation_risk",
+            "warn_manipulation_risk",
+            "reference_soft_cap_markup",
+        ):
+            if nkey in market_plausibility_cfg and (not _is_num(market_plausibility_cfg.get(nkey)) or float(market_plausibility_cfg.get(nkey)) < 0):
+                err(f"market_plausibility.{nkey} must be a non-negative number")
+
     allowed_modes = {"instant", "fast_sell", "planned_sell"}
     for fkey in ("filters_forward", "filters_return"):
         fcfg = cfg.get(fkey, {})
@@ -1058,6 +1122,10 @@ def _prepare_trade_filters(cfg: dict) -> tuple[dict, dict, str, str]:
     if isinstance(reference_price_cfg, dict):
         forward_filters["reference_price"] = dict(reference_price_cfg)
         return_filters["reference_price"] = dict(reference_price_cfg)
+    market_plausibility_cfg = cfg.get("market_plausibility", {})
+    if isinstance(market_plausibility_cfg, dict):
+        forward_filters["market_plausibility"] = dict(market_plausibility_cfg)
+        return_filters["market_plausibility"] = dict(market_plausibility_cfg)
 
     global_excludes = cfg.get("global_excludes", {})
     global_type_ids = []

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 
+from explainability import build_rejected_candidate_table, ensure_record_explainability, format_reason_digest
 from models import FilterFunnel, TradeCandidate
+from route_search import summarize_route_for_ranking
 
 
 def fmt_isk(x: float) -> str:
@@ -108,7 +110,18 @@ def write_csv(path: str, picks: list[dict]) -> None:
             "expected_realized_profit_per_m3_90d",
             "exit_confidence",
             "liquidity_confidence",
+            "raw_transport_confidence",
+            "calibrated_transport_confidence",
             "overall_confidence",
+            "raw_confidence",
+            "calibrated_confidence",
+            "decision_overall_confidence",
+            "calibration_warning",
+            "market_plausibility_score",
+            "manipulation_risk_score",
+            "profit_at_top_of_book",
+            "profit_at_usable_depth",
+            "profit_at_conservative_executable_price",
             "used_volume_fallback",
             "reference_price",
             "reference_price_source",
@@ -195,7 +208,18 @@ def write_csv(path: str, picks: list[dict]) -> None:
                 f"{expected_realized_density:.4f}",
                 f'{float(p.get("exit_confidence", p.get("strict_confidence_score", 0.0))):.4f}',
                 f'{float(p.get("liquidity_confidence", 0.0)):.4f}',
+                f'{float(p.get("raw_transport_confidence", p.get("transport_confidence", 1.0))):.4f}',
+                f'{float(p.get("calibrated_transport_confidence", p.get("raw_transport_confidence", p.get("transport_confidence", 1.0)))):.4f}',
                 f'{float(p.get("overall_confidence", p.get("strict_confidence_score", 0.0))):.4f}',
+                f'{float(p.get("raw_confidence", p.get("raw_overall_confidence", p.get("overall_confidence", 0.0)))):.4f}',
+                f'{float(p.get("calibrated_confidence", p.get("calibrated_overall_confidence", p.get("overall_confidence", 0.0)))):.4f}',
+                f'{float(p.get("decision_overall_confidence", p.get("calibrated_confidence", p.get("overall_confidence", 0.0)))):.4f}',
+                str(p.get("calibration_warning", "")),
+                f'{float(p.get("market_plausibility_score", 1.0)):.4f}',
+                f'{float(p.get("manipulation_risk_score", 0.0)):.4f}',
+                f'{float(p.get("profit_at_top_of_book", p.get("profit", 0.0))):.2f}',
+                f'{float(p.get("profit_at_usable_depth", p.get("expected_realized_profit_90d", p.get("profit", 0.0)))):.2f}',
+                f'{float(p.get("profit_at_conservative_executable_price", p.get("expected_realized_profit_90d", p.get("profit", 0.0)))):.2f}',
                 bool(p.get("used_volume_fallback", False)),
                 f'{float(p.get("reference_price", 0.0)):.2f}',
                 str(p.get("reference_price_source", "")),
@@ -244,6 +268,7 @@ def write_top_candidate_dump(path: str, candidates: list[TradeCandidate], label:
         lines.append(title)
         lines.append("-" * len(title))
         for c in ranked[:10]:
+            ensure_record_explainability(c, max_liq_days=float(filters_used.get("max_expected_days_to_sell", 90.0) or 90.0))
             display_name = getattr(c, "name", f"type_{getattr(c, 'type_id', 0)}")
             full_sell = float(getattr(c, "gross_profit_if_full_sell", getattr(c, "profit_per_unit", 0.0) * getattr(c, "max_units", 0)))
             expected_realized = float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", 0.0)))
@@ -253,10 +278,22 @@ def write_top_candidate_dump(path: str, candidates: list[TradeCandidate], label:
                 f"| isk_per_m3={c.profit_per_m3:.2f} | exp_days={float(getattr(c, 'expected_days_to_sell', 0.0)):.1f} "
                 f"| exit_conf={float(getattr(c, 'exit_confidence', 0.0)):.3f} "
                 f"| liq_conf={float(getattr(c, 'liquidity_confidence', 0.0)):.3f} "
-                f"| overall={float(getattr(c, 'overall_confidence', getattr(c, 'strict_confidence_score', 0.0))):.3f} "
+                f"| raw={float(getattr(c, 'raw_confidence', getattr(c, 'overall_confidence', getattr(c, 'strict_confidence_score', 0.0)))):.3f} "
+                f"| calibrated={float(getattr(c, 'calibrated_confidence', getattr(c, 'raw_confidence', getattr(c, 'overall_confidence', getattr(c, 'strict_confidence_score', 0.0))))):.3f} "
+                f"| plaus={float(getattr(c, 'market_plausibility_score', 1.0)):.3f} "
+                f"| manip={float(getattr(c, 'manipulation_risk_score', 0.0)):.3f} "
                 f"| queue={int(getattr(c, 'queue_ahead_units', 0))} | buy_at={getattr(c, 'route_src_label', '')} "
                 f"| sell_at={getattr(c, 'route_dst_label', '')}"
             )
+            pos_digest = format_reason_digest(list(getattr(c, "positive_reasons", []) or []), limit=3)
+            neg_digest = format_reason_digest(list(getattr(c, "negative_reasons", []) or []), limit=3)
+            warn_digest = format_reason_digest(list(getattr(c, "warnings", []) or []), limit=2)
+            if pos_digest:
+                lines.append(f"  positive: {pos_digest}")
+            if neg_digest:
+                lines.append(f"  negative: {neg_digest}")
+            if warn_digest:
+                lines.append(f"  warnings: {warn_digest}")
         lines.append("")
 
     section("Top 10 by Expected Realized Profit", sorted(candidates, key=lambda c: float(getattr(c, "expected_realized_profit_90d", 0.0)), reverse=True))
@@ -269,6 +306,17 @@ def write_top_candidate_dump(path: str, candidates: list[TradeCandidate], label:
         for reason, count in sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)[:15]:
             lines.append(f"{reason}: {count}")
         lines.append("")
+        rejected = build_rejected_candidate_table(explain, limit=10)
+        if rejected:
+            lines.append("Top 10 Rejected by Nominal Profit Proxy")
+            lines.append("-" * len("Top 10 Rejected by Nominal Profit Proxy"))
+            for entry in rejected:
+                lines.append(
+                    f"{entry.get('name', '')} (type_id {int(entry.get('type_id', 0))}) | "
+                    f"proxy={fmt_isk(entry.get('nominal_profit_proxy', 0.0))} | "
+                    f"{entry.get('reason_code', '')} | {entry.get('reason_text', '')}"
+                )
+            lines.append("")
 
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -421,7 +469,8 @@ def write_chain_summary(path: str, chain_label: str, timestamp: str, leg_results
             pick_m3 = float(p.get("unit_volume", 0.0) or 0.0) * float(pick_qty)
             lines.append(
                 f"  {p.get('name', '')} | qty={pick_qty} | m3={pick_m3:.2f} | "
-                f"profit={fmt_isk(p.get('profit', 0.0))} | overall={float(p.get('overall_confidence', p.get('strict_confidence_score', 0.0))):.3f}"
+                f"profit={fmt_isk(p.get('profit', 0.0))} | raw={float(p.get('raw_confidence', p.get('overall_confidence', p.get('strict_confidence_score', 0.0)))):.3f}"
+                f" | calibrated={float(p.get('calibrated_confidence', p.get('raw_confidence', p.get('overall_confidence', p.get('strict_confidence_score', 0.0))))):.3f}"
                 f" | buy_at={str(p.get('buy_at', ''))} | sell_at={str(p.get('sell_at', ''))} | hops={int(p.get('route_hops', 1))}"
             )
         lines.append("HANDELSPLAN (menschenlesbar):")
@@ -440,8 +489,17 @@ def write_execution_plan_chain(
     timestamp: str,
     forward_leg_results: list[dict],
     return_leg_results: list[dict] | None = None,
+    detail_mode: bool = False,
 ) -> None:
-    lines: list[str] = ["=" * 70, "EXECUTION PLAN (CHAIN)", "=" * 70, f"Timestamp: {timestamp}", ""]
+    lines: list[str] = ["=" * 70, "EXECUTION PLAN (CHAIN)", "=" * 70, f"Timestamp: {timestamp}"]
+    plan_id = ""
+    for leg in list(forward_leg_results or []) + list(return_leg_results or []):
+        plan_id = str(leg.get("plan_id", "") or "").strip()
+        if plan_id:
+            break
+    if plan_id:
+        lines.append(f"Plan ID: {plan_id}")
+    lines.append("")
     total_cost = 0.0
     total_revenue = 0.0
     total_profit = 0.0
@@ -465,9 +523,13 @@ def write_execution_plan_chain(
             picks = leg.get("picks", []) or []
             if not picks:
                 continue
+            route_summary = summarize_route_for_ranking(leg)
             section_leg_num += 1
             lines.append(f"LEG: LEG {section_leg_num}")
             lines.append(f"Route: {leg.get('route_label', '')}")
+            route_id = str(leg.get("route_id", leg.get("route_tag", "")) or "")
+            if route_id:
+                lines.append(f"Route ID: {route_id}")
             leg_cargo_total = float(leg.get("cargo_total", 0.0))
             leg_cargo_used = float(leg.get("m3_used", 0.0))
             leg_cargo_free = max(0.0, leg_cargo_total - leg_cargo_used)
@@ -476,9 +538,26 @@ def write_execution_plan_chain(
                 f"Cargo: used {leg_cargo_used:.2f} m3 | free {leg_cargo_free:.2f} m3 | "
                 f"total {leg_cargo_total:.2f} m3 | util {leg_cargo_util:.2f}%"
             )
+            route_pos = format_reason_digest(list(route_summary.get("positive_reasons", []) or []), limit=3)
+            route_neg = format_reason_digest(list(route_summary.get("negative_reasons", []) or []), limit=3)
+            route_warn = format_reason_digest(list(route_summary.get("warnings", []) or []), limit=2)
+            if route_pos:
+                lines.append(f"Route Reasons+: {route_pos}")
+            if route_neg:
+                lines.append(f"Route Reasons-: {route_neg}")
+            if route_warn:
+                lines.append(f"Route Warnings: {route_warn}")
+            if detail_mode:
+                lines.append("Route Score Breakdown:")
+                for contributor in list(route_summary.get("score_contributors", []) or []):
+                    lines.append(
+                        f"  - {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.2f} "
+                        f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                    )
             lines.append("")
             ordered = sorted(picks, key=lambda x: float(x.get("profit", 0.0)), reverse=True)
             for idx, p in enumerate(ordered, start=1):
+                ensure_record_explainability(p, max_liq_days=float(leg.get("filters_used", {}).get("max_expected_days_to_sell", 90.0) if isinstance(leg.get("filters_used", {}), dict) else 90.0))
                 qty = int(p.get("qty", 0))
                 buy_avg = float(p.get("buy_avg", 0.0))
                 buy_total = buy_avg * qty
@@ -491,6 +570,9 @@ def write_execution_plan_chain(
                 profit = float(p.get("profit", 0.0) or 0.0)
                 pick_m3 = float(p.get("unit_volume", 0.0) or 0.0) * float(qty)
                 lines.append(f"{idx}. {p.get('name', '')} (type_id {int(p.get('type_id', 0))})")
+                pick_id = str(p.get("pick_id", p.get("journal_entry_id", "")) or "")
+                if pick_id:
+                    lines.append(f"   Pick ID: {pick_id}")
                 lines.append(
                     f"   BUY  [{p.get('buy_at') or leg.get('source_label', 'SOURCE')}] qty={qty} @ {_fmt_isk_de(buy_avg)} "
                     f"(Total {_fmt_isk_de(buy_total)})"
@@ -507,6 +589,22 @@ def write_execution_plan_chain(
                     )
                 lines.append(f"   Erwartet: {exp_days:.1f}d bis Verkauf | Fill {fill_prob:.1f}%")
                 lines.append(f"   Erwarteter Profit: {_fmt_isk_de(profit)}")
+                pos_digest = format_reason_digest(list(p.get("positive_reasons", []) or []), limit=3)
+                neg_digest = format_reason_digest(list(p.get("negative_reasons", []) or []), limit=3)
+                warn_digest = format_reason_digest(list(p.get("warnings", []) or []), limit=2)
+                if pos_digest:
+                    lines.append(f"   Reasons+: {pos_digest}")
+                if neg_digest:
+                    lines.append(f"   Reasons-: {neg_digest}")
+                if warn_digest:
+                    lines.append(f"   Warnings: {warn_digest}")
+                if detail_mode:
+                    lines.append("   Score Breakdown:")
+                    for contributor in list(p.get("score_contributors", []) or []):
+                        lines.append(
+                            f"   - {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.2f} "
+                            f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                        )
                 lines.append(f"   Cargo fuer diesen Pick: {pick_m3:.2f} m3")
                 lines.append(f"   Route-Hops: {int(p.get('route_hops', 1))}")
                 lines.append("")

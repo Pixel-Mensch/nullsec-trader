@@ -1,3 +1,8 @@
+from explainability import (
+    build_rejected_candidate_table,
+    ensure_record_explainability,
+    format_reason_digest,
+)
 from route_search import route_ranking_value, summarize_route_for_ranking
 
 
@@ -43,7 +48,25 @@ def _pick_total_fees_taxes(pick: dict) -> float:
     )
 
 
-def write_execution_plan_profiles(path: str, timestamp: str, route_results: list[dict]) -> None:
+def _append_reason_lines(lines: list[str], indent: str, reasons: list[dict], label: str, *, detail_mode: bool) -> None:
+    if not reasons:
+        return
+    if not detail_mode:
+        digest = format_reason_digest(reasons)
+        if digest:
+            lines.append(f"{indent}{label}: {digest}")
+        return
+    lines.append(f"{indent}{label}:")
+    for reason in reasons:
+        lines.append(f"{indent}- {reason.get('code', '')}: {reason.get('text', '')}")
+
+
+def _detail_max_liq_days(leg: dict) -> float:
+    filters_used = leg.get("filters_used", {}) if isinstance(leg.get("filters_used", {}), dict) else {}
+    return float(filters_used.get("max_expected_days_to_sell", 90.0) or 90.0)
+
+
+def write_execution_plan_profiles(path: str, timestamp: str, route_results: list[dict], detail_mode: bool = False) -> None:
     def fmt_isk_de(x: float) -> str:
         s = f"{float(x):,.2f}"
         s = s.replace(",", "X").replace(".", ",").replace("X", ".")
@@ -54,6 +77,13 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     lines.append("EXECUTION PLAN (ROUTE PROFILES)")
     lines.append("=" * 70)
     lines.append(f"Timestamp: {timestamp}")
+    plan_id = ""
+    for leg in list(route_results or []):
+        plan_id = str(leg.get("plan_id", "") or "").strip()
+        if plan_id:
+            break
+    if plan_id:
+        lines.append(f"Plan ID: {plan_id}")
     lines.append("")
 
     total_cost = 0.0
@@ -72,6 +102,9 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             plan_title += " [NOT ACTIONABLE]"
         lines.append(plan_title)
         lines.append("-" * max(8, len(lines[-1])))
+        route_id = str(leg.get("route_id", leg.get("route_tag", "")) or "")
+        if route_id:
+            lines.append(f"Route ID: {route_id}")
         src_info = leg.get("source_node_info", {}) if isinstance(leg.get("source_node_info", {}), dict) else {}
         dst_info = leg.get("dest_node_info", {}) if isinstance(leg.get("dest_node_info", {}), dict) else {}
         if src_info:
@@ -158,8 +191,34 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         lines.append(f"Total Expected Realized Profit: {fmt_isk_de(leg_profit)}")
         lines.append(f"Total Full Sell Profit: {fmt_isk_de(leg_full_sell_profit)}")
         lines.append(f"route_confidence: {float(route_summary.get('route_confidence', 0.0)):.2f}")
+        lines.append(f"raw_route_confidence: {float(route_summary.get('raw_route_confidence', route_summary.get('route_confidence', 0.0))):.2f}")
+        lines.append(f"calibrated_route_confidence: {float(route_summary.get('calibrated_route_confidence', route_summary.get('route_confidence', 0.0))):.2f}")
         lines.append(f"transport_confidence: {float(route_summary.get('transport_confidence', 0.0)):.2f}")
+        lines.append(f"raw_transport_confidence: {float(route_summary.get('raw_transport_confidence', route_summary.get('transport_confidence', 0.0))):.2f}")
+        lines.append(f"calibrated_transport_confidence: {float(route_summary.get('calibrated_transport_confidence', route_summary.get('transport_confidence', 0.0))):.2f}")
         lines.append(f"capital_lock_risk: {float(route_summary.get('capital_lock_risk', 0.0)):.2f}")
+        calibration_warning = str(route_summary.get("calibration_warning", leg.get("calibration_warning", "")) or "")
+        if calibration_warning:
+            lines.append(f"calibration_warning: {calibration_warning}")
+        _append_reason_lines(lines, "", list(route_summary.get("positive_reasons", []) or []), "route_positive_reasons", detail_mode=detail_mode)
+        _append_reason_lines(lines, "", list(route_summary.get("negative_reasons", []) or []), "route_negative_reasons", detail_mode=detail_mode)
+        _append_reason_lines(lines, "", list(route_summary.get("warnings", []) or []), "route_warnings", detail_mode=detail_mode)
+        if detail_mode:
+            pruned_reason = route_summary.get("pruned_reason")
+            if isinstance(pruned_reason, dict) and pruned_reason:
+                lines.append(f"route_pruned_reason: {pruned_reason.get('code', '')} - {pruned_reason.get('text', '')}")
+            lines.append("route_score_breakdown:")
+            for contributor in list(route_summary.get("score_contributors", []) or []):
+                lines.append(
+                    f"- {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.2f} "
+                    f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                )
+            lines.append("route_confidence_breakdown:")
+            for contributor in list(route_summary.get("confidence_contributors", []) or []):
+                lines.append(
+                    f"- {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.4f} "
+                    f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                )
         lines.append(f"Total Fees and Taxes: {fmt_isk_de(leg_fees_taxes)}")
         lines.append(f"Total Route Costs: {fmt_isk_de(leg_route_costs)}")
         lines.append(f"total_route_m3: {float(leg.get('total_route_m3', leg.get('m3_used', 0.0)) or 0.0):.2f} m3")
@@ -177,6 +236,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         lines.append("")
         ordered = sorted(picks, key=lambda x: float(x.get("profit", 0.0)), reverse=True)
         for p_i, p in enumerate(ordered, start=1):
+            ensure_record_explainability(p, max_liq_days=_detail_max_liq_days(leg))
             qty = int(p.get("qty", 0))
             buy_avg = float(p.get("buy_avg", 0.0))
             buy_total = buy_avg * qty
@@ -192,6 +252,9 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             pick_m3 = float(p.get("unit_volume", 0.0) or 0.0) * float(qty)
             unit_m3 = float(p.get("unit_volume", 0.0) or 0.0)
             lines.append(f"{p_i}. {p.get('name', '')} (type_id {int(p.get('type_id', 0))})")
+            pick_id = str(p.get("pick_id", p.get("journal_entry_id", "")) or "")
+            if pick_id:
+                lines.append(f"   Pick ID: {pick_id}")
             lines.append(f"   Exit Type: {exit_type}")
             lines.append(
                 f"   BUY  [{p.get('buy_at') or leg.get('source_label', 'SOURCE')}] qty={qty} @ {fmt_isk_de(buy_avg)} "
@@ -213,8 +276,41 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             lines.append(f"   Expected Units Sold: {float(p.get('expected_units_sold_90d', 0.0) or 0.0):.2f}")
             lines.append(f"   Expected Units Unsold: {float(p.get('expected_units_unsold_90d', 0.0) or 0.0):.2f}")
             lines.append(f"   liquidity_confidence: {float(p.get('liquidity_confidence', p.get('fill_probability', 0.0)) or 0.0):.2f}")
-            lines.append(f"   transport_confidence: {str(p.get('transport_cost_confidence', leg.get('cost_model_confidence', 'normal')) or 'normal')}")
+            lines.append(f"   transport_cost_model: {str(p.get('transport_cost_confidence', leg.get('cost_model_confidence', 'normal')) or 'normal')}")
+            lines.append(f"   raw_transport_confidence: {float(p.get('raw_transport_confidence', route_summary.get('raw_transport_confidence', route_summary.get('transport_confidence', 0.0))) or 0.0):.2f}")
+            lines.append(f"   calibrated_transport_confidence: {float(p.get('calibrated_transport_confidence', route_summary.get('calibrated_transport_confidence', route_summary.get('transport_confidence', 0.0))) or 0.0):.2f}")
             lines.append(f"   overall_confidence: {float(p.get('overall_confidence', p.get('strict_confidence_score', p.get('fill_probability', 0.0))) or 0.0):.2f}")
+            lines.append(f"   raw_confidence: {float(p.get('raw_confidence', p.get('raw_overall_confidence', p.get('overall_confidence', 0.0))) or 0.0):.2f}")
+            lines.append(f"   calibrated_confidence: {float(p.get('calibrated_confidence', p.get('calibrated_overall_confidence', p.get('overall_confidence', 0.0))) or 0.0):.2f}")
+            lines.append(f"   market_plausibility_score: {float(p.get('market_plausibility_score', 1.0) or 1.0):.2f}")
+            lines.append(f"   manipulation_risk_score: {float(p.get('manipulation_risk_score', 0.0) or 0.0):.2f}")
+            lines.append(f"   profit_at_top_of_book: {fmt_isk_de(float(p.get('profit_at_top_of_book', p.get('profit', 0.0)) or 0.0))}")
+            lines.append(
+                f"   profit_at_conservative_executable_price: "
+                f"{fmt_isk_de(float(p.get('profit_at_conservative_executable_price', p.get('expected_realized_profit_90d', p.get('profit', 0.0))) or 0.0))}"
+            )
+            pick_warning = str(p.get("calibration_warning", "") or "")
+            if pick_warning:
+                lines.append(f"   calibration_warning: {pick_warning}")
+            _append_reason_lines(lines, "   ", list(p.get("positive_reasons", []) or []), "positive_reasons", detail_mode=detail_mode)
+            _append_reason_lines(lines, "   ", list(p.get("negative_reasons", []) or []), "negative_reasons", detail_mode=detail_mode)
+            _append_reason_lines(lines, "   ", list(p.get("warnings", []) or []), "warnings", detail_mode=detail_mode)
+            if detail_mode:
+                pruned_reason = p.get("pruned_reason")
+                if isinstance(pruned_reason, dict) and pruned_reason:
+                    lines.append(f"   pruned_reason: {pruned_reason.get('code', '')} - {pruned_reason.get('text', '')}")
+                lines.append("   score_breakdown:")
+                for contributor in list(p.get("score_contributors", []) or []):
+                    lines.append(
+                        f"   - {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.2f} "
+                        f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                    )
+                lines.append("   confidence_breakdown:")
+                for contributor in list(p.get("confidence_contributors", []) or []):
+                    lines.append(
+                        f"   - {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.4f} "
+                        f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                    )
             fee_components = _pick_fee_components(p)
             lines.append(f"   Fees+Taxes: {fmt_isk_de(_pick_total_fees_taxes(p))}")
             lines.append(f"   sales_tax_isk: {fmt_isk_de(fee_components['sales_tax_isk'])}")
@@ -228,6 +324,17 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         if not ordered:
             lines.append("Keine Picks fuer diese Route. Route ist nicht actionable.")
             lines.append("")
+        elif detail_mode:
+            rejected = list(leg.get("top_rejected_candidates", []) or build_rejected_candidate_table(leg.get("explain")))
+            if rejected:
+                lines.append("Top Rejected Candidates:")
+                for entry in rejected[:10]:
+                    lines.append(
+                        f"- {entry.get('name', '')} (type_id {int(entry.get('type_id', 0))}) "
+                        f"| reason={entry.get('reason_code', '')} | proxy={fmt_isk_de(float(entry.get('nominal_profit_proxy', 0.0)))} "
+                        f"| {entry.get('reason_text', '')}"
+                    )
+                lines.append("")
 
     lines.append("=" * 70)
     lines.append(f"TOTAL COST: {fmt_isk_de(total_cost)}")
@@ -243,7 +350,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         f.write("\n".join(lines))
 
 
-def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict], ranking_metric: str, max_routes: int) -> None:
+def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict], ranking_metric: str, max_routes: int, detail_mode: bool = False) -> None:
     metric = str(ranking_metric or "risk_adjusted_expected_profit").strip().lower()
     route_summaries = [(r, summarize_route_for_ranking(r)) for r in list(route_results or [])]
     actionable = [entry for entry in route_summaries if bool(entry[1].get("actionable", False))]
@@ -286,8 +393,18 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Ziel: {r.get('dest_label', '')}")
         lines.append(f"   provider: {str(r.get('shipping_provider', '') or '')}")
         lines.append(f"   route_confidence: {float(summary.get('route_confidence', 0.0)):.2f}")
+        lines.append(f"   raw_route_confidence: {float(summary.get('raw_route_confidence', summary.get('route_confidence', 0.0))):.2f}")
+        lines.append(f"   calibrated_route_confidence: {float(summary.get('calibrated_route_confidence', summary.get('route_confidence', 0.0))):.2f}")
         lines.append(f"   transport_confidence: {float(summary.get('transport_confidence', 0.0)):.2f}")
+        lines.append(f"   raw_transport_confidence: {float(summary.get('raw_transport_confidence', summary.get('transport_confidence', 0.0))):.2f}")
+        lines.append(f"   calibrated_transport_confidence: {float(summary.get('calibrated_transport_confidence', summary.get('transport_confidence', 0.0))):.2f}")
         lines.append(f"   capital_lock_risk: {float(summary.get('capital_lock_risk', 0.0)):.2f}")
+        calibration_warning = str(summary.get("calibration_warning", r.get("calibration_warning", "")) or "")
+        if calibration_warning:
+            lines.append(f"   calibration_warning: {calibration_warning}")
+        _append_reason_lines(lines, "   ", list(summary.get("positive_reasons", []) or []), "positive_reasons", detail_mode=detail_mode)
+        _append_reason_lines(lines, "   ", list(summary.get("negative_reasons", []) or []), "negative_reasons", detail_mode=detail_mode)
+        _append_reason_lines(lines, "   ", list(summary.get("warnings", []) or []), "warnings", detail_mode=detail_mode)
         cost_model_confidence = str(r.get("cost_model_confidence", "normal") or "normal")
         if cost_model_confidence != "normal":
             lines.append(f"   transport_cost_confidence: {cost_model_confidence}")
@@ -310,13 +427,31 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Top3 Profit Share: {top3_ratio*100.0:.2f}%")
         lines.append(f"   Top5 Profit Share: {top5_ratio*100.0:.2f}%")
         lines.append(f"   Dominance Flag (>60%): {'YES' if dominant else 'NO'}")
+        if detail_mode:
+            lines.append("   score_breakdown:")
+            for contributor in list(summary.get("score_contributors", []) or []):
+                lines.append(
+                    f"   - {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.2f} "
+                    f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                )
+            lines.append("   confidence_breakdown:")
+            for contributor in list(summary.get("confidence_contributors", []) or []):
+                lines.append(
+                    f"   - {contributor.get('key', '')}: effect={float(contributor.get('effect', 0.0)):.4f} "
+                    f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
+                )
         lines.append("")
     if pruned:
         lines.append("PRUNED / NOT ACTIONABLE")
         lines.append("-" * 24)
         for r, summary in pruned:
             reason = str(summary.get("route_prune_reason", r.get("route_prune_reason", "no_picks")) or "no_picks")
-            lines.append(f"- {r.get('route_label', '')}: {reason}")
+            reason_code = ""
+            pruned_reason = summary.get("pruned_reason")
+            if isinstance(pruned_reason, dict):
+                reason_code = str(pruned_reason.get("code", "") or "")
+            suffix = f" [{reason_code}]" if reason_code else ""
+            lines.append(f"- {r.get('route_label', '')}: {reason}{suffix}")
         lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

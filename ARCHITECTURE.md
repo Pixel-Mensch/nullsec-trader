@@ -18,10 +18,12 @@ Productive runtime/orchestration:
 - [`runtime_clients.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_clients.py): live and replay ESI clients
 - [`runtime_runner.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_runner.py): replay/live loading, route execution, chain orchestration
 - [`runtime_reports.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/runtime_reports.py): CSV and chain/summary outputs
+- [`journal_cli.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/journal_cli.py): local journal commands for importing plans and recording real trades
 
 Trading/domain source of truth:
 
 - [`candidate_engine.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/candidate_engine.py): candidate generation, planned-sell logic, route-wide candidate scoring
+- [`journal_models.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/journal_models.py), [`journal_store.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/journal_store.py), [`journal_reporting.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/journal_reporting.py): trade-plan identifiers, local journal persistence, and plan-vs-reality reporting
 - [`shipping.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/shipping.py): transport pricing, route blocking, per-pick transport allocation
 - [`portfolio_builder.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/portfolio_builder.py): risk-weighted portfolio construction
 - [`route_search.py`](/c:/Users/marck/Desktop/Echos%20of%20Null/nullsec_trader_tool/route_search.py): route search profile generation and risk-adjusted ranking inputs

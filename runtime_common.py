@@ -10,6 +10,7 @@ CACHE_DIR = os.path.join(BASE_DIR, "cache")
 TOKEN_PATH = os.path.join(CACHE_DIR, "token.json")
 TYPE_CACHE_PATH = os.path.join(CACHE_DIR, "types.json")
 HTTP_CACHE_PATH = os.path.join(CACHE_DIR, "http_cache.json")
+JOURNAL_DB_PATH = os.path.join(CACHE_DIR, "trade_journal.sqlite3")
 
 
 def die(msg: str) -> None:
@@ -52,17 +53,28 @@ def _has_live_esi_credentials(cfg: dict) -> bool:
 
 def parse_cli_args(argv: list[str]) -> dict:
     args = {
+        "command": "run",
+        "journal_argv": [],
         "snapshot_only": False,
         "snapshot_out": None,
         "structures": None,
         "cargo_m3": None,
         "budget_isk": None,
+        "detail": False,
     }
+    if argv and str(argv[0]).strip().lower() == "journal":
+        args["command"] = "journal"
+        args["journal_argv"] = list(argv[1:])
+        return args
     i = 0
     while i < len(argv):
         tok = argv[i]
         if tok == "--snapshot-only":
             args["snapshot_only"] = True
+            i += 1
+            continue
+        if tok == "--detail":
+            args["detail"] = True
             i += 1
             continue
         if tok == "--snapshot-out":
@@ -134,6 +146,7 @@ __all__ = [
     "TOKEN_PATH",
     "TYPE_CACHE_PATH",
     "HTTP_CACHE_PATH",
+    "JOURNAL_DB_PATH",
     "die",
     "parse_isk",
     "_has_live_esi_credentials",

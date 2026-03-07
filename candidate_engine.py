@@ -1,6 +1,8 @@
 from __future__ import annotations
 from typing import Any
 
+from explainability import ensure_record_explainability, normalize_reason_entry
+from market_plausibility import assess_market_plausibility, resolve_market_plausibility_cfg
 from models import OrderLevel, TradeCandidate
 from fees import compute_trade_financials
 from location_utils import normalize_location_label
@@ -361,6 +363,7 @@ def compute_candidates(
         except Exception:
             ref_hard_max_sell_markup = None
     ref_penalty_strength = float(reference_cfg.get("ranking_penalty_strength", 0.35))
+    plaus_cfg = resolve_market_plausibility_cfg(filters)
     strict_cfg = filters.get("strict_mode", {})
     if not isinstance(strict_cfg, dict):
         strict_cfg = {}
@@ -429,11 +432,13 @@ def compute_candidates(
         explain.setdefault("kept", [])
         explain.setdefault("rejected", [])
         explain.setdefault("reason_counts", {})
+        explain.setdefault("reason_code_counts", {})
         explain.setdefault("_first_rejection_by_type", {})
 
     def record_explain(status: str, tid: int, type_name: str, reason: str, metrics: dict | None = None) -> None:
         if explain is None:
             return
+        normalized = normalize_reason_entry(reason, metrics or {})
         if status == "rejected":
             first_rej = explain.get("_first_rejection_by_type", {})
             if tid in first_rej:
@@ -441,14 +446,29 @@ def compute_candidates(
             first_rej[tid] = reason
         rc = explain["reason_counts"]
         rc[reason] = int(rc.get(reason, 0)) + 1
+        rcc = explain["reason_code_counts"]
+        reason_code = str(normalized.get("code", "") or "UNKNOWN_REASON")
+        rcc[reason_code] = int(rcc.get(reason_code, 0)) + 1
         bucket = explain.get(status, [])
         if len(bucket) >= explain_max_entries:
             return
+        gating_failures = [normalized] if status == "rejected" else []
+        positive_reasons = [normalized] if status == "kept" else []
+        negative_reasons = [normalized] if status == "rejected" else []
         bucket.append({
             "type_id": int(tid),
             "name": type_name,
             "reason": reason,
-            "metrics": metrics or {}
+            "reason_code": reason_code,
+            "reason_text": str(normalized.get("text", "") or ""),
+            "metrics": metrics or {},
+            "positive_reasons": positive_reasons,
+            "negative_reasons": negative_reasons,
+            "gating_failures": gating_failures,
+            "score_contributors": [],
+            "confidence_contributors": [],
+            "pruned_reason": normalized if status == "rejected" else None,
+            "warnings": [],
         })
     if funnel:
         funnel.record_stage("initial", len(type_ids))
@@ -1300,6 +1320,74 @@ def compute_candidates(
                     }
                 )
                 continue
+        market_plausibility = {}
+        market_plausibility_score = 1.0
+        manipulation_risk_score = 0.0
+        profit_at_top_of_book = float(gross_profit_if_full_sell)
+        profit_at_usable_depth = float(expected_realized_profit_90d)
+        profit_at_conservative_executable_price = float(expected_realized_profit_90d)
+        if bool(plaus_cfg.get("enabled", True)):
+            exit_levels = dst_buy_lv if instant_flag else dst_sell_lv
+            reference_anchor_price = float(reference_price_adjusted if reference_price_adjusted > 0.0 else reference_price)
+            market_plausibility = assess_market_plausibility(
+                source_levels=src_lv,
+                exit_levels=exit_levels,
+                exit_is_buy=bool(instant_flag),
+                proposed_qty=int(max_units),
+                source_usable_price=float(buy_avg),
+                exit_usable_price=float(target_sell_price if mode == "planned_sell" else sell_avg),
+                reference_price=float(reference_anchor_price),
+                mode=str(mode),
+                fees=fees,
+                price_depth_pct=float(depth_pct),
+                competition_band_pct=float(competition_band_pct),
+                relist_budget_pct=float(relist_budget_pct),
+                relist_budget_isk=float(relist_budget_isk if mode == "planned_sell" else 0.0),
+                cfg=plaus_cfg,
+            )
+            profit_at_top_of_book = float(market_plausibility.get("profit_at_top_of_book", profit_at_top_of_book)) - float(estimated_transport_cost)
+            profit_at_usable_depth = float(market_plausibility.get("profit_at_usable_depth", profit_at_usable_depth)) - float(estimated_transport_cost)
+            profit_at_conservative_executable_price = float(
+                market_plausibility.get("profit_at_conservative_executable_price", profit_at_conservative_executable_price)
+            ) - float(estimated_transport_cost)
+            manipulation_risk_score = float(market_plausibility.get("manipulation_risk_score", 0.0) or 0.0)
+            market_plausibility_score = float(market_plausibility.get("market_plausibility_score", 1.0) or 1.0)
+            conservative_expected_profit = min(
+                float(expected_realized_profit_90d),
+                float(profit_at_usable_depth),
+                float(profit_at_conservative_executable_price),
+            )
+            expected_realized_profit_90d = float(conservative_expected_profit)
+            expected_profit_90d = float(expected_realized_profit_90d)
+            expected_realized_profit_per_m3_90d = (
+                float(expected_realized_profit_90d) / max(1.0, float(max_units) * float(unit_vol))
+            ) if unit_vol > 0 else 0.0
+            expected_profit_per_m3_90d = float(expected_realized_profit_per_m3_90d)
+            plaus_conf_penalty = max(0.35, float(market_plausibility_score))
+            liquidity_confidence = min(float(liquidity_confidence), float(liquidity_confidence) * plaus_conf_penalty if liquidity_confidence > 0.0 else plaus_conf_penalty)
+            exit_confidence = min(float(exit_confidence), float(exit_confidence) * plaus_conf_penalty if exit_confidence > 0.0 else plaus_conf_penalty)
+            overall_confidence = min(float(overall_confidence), float(market_plausibility_score), float(liquidity_confidence), float(exit_confidence))
+            risk_score = max(float(risk_score), float(manipulation_risk_score))
+            if bool(market_plausibility.get("hard_reject", False)):
+                primary_reason = str(market_plausibility.get("primary_reason", "") or "fake_spread_risk").strip().lower()
+                reject_metrics = dict(market_plausibility)
+                reject_metrics["estimated_transport_cost"] = float(estimated_transport_cost)
+                reject_metrics["expected_realized_profit_90d"] = float(expected_realized_profit_90d)
+                record_explain(
+                    "rejected",
+                    tid,
+                    name,
+                    primary_reason,
+                    reject_metrics,
+                )
+                continue
+            if mode == "planned_sell" and expected_realized_profit_90d < min_expected_profit_isk:
+                primary_reason = str(market_plausibility.get("primary_reason", "") or "fake_spread_risk").strip().lower()
+                reject_metrics = dict(market_plausibility)
+                reject_metrics["expected_realized_profit_90d"] = float(expected_realized_profit_90d)
+                reject_metrics["min_expected_profit_isk"] = float(min_expected_profit_isk)
+                record_explain("rejected", tid, name, primary_reason, reject_metrics)
+                continue
         if mode != "planned_sell" and fill_probability < min_fill_probability:
             record_explain(
                 "rejected",
@@ -1333,8 +1421,7 @@ def compute_candidates(
 
         if mode in ("fast_sell", "planned_sell"):
             print(f"    Hinweis: {name} (type_id {tid}) benoetigt Verkaufsauftrag @ {sell_sugg:.2f} fuer {order_duration}d")
-        candidates.append(
-            TradeCandidate(
+        candidate = TradeCandidate(
                 type_id=tid,
                 name=name,
                 unit_volume=unit_vol,
@@ -1383,6 +1470,12 @@ def compute_candidates(
                 exit_confidence=float(exit_confidence),
                 liquidity_confidence=float(liquidity_confidence),
                 overall_confidence=float(overall_confidence if overall_confidence > 0.0 else strict_confidence_score),
+                market_plausibility=dict(market_plausibility),
+                market_plausibility_score=float(market_plausibility_score),
+                manipulation_risk_score=float(manipulation_risk_score),
+                profit_at_top_of_book=float(profit_at_top_of_book),
+                profit_at_usable_depth=float(profit_at_usable_depth),
+                profit_at_conservative_executable_price=float(profit_at_conservative_executable_price),
                 expected_profit_90d=float(expected_profit_90d),
                 expected_profit_per_m3_90d=float(expected_profit_per_m3_90d),
                 used_volume_fallback=bool(used_volume_fallback),
@@ -1397,7 +1490,8 @@ def compute_candidates(
                 strict_mode_enabled=bool(strict_enabled),
                 jita_split_price=float(split_px),
             )
-        )
+        ensure_record_explainability(candidate)
+        candidates.append(candidate)
 
     ranking_metric = str(filters.get("ranking_metric", "profit_per_m3_per_day")).lower()
     if ranking_metric == "expected_profit_per_m3_90d":
@@ -1472,6 +1566,25 @@ def compute_candidates(
                 kept_metrics["depth_within_2pct_sell"] = int(c.depth_within_2pct_sell)
                 kept_metrics["orderbook_imbalance"] = float(c.orderbook_imbalance)
                 kept_metrics["competition_density_near_best"] = int(c.competition_density_near_best)
+                kept_metrics["market_plausibility_score"] = float(getattr(c, "market_plausibility_score", 1.0))
+                kept_metrics["manipulation_risk_score"] = float(getattr(c, "manipulation_risk_score", 0.0))
+                kept_metrics["profit_at_top_of_book"] = float(getattr(c, "profit_at_top_of_book", 0.0))
+                kept_metrics["profit_at_usable_depth"] = float(getattr(c, "profit_at_usable_depth", 0.0))
+                kept_metrics["profit_at_conservative_executable_price"] = float(
+                    getattr(c, "profit_at_conservative_executable_price", 0.0)
+                )
+                if isinstance(getattr(c, "market_plausibility", {}), dict):
+                    for key in (
+                        "top_of_book_volume_ratio",
+                        "depth_decay",
+                        "price_gap_after_top_levels",
+                        "order_concentration_ratio",
+                        "usable_depth_ratio",
+                        "reference_price_deviation",
+                        "effective_spread_after_depth",
+                    ):
+                        if key in c.market_plausibility:
+                            kept_metrics[key] = c.market_plausibility[key]
             record_explain(
                 "kept",
                 c.type_id,
@@ -1513,12 +1626,35 @@ def _route_adjusted_candidate_score(c: "TradeCandidate", hop_count: int, scan_cf
         absolute = max(0.0, float(getattr(c, "profit_per_unit", 0.0) * getattr(c, "max_units", 0)))
 
     margin = max(0.0, float(getattr(c, "profit_pct", 0.0)))
-    fill_prob = max(0.0, min(1.0, float(getattr(c, "overall_confidence", getattr(c, "fill_probability", 0.0)))))
+    fill_prob = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(
+                    c,
+                    "decision_overall_confidence",
+                    getattr(c, "calibrated_overall_confidence", getattr(c, "overall_confidence", getattr(c, "fill_probability", 0.0))),
+                )
+            ),
+        ),
+    )
     instant_ratio = max(0.0, min(1.0, float(getattr(c, "instant_fill_ratio", 1.0))))
     liquidity_conf = max(0.0, min(1.0, float(getattr(c, "liquidity_confidence", fill_prob))))
     exit_conf = max(0.0, min(1.0, float(getattr(c, "exit_confidence", fill_prob))))
     liquidity = max(0.0, min(1.0, 0.35 * fill_prob + 0.25 * instant_ratio + 0.20 * liquidity_conf + 0.20 * exit_conf))
-    plaus = max(0.0, min(1.0, 1.0 - float(getattr(c, "reference_price_penalty", 0.0))))
+    plaus = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                min(
+                    getattr(c, "market_plausibility_score", 1.0),
+                    1.0 - float(getattr(c, "reference_price_penalty", 0.0)),
+                )
+            ),
+        ),
+    )
 
     density_sig = density / (density + 5000.0) if density > 0 else 0.0
     margin_sig = margin / (margin + 0.20) if margin > 0 else 0.0
