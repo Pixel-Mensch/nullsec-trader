@@ -17,6 +17,7 @@ Current coverage:
 - `character_profile.md`
 - `eve_sso.md`
 - `eve_character_client.md`
+- `journal_reconciliation.md`
 
 These maps are intentionally narrow and based on a limited audit.
 They are navigation aids, not exhaustive specifications.

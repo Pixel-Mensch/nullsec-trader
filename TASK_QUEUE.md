@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 5 character context integration)
+Last updated: 2026-03-07 (session 6 wallet journal reconciliation)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -136,12 +136,35 @@ full backlog scrape.
 ### Task 5: Improve personal trading context without hard-coupling live ESI
 
 - Priority: P1
+- Status: DONE
+- Completed: 2026-03-07
+- What was done:
+  - Added `journal_reconciliation.py` for wallet transaction / wallet journal
+    matching with explicit confidence, reasons, ambiguous matches, and unmatched
+    activity tracking
+  - Extended `journal_store.py` patch-safely so journal entries persist wallet
+    transaction IDs, wallet journal IDs, matched quantities/values, realized
+    fee estimate, realized wallet profit, reconciliation status, and order
+    warning tier
+  - Extended `journal_cli.py` with `reconcile`, `personal`, and `unmatched`
+    commands using live-or-cache character context without hard dependency on
+    live ESI
+  - Extended `journal_reporting.py` to surface effective open positions,
+    reconciled profit, uncertain matches, and personal trade-history views
+  - Strengthened open-order overlap from pure diagnosis to visible warning tier
+    in `execution_plan.py` and persisted plan imports
+  - Added targeted coverage in `tests/test_journal_reconciliation.py`
+  - Focused tests: **104 passed**
+
+### Task 5b: Deepen wallet-history quality without forcing heuristics
+
+- Priority: P1
 - Status: ready
-- Relevant files: `character_profile.py`, `eve_character_client.py`,
-  `execution_plan.py`, `runtime_runner.py`, `journal_store.py`
-- Expected result: wallet journal / transaction data starts feeding personal
-  trade-history reconciliation, and open-order exposure can optionally produce
-  stronger warnings without being silently baked into route scoring.
+- Relevant files: `journal_reconciliation.py`, `character_profile.py`,
+  `eve_character_client.py`, `journal_store.py`, `journal_reporting.py`
+- Expected result: improve paging/freshness controls and extend wallet-journal
+  fee/ref matching so older trades and multi-page histories reconcile more
+  reliably without silently overmatching.
 
 ## P2
 

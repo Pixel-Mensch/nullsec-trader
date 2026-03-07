@@ -585,13 +585,15 @@ def build_character_context_summary(context: dict, *, budget_isk: float | int | 
         "budget_exceeds_wallet": bool(wallet_balance > 0.0 and budget_value > wallet_balance),
         "budget_gap_isk": max(0.0, budget_value - wallet_balance) if wallet_balance > 0.0 else 0.0,
         "overlapping_pick_count": 0,
+        "high_overlap_pick_count": 0,
     }
     return summary
 
 
-def annotate_picks_with_character_orders(picks: list[dict], context: dict) -> int:
+def annotate_picks_with_character_orders(picks: list[dict], context: dict) -> tuple[int, int]:
     by_type = dict(context.get("open_orders_by_type", {}) or {})
     overlap_count = 0
+    high_overlap_count = 0
     for pick in list(picks or []):
         try:
             type_id = int(pick.get("type_id", 0) or 0)
@@ -610,13 +612,30 @@ def annotate_picks_with_character_orders(picks: list[dict], context: dict) -> in
         pick["character_open_sell_units"] = int(exposure.get("sell_units", 0) or 0)
         pick["character_open_order_locations"] = list(exposure.get("location_ids", []) or [])
         pick["character_exposure_name"] = str(exposure.get("name", "") or "")
-    return overlap_count
+        warning_tier = ""
+        warning_text = ""
+        if int(pick.get("character_open_sell_orders", 0) or 0) > 0:
+            warning_tier = "high"
+            warning_text = "Existing sell-order overlap for this type."
+            high_overlap_count += 1
+        elif int(pick.get("character_open_buy_orders", 0) or 0) > 0:
+            warning_tier = "medium"
+            warning_text = "Existing buy-order overlap for this type."
+        elif int(pick.get("character_open_orders", 0) or 0) > 0:
+            warning_tier = "medium"
+            warning_text = "Existing market-order overlap for this type."
+        pick["open_order_warning_tier"] = warning_tier
+        pick["open_order_warning_text"] = warning_text
+        pick["character_id"] = int(context.get("character_id", 0) or 0)
+    return overlap_count, high_overlap_count
 
 
 def attach_character_context_to_result(result: dict, context: dict, *, budget_isk: float | int | None = None) -> dict:
     summary = build_character_context_summary(context, budget_isk=budget_isk)
     picks = list(result.get("picks", []) or [])
-    summary["overlapping_pick_count"] = annotate_picks_with_character_orders(picks, context)
+    overlap_count, high_overlap_count = annotate_picks_with_character_orders(picks, context)
+    summary["overlapping_pick_count"] = overlap_count
+    summary["high_overlap_pick_count"] = high_overlap_count
     result["_character_context_summary"] = summary
     result["picks"] = picks
     return result

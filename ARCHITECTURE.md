@@ -29,6 +29,7 @@ Current module maps:
 - `docs/module-maps/character_profile.md`
 - `docs/module-maps/eve_sso.md`
 - `docs/module-maps/eve_character_client.md`
+- `docs/module-maps/journal_reconciliation.md`
 
 Use the relevant module map before opening one of these larger files.
 
@@ -56,6 +57,8 @@ Use this section to avoid loading large unrelated modules.
 - Private character ESI fetches: `eve_character_client.py`
 - Character profile mapping, cache fallback, and fee/order integration:
   `character_profile.py`
+- Wallet-to-journal matching and personal trade reconciliation:
+  `journal_reconciliation.py`
 - Candidate generation, planned-sell math, route-wide candidate scoring:
   `candidate_engine.py`
 - Market plausibility heuristics: `market_plausibility.py`
@@ -68,6 +71,7 @@ Use this section to avoid loading large unrelated modules.
 - CSV and summary writers: `runtime_reports.py`
 - Journal CLI and persistence: `journal_cli.py`, `journal_store.py`,
   `journal_models.py`, `journal_reporting.py`
+- Wallet/journal reconciliation: `journal_reconciliation.py`
 - Confidence calibration from journal outcomes: `confidence_calibration.py`
 - Startup node and chain resolution: `startup_helpers.py`
 
@@ -86,6 +90,13 @@ The main runtime flow is:
 -> `route_search.py`
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
+
+Journal reconciliation flow:
+
+`character_profile.py` wallet snapshot
+-> `journal_reconciliation.py`
+-> `journal_store.py`
+-> `journal_reporting.py` / `journal_cli.py`
 
 Confidence calibration is fed by journal data:
 
@@ -111,6 +122,8 @@ Local mutable state:
 - `config.local.json` is local-only and ignored by Git
 - `cache/` holds runtime cache, SSO token/metadata, character profile cache,
   and journal data
+- `trade_journal.sqlite3` now stores both manual trade events and optional
+  wallet-reconciliation summaries on each entry
 
 ## Test Entry Points
 
@@ -126,25 +139,16 @@ the repository dynamically.
 
 ## Current Hotspots
 
-Observed on branch `dev` on 2026-03-07:
-
-- modified: `README.md`, `candidate_engine.py`, `execution_plan.py`,
-  `portfolio_builder.py`, `route_search.py`, `runtime_common.py`,
-  `runtime_runner.py`, `config_loader.py`, `config.json`
-- untracked: `character_profile.py`, `eve_sso.py`, `eve_character_client.py`,
-  `local_cache.py`, `tests/test_character_context.py`, `tests/test_eve_sso.py`,
-  `docs/module-maps/character_profile.md`, `docs/module-maps/eve_sso.md`,
-  `docs/module-maps/eve_character_client.md`
-
-This strongly suggests active in-flight work around:
+Most recent focused work on 2026-03-07 touched:
 
 - risk profiles and profile-aware ranking/output
 - execution-plan presentation
-- CLI/runtime integration for the new profile surface
 - optional private character context via EVE SSO / ESI
+- wallet-to-journal reconciliation and personal trade-history reporting
+- open-order warning tiers in output and journal views
 
 Treat those areas as the most likely source of doc drift until targeted tests
-confirm the worktree state.
+confirm the current branch state.
 
 ## Source Of Truth By Concern
 
@@ -154,6 +158,7 @@ confirm the worktree state.
 - Confidence calibration logic: `confidence_calibration.py`
 - Private character auth and cacheable profile sync: `eve_sso.py`,
   `eve_character_client.py`, `character_profile.py`
+- Wallet-based personal trade reconciliation: `journal_reconciliation.py`
 - Route ranking: `route_search.py`
 - Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
 - Execution plan rendering: `execution_plan.py`

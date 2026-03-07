@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from character_profile import resolve_character_context
 from confidence_calibration import build_confidence_calibration, format_confidence_calibration_report
 from config_loader import load_config
 from journal_models import JOURNAL_ALLOWED_STATUSES
@@ -8,6 +9,9 @@ from journal_reporting import (
     format_journal_overview,
     format_journal_report,
     format_open_positions,
+    format_personal_trade_history,
+    format_reconciliation_overview,
+    format_unmatched_wallet_activity,
 )
 from journal_store import (
     fetch_closed_journal_entries,
@@ -17,6 +21,7 @@ from journal_store import (
     import_trade_plan_into_journal,
     initialize_journal_db,
     load_trade_plan_manifest,
+    reconcile_journal_with_character_context,
     record_journal_buy,
     record_journal_sell,
     resolve_journal_db_path,
@@ -65,6 +70,9 @@ def _journal_help() -> str:
             "  python main.py journal open [--limit 20] [--journal-db ...]",
             "  python main.py journal closed [--limit 20] [--journal-db ...]",
             "  python main.py journal report [--limit 10] [--journal-db ...]",
+            "  python main.py journal reconcile [--config .\\config.json] [--journal-db ...] [--limit 10]",
+            "  python main.py journal personal [--config .\\config.json] [--journal-db ...] [--limit 10]",
+            "  python main.py journal unmatched [--config .\\config.json] [--journal-db ...] [--limit 20]",
             "  python main.py journal calibration [--journal-db ...] [--config .\\config.json] [--limit 5]",
         ]
     )
@@ -173,18 +181,26 @@ def _parse_journal_args(argv: list[str]) -> dict:
 
 
 def _format_entry_update(prefix: str, entry: dict) -> str:
-    return "\n".join(
-        [
-            prefix,
-            f"journal_entry_id: {entry.get('journal_entry_id', '')}",
-            f"status: {entry.get('status', '')}",
-            f"item: {entry.get('item_name', '')} (type_id {int(entry.get('item_type_id', 0) or 0)})",
-            f"route: {entry.get('route_label', '')}",
-            f"actual_buy_qty: {float(entry.get('actual_buy_qty', 0.0) or 0.0):.2f} @ {float(entry.get('actual_buy_price_avg', 0.0) or 0.0):.2f}",
-            f"actual_sell_qty: {float(entry.get('actual_sell_qty', 0.0) or 0.0):.2f} @ {float(entry.get('actual_sell_price_avg', 0.0) or 0.0):.2f}",
-            f"actual_profit_net: {float(entry.get('actual_profit_net', 0.0) or 0.0):.2f} ISK",
-        ]
-    )
+    lines = [
+        prefix,
+        f"journal_entry_id: {entry.get('journal_entry_id', '')}",
+        f"status: {entry.get('status', '')}",
+        f"item: {entry.get('item_name', '')} (type_id {int(entry.get('item_type_id', 0) or 0)})",
+        f"route: {entry.get('route_label', '')}",
+        f"actual_buy_qty: {float(entry.get('actual_buy_qty', 0.0) or 0.0):.2f} @ {float(entry.get('actual_buy_price_avg', 0.0) or 0.0):.2f}",
+        f"actual_sell_qty: {float(entry.get('actual_sell_qty', 0.0) or 0.0):.2f} @ {float(entry.get('actual_sell_price_avg', 0.0) or 0.0):.2f}",
+        f"actual_profit_net: {float(entry.get('actual_profit_net', 0.0) or 0.0):.2f} ISK",
+    ]
+    reconciliation_status = str(entry.get("reconciliation_status", "") or "").strip()
+    if reconciliation_status:
+        lines.extend(
+            [
+                f"reconciliation_status: {reconciliation_status}",
+                f"match_confidence: {float(entry.get('match_confidence', 0.0) or 0.0):.2f}",
+                f"realized_profit_net: {float(entry.get('realized_profit_net', 0.0) or 0.0):.2f} ISK",
+            ]
+        )
+    return "\n".join(lines)
 
 
 def run_journal_cli(argv: list[str]) -> None:
@@ -275,6 +291,19 @@ def run_journal_cli(argv: list[str]) -> None:
     if action == "report":
         entries = fetch_journal_entries(db_path)
         print(format_journal_report(entries, limit=int(args.get("limit", 10) or 10)))
+        return
+
+    if action in {"reconcile", "personal", "unmatched"}:
+        cfg = load_config(str(args.get("config_path", CONFIG_PATH) or CONFIG_PATH))
+        context = resolve_character_context(cfg, replay_enabled=False, allow_live=True)
+        result = reconcile_journal_with_character_context(db_path, context)
+        if action == "reconcile":
+            print(format_reconciliation_overview(result, limit=int(args.get("limit", 10) or 10)))
+            return
+        if action == "personal":
+            print(format_personal_trade_history(list(result.get("entries", []) or []), limit=int(args.get("limit", 10) or 10)))
+            return
+        print(format_unmatched_wallet_activity(result, limit=int(args.get("limit", 20) or 20)))
         return
 
     if action == "calibration":

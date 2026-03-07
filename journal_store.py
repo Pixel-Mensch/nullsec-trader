@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 
+from journal_reconciliation import reconcile_wallet_snapshot
 from journal_models import (
     JOURNAL_ALLOWED_STATUSES,
     JOURNAL_CLOSED_STATUSES,
@@ -19,6 +20,16 @@ DEFAULT_JOURNAL_DB_PATH = os.path.join(CACHE_DIR, "trade_journal.sqlite3")
 
 
 JOURNAL_ENTRY_EXTRA_COLUMNS = {
+    "source_location_id": "INTEGER NOT NULL DEFAULT 0",
+    "target_location_id": "INTEGER NOT NULL DEFAULT 0",
+    "character_id": "INTEGER NOT NULL DEFAULT 0",
+    "character_open_orders": "INTEGER NOT NULL DEFAULT 0",
+    "character_open_buy_orders": "INTEGER NOT NULL DEFAULT 0",
+    "character_open_sell_orders": "INTEGER NOT NULL DEFAULT 0",
+    "character_open_buy_isk_committed": "REAL NOT NULL DEFAULT 0",
+    "character_open_sell_units": "REAL NOT NULL DEFAULT 0",
+    "open_order_warning_tier": "TEXT NOT NULL DEFAULT ''",
+    "open_order_warning_text": "TEXT NOT NULL DEFAULT ''",
     "proposed_exit_confidence_raw": "REAL NOT NULL DEFAULT 0",
     "proposed_liquidity_confidence_raw": "REAL NOT NULL DEFAULT 0",
     "proposed_transport_confidence_raw": "REAL NOT NULL DEFAULT 1",
@@ -28,6 +39,27 @@ JOURNAL_ENTRY_EXTRA_COLUMNS = {
     "proposed_transport_confidence_calibrated": "REAL NOT NULL DEFAULT 1",
     "proposed_overall_confidence_calibrated": "REAL NOT NULL DEFAULT 0",
     "calibration_warning": "TEXT NOT NULL DEFAULT ''",
+    "matched_wallet_transaction_ids": "TEXT NOT NULL DEFAULT '[]'",
+    "matched_wallet_journal_ids": "TEXT NOT NULL DEFAULT '[]'",
+    "ambiguous_wallet_transaction_ids": "TEXT NOT NULL DEFAULT '[]'",
+    "matched_buy_qty": "REAL NOT NULL DEFAULT 0",
+    "matched_sell_qty": "REAL NOT NULL DEFAULT 0",
+    "matched_buy_value": "REAL NOT NULL DEFAULT 0",
+    "matched_sell_value": "REAL NOT NULL DEFAULT 0",
+    "first_matched_buy_at": "TEXT NOT NULL DEFAULT ''",
+    "last_matched_sell_at": "TEXT NOT NULL DEFAULT ''",
+    "realized_fee_estimate": "REAL NOT NULL DEFAULT 0",
+    "realized_profit_net": "REAL NOT NULL DEFAULT 0",
+    "reconciliation_status": "TEXT NOT NULL DEFAULT ''",
+    "match_confidence": "REAL NOT NULL DEFAULT 0",
+    "match_reason": "TEXT NOT NULL DEFAULT ''",
+    "reconciliation_updated_at": "TEXT NOT NULL DEFAULT ''",
+}
+
+JSON_ARRAY_COLUMNS = {
+    "matched_wallet_transaction_ids",
+    "matched_wallet_journal_ids",
+    "ambiguous_wallet_transaction_ids",
 }
 
 
@@ -80,6 +112,9 @@ def initialize_journal_db(db_path: str | None = None) -> str:
                     route_label TEXT NOT NULL,
                     source_market TEXT NOT NULL,
                     target_market TEXT NOT NULL,
+                    source_location_id INTEGER NOT NULL DEFAULT 0,
+                    target_location_id INTEGER NOT NULL DEFAULT 0,
+                    character_id INTEGER NOT NULL DEFAULT 0,
                     item_type_id INTEGER NOT NULL,
                     item_name TEXT NOT NULL,
                     proposed_qty REAL NOT NULL,
@@ -100,6 +135,13 @@ def initialize_journal_db(db_path: str | None = None) -> str:
                     proposed_overall_confidence_calibrated REAL NOT NULL DEFAULT 0,
                     proposed_expected_units_sold REAL NOT NULL DEFAULT 0,
                     proposed_expected_units_unsold REAL NOT NULL DEFAULT 0,
+                    character_open_orders INTEGER NOT NULL DEFAULT 0,
+                    character_open_buy_orders INTEGER NOT NULL DEFAULT 0,
+                    character_open_sell_orders INTEGER NOT NULL DEFAULT 0,
+                    character_open_buy_isk_committed REAL NOT NULL DEFAULT 0,
+                    character_open_sell_units REAL NOT NULL DEFAULT 0,
+                    open_order_warning_tier TEXT NOT NULL DEFAULT '',
+                    open_order_warning_text TEXT NOT NULL DEFAULT '',
                     actual_buy_qty REAL NOT NULL DEFAULT 0,
                     actual_buy_price_avg REAL NOT NULL DEFAULT 0,
                     actual_sell_qty REAL NOT NULL DEFAULT 0,
@@ -107,6 +149,21 @@ def initialize_journal_db(db_path: str | None = None) -> str:
                     actual_fees_paid REAL NOT NULL DEFAULT 0,
                     actual_shipping_paid REAL NOT NULL DEFAULT 0,
                     actual_profit_net REAL NOT NULL DEFAULT 0,
+                    matched_wallet_transaction_ids TEXT NOT NULL DEFAULT '[]',
+                    matched_wallet_journal_ids TEXT NOT NULL DEFAULT '[]',
+                    ambiguous_wallet_transaction_ids TEXT NOT NULL DEFAULT '[]',
+                    matched_buy_qty REAL NOT NULL DEFAULT 0,
+                    matched_sell_qty REAL NOT NULL DEFAULT 0,
+                    matched_buy_value REAL NOT NULL DEFAULT 0,
+                    matched_sell_value REAL NOT NULL DEFAULT 0,
+                    first_matched_buy_at TEXT NOT NULL DEFAULT '',
+                    last_matched_sell_at TEXT NOT NULL DEFAULT '',
+                    realized_fee_estimate REAL NOT NULL DEFAULT 0,
+                    realized_profit_net REAL NOT NULL DEFAULT 0,
+                    reconciliation_status TEXT NOT NULL DEFAULT '',
+                    match_confidence REAL NOT NULL DEFAULT 0,
+                    match_reason TEXT NOT NULL DEFAULT '',
+                    reconciliation_updated_at TEXT NOT NULL DEFAULT '',
                     first_buy_at TEXT NOT NULL DEFAULT '',
                     last_sell_at TEXT NOT NULL DEFAULT '',
                     status TEXT NOT NULL,
@@ -130,6 +187,7 @@ def initialize_journal_db(db_path: str | None = None) -> str:
                 CREATE INDEX IF NOT EXISTS idx_journal_entries_status ON journal_entries(status);
                 CREATE INDEX IF NOT EXISTS idx_journal_entries_plan_id ON journal_entries(plan_id);
                 CREATE INDEX IF NOT EXISTS idx_journal_entries_route_id ON journal_entries(route_id);
+                CREATE INDEX IF NOT EXISTS idx_journal_entries_reconciliation_status ON journal_entries(reconciliation_status);
                 CREATE INDEX IF NOT EXISTS idx_journal_entries_updated_at ON journal_entries(updated_at);
                 CREATE INDEX IF NOT EXISTS idx_journal_events_entry ON journal_events(journal_entry_id, happened_at, event_id);
                 """
@@ -149,7 +207,26 @@ def load_trade_plan_manifest(path: str) -> dict:
 def _row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
-    return {key: row[key] for key in row.keys()}
+    out = {key: row[key] for key in row.keys()}
+    for column in JSON_ARRAY_COLUMNS:
+        raw = out.get(column)
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                parsed = []
+            out[column] = list(parsed) if isinstance(parsed, list) else []
+    return out
+
+
+def _json_array_text(value: object) -> str:
+    if isinstance(value, list):
+        items = value
+    elif value is None:
+        items = []
+    else:
+        items = [value]
+    return json.dumps(items, ensure_ascii=True, separators=(",", ":"))
 
 
 def _append_notes(existing: str, notes: str, happened_at: str) -> str:
@@ -342,6 +419,9 @@ def import_trade_plan_into_journal(db_path: str | None, plan_manifest: dict, not
                             route_label,
                             source_market,
                             target_market,
+                            source_location_id,
+                            target_location_id,
+                            character_id,
                             item_type_id,
                             item_name,
                             proposed_qty,
@@ -362,10 +442,17 @@ def import_trade_plan_into_journal(db_path: str | None, plan_manifest: dict, not
                             proposed_overall_confidence_calibrated,
                             proposed_expected_units_sold,
                             proposed_expected_units_unsold,
+                            character_open_orders,
+                            character_open_buy_orders,
+                            character_open_sell_orders,
+                            character_open_buy_isk_committed,
+                            character_open_sell_units,
+                            open_order_warning_tier,
+                            open_order_warning_text,
                             status,
                             calibration_warning,
                             notes
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             journal_entry_id,
@@ -379,6 +466,9 @@ def import_trade_plan_into_journal(db_path: str | None, plan_manifest: dict, not
                             route_label,
                             str(pick.get("source_market", source_market) or source_market),
                             str(pick.get("target_market", target_market) or target_market),
+                            int(pick.get("source_location_id", 0) or 0),
+                            int(pick.get("target_location_id", 0) or 0),
+                            int(pick.get("character_id", 0) or 0),
                             int(pick.get("item_type_id", 0) or 0),
                             str(pick.get("item_name", "") or ""),
                             float(pick.get("proposed_qty", 0.0) or 0.0),
@@ -399,6 +489,13 @@ def import_trade_plan_into_journal(db_path: str | None, plan_manifest: dict, not
                             float(pick.get("proposed_overall_confidence_calibrated", pick.get("proposed_overall_confidence_raw", pick.get("proposed_confidence", 0.0))) or 0.0),
                             float(pick.get("proposed_expected_units_sold", 0.0) or 0.0),
                             float(pick.get("proposed_expected_units_unsold", 0.0) or 0.0),
+                            int(pick.get("character_open_orders", 0) or 0),
+                            int(pick.get("character_open_buy_orders", 0) or 0),
+                            int(pick.get("character_open_sell_orders", 0) or 0),
+                            float(pick.get("character_open_buy_isk_committed", 0.0) or 0.0),
+                            float(pick.get("character_open_sell_units", 0.0) or 0.0),
+                            str(pick.get("open_order_warning_tier", "") or ""),
+                            str(pick.get("open_order_warning_text", "") or ""),
                             "planned",
                             str(pick.get("calibration_warning", "") or ""),
                             entry_notes,
@@ -575,6 +672,90 @@ def fetch_journal_events(db_path: str | None, journal_entry_id: str | None = Non
     return [_row_to_dict(row) or {} for row in rows]
 
 
+def reconcile_journal_with_wallet(
+    db_path: str | None,
+    wallet_snapshot: dict | None,
+    *,
+    character_id: int = 0,
+) -> dict:
+    path = initialize_journal_db(db_path)
+    entries = fetch_journal_entries(path)
+    result = reconcile_wallet_snapshot(entries, wallet_snapshot, character_id=character_id)
+    result["db_path"] = path
+    if not bool(result.get("wallet_available", False)):
+        result["persisted"] = False
+        return result
+
+    updated_at = utc_now_iso()
+    with closing(_connect(path)) as conn:
+        with conn:
+            for entry in list(result.get("entries", []) or []):
+                conn.execute(
+                    """
+                    UPDATE journal_entries
+                    SET matched_wallet_transaction_ids = ?,
+                        matched_wallet_journal_ids = ?,
+                        ambiguous_wallet_transaction_ids = ?,
+                        matched_buy_qty = ?,
+                        matched_sell_qty = ?,
+                        matched_buy_value = ?,
+                        matched_sell_value = ?,
+                        first_matched_buy_at = ?,
+                        last_matched_sell_at = ?,
+                        realized_fee_estimate = ?,
+                        realized_profit_net = ?,
+                        reconciliation_status = ?,
+                        match_confidence = ?,
+                        match_reason = ?,
+                        open_order_warning_tier = ?,
+                        open_order_warning_text = ?,
+                        reconciliation_updated_at = ?,
+                        updated_at = ?
+                    WHERE journal_entry_id = ?
+                    """,
+                    (
+                        _json_array_text(entry.get("matched_wallet_transaction_ids", [])),
+                        _json_array_text(entry.get("matched_wallet_journal_ids", [])),
+                        _json_array_text(entry.get("ambiguous_wallet_transaction_ids", [])),
+                        float(entry.get("matched_buy_qty", 0.0) or 0.0),
+                        float(entry.get("matched_sell_qty", 0.0) or 0.0),
+                        float(entry.get("matched_buy_value", 0.0) or 0.0),
+                        float(entry.get("matched_sell_value", 0.0) or 0.0),
+                        str(entry.get("first_matched_buy_at", "") or ""),
+                        str(entry.get("last_matched_sell_at", "") or ""),
+                        float(entry.get("realized_fee_estimate", 0.0) or 0.0),
+                        float(entry.get("realized_profit_net", 0.0) or 0.0),
+                        str(entry.get("reconciliation_status", "") or ""),
+                        float(entry.get("match_confidence", 0.0) or 0.0),
+                        str(entry.get("match_reason", "") or ""),
+                        str(entry.get("open_order_warning_tier", "") or ""),
+                        str(entry.get("open_order_warning_text", "") or ""),
+                        updated_at,
+                        updated_at,
+                        str(entry.get("journal_entry_id", "") or ""),
+                    ),
+                )
+    result["persisted"] = True
+    result["reconciliation_updated_at"] = updated_at
+    result["entries"] = fetch_journal_entries(path)
+    return result
+
+
+def reconcile_journal_with_character_context(db_path: str | None, context: dict | None) -> dict:
+    ctx = dict(context or {}) if isinstance(context, dict) else {}
+    profile = ctx.get("profile", {}) if isinstance(ctx.get("profile", {}), dict) else {}
+    wallet_snapshot = profile.get("wallet_snapshot", {}) if isinstance(profile.get("wallet_snapshot", {}), dict) else {}
+    result = reconcile_journal_with_wallet(
+        db_path,
+        wallet_snapshot,
+        character_id=int(ctx.get("character_id", profile.get("character_id", 0)) or 0),
+    )
+    result["context_source"] = str(ctx.get("source", "default") or "default")
+    result["context_available"] = bool(ctx.get("available", False))
+    result["context_warnings"] = list(ctx.get("warnings", []) or [])
+    return result
+
+
 __all__ = [
     "DEFAULT_JOURNAL_DB_PATH",
     "fetch_closed_journal_entries",
@@ -585,6 +766,8 @@ __all__ = [
     "import_trade_plan_into_journal",
     "initialize_journal_db",
     "load_trade_plan_manifest",
+    "reconcile_journal_with_character_context",
+    "reconcile_journal_with_wallet",
     "record_journal_buy",
     "record_journal_sell",
     "resolve_journal_db_path",

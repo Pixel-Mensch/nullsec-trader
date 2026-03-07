@@ -57,6 +57,19 @@ def _make_pick_id(plan_id: str, route_id: str, type_id: int, occurrence: int, se
     return f"pick_{digest}"
 
 
+def _node_location_id(node_info: object) -> int:
+    if not isinstance(node_info, dict):
+        return 0
+    for key in ("node_id", "structure_id", "location_id", "id"):
+        try:
+            value = int(node_info.get(key, 0) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return value
+    return 0
+
+
 def attach_plan_metadata(route_results: list[dict], plan_id: str, created_at: str) -> list[dict]:
     created_at_norm = normalize_journal_timestamp(created_at)
     for route_index, route in enumerate(list(route_results or []), start=1):
@@ -157,6 +170,11 @@ def build_trade_plan_manifest(
     for route in list(route_results or []):
         if not isinstance(route, dict):
             continue
+        source_location_id = _node_location_id(route.get("source_node_info"))
+        target_location_id = _node_location_id(route.get("dest_node_info"))
+        character_summary = route.get("_character_context_summary", {})
+        if not isinstance(character_summary, dict):
+            character_summary = {}
         picks_out: list[dict] = []
         for pick in list(route.get("picks", []) or []):
             if not isinstance(pick, dict):
@@ -215,8 +233,18 @@ def build_trade_plan_manifest(
                     "proposed_expected_units_unsold": float(pick.get("expected_units_unsold_90d", 0.0) or 0.0),
                     "source_market": str(pick.get("source_market", route.get("source_label", "")) or route.get("source_label", "")),
                     "target_market": str(pick.get("target_market", route.get("dest_label", "")) or route.get("dest_label", "")),
+                    "source_location_id": int(pick.get("source_location_id", source_location_id) or source_location_id or 0),
+                    "target_location_id": int(pick.get("target_location_id", target_location_id) or target_location_id or 0),
                     "route_id": str(pick.get("route_id", route.get("route_id", route.get("route_tag", ""))) or ""),
                     "route_profile": str(pick.get("route_profile", route.get("route_profile", route.get("route_tag", ""))) or ""),
+                    "character_id": int(pick.get("character_id", character_summary.get("character_id", 0)) or 0),
+                    "character_open_orders": int(pick.get("character_open_orders", 0) or 0),
+                    "character_open_buy_orders": int(pick.get("character_open_buy_orders", 0) or 0),
+                    "character_open_sell_orders": int(pick.get("character_open_sell_orders", 0) or 0),
+                    "character_open_buy_isk_committed": float(pick.get("character_open_buy_isk_committed", 0.0) or 0.0),
+                    "character_open_sell_units": float(pick.get("character_open_sell_units", 0.0) or 0.0),
+                    "open_order_warning_tier": str(pick.get("open_order_warning_tier", "") or ""),
+                    "open_order_warning_text": str(pick.get("open_order_warning_text", "") or ""),
                 }
             )
         total_picks += len(picks_out)

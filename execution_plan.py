@@ -397,6 +397,10 @@ def _write_pick_block(
             lines.append(
                 f"     Character Listed Units: {int(p.get('character_open_sell_units', 0) or 0)}"
             )
+        warning_tier = str(p.get("open_order_warning_tier", "") or "").strip().upper()
+        warning_text = str(p.get("open_order_warning_text", "") or "").strip()
+        if warning_tier and warning_text:
+            lines.append(f"     [WARN][ORDER-{warning_tier}] {warning_text}")
 
     # Inline warnings
     for w in _pick_action_warnings(p):
@@ -490,6 +494,11 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
                 f"           Wallet {fmt_isk_de(float(character_summary.get('wallet_balance', 0.0) or 0.0))}  |  "
                 f"Open Orders {int(character_summary.get('open_orders_count', 0) or 0)}"
             )
+            if int(character_summary.get("overlapping_pick_count", 0) or 0) > 0:
+                lines.append(
+                    f"           Order Overlap {int(character_summary.get('overlapping_pick_count', 0) or 0)} picks"
+                    f"  |  High Tier {int(character_summary.get('high_overlap_pick_count', 0) or 0)}"
+                )
             fee_skills = dict(character_summary.get("fee_skills", {}) or {})
             if fee_skills:
                 lines.append(

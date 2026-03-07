@@ -15,6 +15,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Execution Plans, Route Leaderboard, CSV-Exporte und Candidate-Dumps
 - Lokales Trade Journal fuer Soll/Ist-Abgleich von vorgeschlagenen und tatsaechlich ausgefuehrten Trades
 - Optionaler persoenlicher Character Context via EVE SSO / ESI: Character-Identitaet, Skills, optionale Skill Queue, offene Orders und Wallet-Snapshots mit lokalem Cache/Fallback
+- Wallet-/Journal-Reconciliation fuer persoenliche Handels-Historie mit Match-Confidence, offenen Positionen und ungematchter Wallet-Aktivitaet
 - Replay-Unterstuetzung fuer reproduzierbare Analysen und Regressionstests
 - Snapshot-Only-Modus zum Bauen neuer Replay-Snapshots aus Live-Daten
 
@@ -199,7 +200,7 @@ statt generischer Annahmen nutzen.
 - optionale Skill Queue
 - offene Character Market Orders als Exposure-Signal im Output
 - Wallet Balance sowie Wallet Journal / Transactions als lokale Snapshots fuer
-  spaetere persoenliche Handelsauswertung
+  persoenliche Handels-Historie, Reconciliation und Soll/Ist-Abgleich
 
 #### Verifizierte offizielle SSO-/ESI-Pfade
 
@@ -273,9 +274,51 @@ Artefakte liegen unter dem ohnehin ignorierten `cache/`-Bereich:
 - Ohne Character-Kontext bleiben Live-Marktlogik, Replay und Offline-Nutzung
   weiter lauffaehig.
 
+#### Wallet + Journal Reconciliation
+
+Die persoenliche Handels-Historie ist jetzt als erste nutzbare Basis mit dem
+lokalen Trade Journal verknuepft.
+
+Verfuegbare Journal-Kommandos:
+
+```powershell
+python .\main.py journal reconcile
+python .\main.py journal personal
+python .\main.py journal unmatched
+```
+
+Was `journal reconcile` aktuell macht:
+
+- laedt Character Context wie gewohnt live oder aus Cache
+- nutzt `wallet_snapshot.transactions` und `wallet_snapshot.journal_entries`
+- matched Wallet-Transactions gegen lokale Journal-Eintraege
+- speichert Match-Ergebnis, Match-Confidence, Wallet-IDs und Reconciliation-Status im lokalen Journal
+
+Aktuelle Matching-Signale:
+
+- `character_id`, wenn im Plan/Journal vorhanden
+- `type_id`
+- Buy vs Sell Richtung
+- Menge
+- Preisnaehe zu geplantem oder bereits manuell erfasstem Preis
+- Zeitfenster relativ zu Plan-/Trade-Zeit
+- Markt-/Location-ID, wenn im Plan vorhanden
+- verknuepfte Wallet-Journal-Refs fuer Gebuehren, wenn ESI diese liefert
+
+Wichtige Ehrlichkeit:
+
+- Matching ist absichtlich nicht als perfekt modelliert
+- unklare Faelle bleiben als `match_uncertain`
+- nicht zuordenbare Wallet-Events bleiben in `journal unmatched` sichtbar
+- Wallet-basierter Profit ist nur so gut wie die vorhandenen Wallet-Seiten und die verknuepfbaren Fee-/Tax-Refs
+- Shipping und andere Kosten ausserhalb von Wallet-Daten bleiben separat
+
 ### Trade Journal
 
 Normale Runs schreiben jetzt zusaetzlich eine maschinenlesbare Plan-Datei `trade_plan_<plan_id>.json`. Darin stehen `plan_id`, `route_id` und stabile `pick_id`s fuer die vorgeschlagenen Picks.
+
+Neue Plan-Importe speichern zusaetzlich Matching-Hilfen wie Character-ID,
+Markt-Location-IDs und vorhandene Open-Order-Warnhinweise mit ins Journal.
 
 Damit kann ein Plan spaeter ins lokale Journal uebernommen werden:
 
@@ -287,6 +330,9 @@ python .\main.py journal overview
 python .\main.py journal open
 python .\main.py journal closed
 python .\main.py journal report
+python .\main.py journal reconcile
+python .\main.py journal personal
+python .\main.py journal unmatched
 ```
 
 ### Wichtige Konfigurationsstellen
@@ -344,6 +390,8 @@ Pro Route werden unter anderem ausgegeben:
 - Prune- oder Downgrade-Gruende
 - optionaler Character-Context-Status (live/cache/default), Wallet-Balance und
   offene Order-Anzahl
+- sichtbarer Order-Overlap-Hinweis, wenn vorgeschlagene Picks bereits mit
+  eigenen Character-Orders kollidieren
 
 Pro Pick werden unter anderem ausgegeben:
 
@@ -358,6 +406,8 @@ Pro Pick werden unter anderem ausgegeben:
 - Fees, Taxes und Transportkosten
 - bei Ueberlappung mit bestehenden Character-Orders: offenes Exposure fuer
   denselben Type
+- staerkerer Warning-Tier fuer vorhandene Character-Sell-/Buy-Orders auf
+  demselben Type
 
 Auf Pick-Ebene kann `transport_confidence` als Modellstatus wie `normal`, `exception` oder `blocked` erscheinen. Auf Route-Ebene ist es ein zusammengefasster Confidence-Wert.
 
@@ -396,6 +446,7 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`eve_character_client.py`](./eve_character_client.py): private Character-ESI-Endpunkte fuer Skills, Orders und Wallet
 - [`fees.py`](./fees.py), [`fee_engine.py`](./fee_engine.py): Gebuehrenmodell
 - [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
+- [`journal_reconciliation.py`](./journal_reconciliation.py): Wallet-Transaction-/Wallet-Journal-Matching gegen lokale Journal-Eintraege mit Confidence und Unmatched-Tracking
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
 - [`route_search.py`](./route_search.py): Route Search, Ranking und Route-Summary fuer das Leaderboard
 - [`portfolio_builder.py`](./portfolio_builder.py): Portfolio-Bau unter Risiko-, Nachfrage-, Budget- und Cargo-Grenzen
@@ -430,6 +481,9 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
 - Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
   harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell
   im Ranking.
+- Wallet-Reconciliation ist snapshot-basiert. Bei kurzer Cache-Historie oder
+  limitierter ESI-Paginierung koennen echte Trades als ungematcht oder unsicher
+  erscheinen.
 - Ein blockierter oder leerer Plan ist oft die richtige Antwort. Das Tool soll lieber nichts empfehlen als schlechte Trades normal ausgeben.
 
 ## Entwicklung und Tests

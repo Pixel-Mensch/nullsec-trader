@@ -20,6 +20,7 @@ import explainability as _explainability
 import fees as _fees
 import journal_cli as _journal_cli
 import journal_models as _journal_models
+import journal_reconciliation as _journal_reconciliation
 import journal_reporting as _journal_reporting
 import journal_store as _journal_store
 import local_cache as _local_cache
@@ -116,12 +117,18 @@ _EXPORTS = {
     "make_run_id": _journal_models.make_run_id,
     "normalize_journal_timestamp": _journal_models.normalize_journal_timestamp,
     "utc_now_iso": _journal_models.utc_now_iso,
+    "MATCH_THRESHOLD": _journal_reconciliation.MATCH_THRESHOLD,
+    "AMBIGUOUS_MARGIN": _journal_reconciliation.AMBIGUOUS_MARGIN,
+    "reconcile_wallet_snapshot": _journal_reconciliation.reconcile_wallet_snapshot,
     "build_journal_report": _journal_reporting.build_journal_report,
     "enrich_journal_entry": _journal_reporting.enrich_journal_entry,
     "format_closed_positions": _journal_reporting.format_closed_positions,
     "format_journal_overview": _journal_reporting.format_journal_overview,
     "format_journal_report": _journal_reporting.format_journal_report,
     "format_open_positions": _journal_reporting.format_open_positions,
+    "format_personal_trade_history": _journal_reporting.format_personal_trade_history,
+    "format_reconciliation_overview": _journal_reporting.format_reconciliation_overview,
+    "format_unmatched_wallet_activity": _journal_reporting.format_unmatched_wallet_activity,
     "summarize_journal": _journal_reporting.summarize_journal,
     "DEFAULT_JOURNAL_DB_PATH": _journal_store.DEFAULT_JOURNAL_DB_PATH,
     "fetch_closed_journal_entries": _journal_store.fetch_closed_journal_entries,
@@ -132,6 +139,8 @@ _EXPORTS = {
     "import_trade_plan_into_journal": _journal_store.import_trade_plan_into_journal,
     "initialize_journal_db": _journal_store.initialize_journal_db,
     "load_trade_plan_manifest": _journal_store.load_trade_plan_manifest,
+    "reconcile_journal_with_character_context": _journal_store.reconcile_journal_with_character_context,
+    "reconcile_journal_with_wallet": _journal_store.reconcile_journal_with_wallet,
     "record_journal_buy": _journal_store.record_journal_buy,
     "record_journal_sell": _journal_store.record_journal_sell,
     "resolve_journal_db_path": _journal_store.resolve_journal_db_path,

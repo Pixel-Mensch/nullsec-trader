@@ -27,6 +27,10 @@ Reviewed this session:
 - `character_profile.py`
 - `eve_character_client.py`
 - `eve_sso.py`
+- `journal_reconciliation.py`
+- `journal_store.py`
+- `journal_reporting.py`
+- `journal_cli.py`
 - `local_cache.py`
 - `portfolio_builder.py`
 - `route_search.py`
@@ -34,6 +38,8 @@ Reviewed this session:
 - `risk_profiles.py`
 - `tests/run_all.py`
 - `tests/test_character_context.py`
+- `tests/test_journal.py`
+- `tests/test_journal_reconciliation.py`
 - `tests/test_eve_sso.py`
 - `tests/test_execution_plan.py`
 - `tests/test_portfolio.py`
@@ -80,6 +86,11 @@ Not fully re-audited this session:
   `fee_engine.py` via `runtime_runner.py`
 - execution plan output can show character-context status and open-order
   exposure on overlapping picks
+- wallet transactions and wallet journal can now be reconciled against local
+  journal entries with persisted match IDs, match confidence, reconciliation
+  status, and wallet-based realized-profit estimates
+- journal CLI now supports `reconcile`, `personal`, and `unmatched` views for
+  personal trade-history work without requiring live ESI
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
@@ -113,6 +124,9 @@ Not fully re-audited this session:
 - legacy live market auth in `runtime_clients.py` and new private-character SSO
   in `eve_sso.py` are separate paths for now; that is intentional for low-risk
   integration, but still duplicated auth surface
+- wallet reconciliation is intentionally conservative: it is snapshot-based and
+  can only match the transaction/journal pages currently available in cache or
+  live sync
 
 ## Current Focus
 
@@ -125,6 +139,7 @@ centered on:
 - CLI/runtime integration for profile-aware output
 - targeted core-logic cleanup in portfolio construction
 - optional private character-context integration and cacheable ESI sync
+- wallet-to-journal reconciliation and personal trade-history reporting
 
 Files that indicate this focus:
 
@@ -136,10 +151,16 @@ Files that indicate this focus:
 - `portfolio_builder.py`
 - `execution_plan.py`
 - `character_profile.py`
+- `journal_reconciliation.py`
+- `journal_store.py`
+- `journal_reporting.py`
+- `journal_cli.py`
 - `eve_character_client.py`
 - `eve_sso.py`
 - `tests/test_risk_profiles.py`
 - `tests/test_character_context.py`
+- `tests/test_journal.py`
+- `tests/test_journal_reconciliation.py`
 - `tests/test_eve_sso.py`
 - `tests/test_execution_plan.py`
 - `tests/test_portfolio.py`
@@ -154,6 +175,12 @@ Files that indicate this focus:
 - Character context is optional by design. Live sync now falls back to cache or
   generic defaults, but order exposure is currently surfaced as a diagnostic
   signal only, not a route-ranking penalty.
+- Journal reconciliation is also optional by design. Without wallet data, the
+  manual journal remains usable and reconciliation does not persist empty
+  results over existing entries.
+- Matching remains intentionally honest rather than magical: ambiguous
+  transactions stay visible as uncertain, and unmatched wallet activity is
+  reported separately instead of being forced onto a trade entry.
 - This session did not perform a full code audit, so undocumented modules may
   contain behavior not yet reflected here.
 - `config.local.json` exists locally but is Git-ignored; secret values were not
