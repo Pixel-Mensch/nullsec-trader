@@ -17,8 +17,13 @@ from character_profile import (
 )
 from confidence_calibration import (
     apply_calibration_to_record,
+    apply_personal_history_to_record,
     build_confidence_calibration,
+    build_personal_history_layer_state,
+    build_personal_calibration_summary,
     calibrate_confidence_value,
+    personal_history_layer_status_lines,
+    summarize_personal_history_effect,
     resolve_confidence_calibration_cfg,
 )
 from explainability import build_rejected_candidate_table
@@ -433,6 +438,60 @@ def _confidence_calibration_runtime(cfg: dict) -> dict:
     return _build_confidence_calibration_runtime(cfg)
 
 
+def _build_personal_calibration_runtime(cfg: dict) -> dict:
+    cal_cfg = resolve_confidence_calibration_cfg(cfg)
+    runtime = {"config": cal_cfg, "summary": None, "layer": {}, "db_path": "", "warning": ""}
+    if not isinstance(cfg, dict):
+        return runtime
+    db_path = str(cal_cfg.get("journal_db_path", "") or JOURNAL_DB_PATH)
+    runtime["db_path"] = db_path
+    try:
+        entries = fetch_journal_entries(db_path)
+        runtime["summary"] = build_personal_calibration_summary(entries, {"confidence_calibration": cal_cfg})
+    except Exception as exc:
+        runtime["warning"] = f"personal history unavailable: {exc}"
+        summary = build_personal_calibration_summary([], {"confidence_calibration": cal_cfg})
+        summary = dict(summary)
+        policy = dict(summary.get("policy", {}) or {})
+        policy["fallback_to_generic"] = True
+        if not str(policy.get("reason", "") or "").strip():
+            policy["reason"] = "personal history unavailable"
+        summary["policy"] = policy
+        warnings = [runtime["warning"], *list(summary.get("warnings", []) or [])]
+        summary["warnings"] = list(dict.fromkeys(str(item).strip() for item in warnings if str(item).strip()))
+        runtime["summary"] = summary
+    runtime["layer"] = build_personal_history_layer_state(runtime.get("summary"), cfg)
+    cfg["_personal_calibration_runtime"] = runtime
+    return runtime
+
+
+def _personal_calibration_runtime(cfg: dict) -> dict:
+    existing = cfg.get("_personal_calibration_runtime")
+    if isinstance(existing, dict):
+        return existing
+    return _build_personal_calibration_runtime(cfg)
+
+
+def _attach_runtime_advisories_to_result(result: dict, character_context: dict, personal_runtime: dict, *, budget_isk: int) -> dict:
+    attach_character_context_to_result(result, character_context, budget_isk=budget_isk)
+    summary = personal_runtime.get("summary")
+    if isinstance(summary, dict) and summary:
+        result["_personal_calibration_summary"] = dict(summary)
+    layer = personal_runtime.get("layer")
+    if isinstance(layer, dict) and layer:
+        result["_personal_history_layer"] = dict(layer)
+        effect_summary = summarize_personal_history_effect(list(result.get("picks", []) or []), layer)
+        result["_personal_history_effect_summary"] = dict(effect_summary)
+        result["personal_history_effect_applied"] = bool(effect_summary.get("applied", False))
+        result["personal_history_effect_scope"] = str(effect_summary.get("scope", "") or "")
+        result["personal_history_effect_reason"] = str(effect_summary.get("reason", "") or "")
+        result["personal_history_effect_value"] = float(effect_summary.get("effect_value", 0.0) or 0.0)
+    warning = str(personal_runtime.get("warning", "") or "").strip()
+    if warning:
+        result["_personal_calibration_warning"] = warning
+    return result
+
+
 def _apply_confidence_calibration_to_candidates(
     candidates: list[TradeCandidate],
     cfg: dict,
@@ -444,6 +503,7 @@ def _apply_confidence_calibration_to_candidates(
 ) -> None:
     runtime = _confidence_calibration_runtime(cfg)
     model = runtime.get("model")
+    personal_runtime = _personal_calibration_runtime(cfg)
     for candidate in list(candidates or []):
         apply_calibration_to_record(
             candidate,
@@ -453,6 +513,15 @@ def _apply_confidence_calibration_to_candidates(
             target_market=target_market,
             exit_type=str(getattr(candidate, "exit_type", "")),
             transport_confidence=1.0,
+        )
+        apply_personal_history_to_record(
+            candidate,
+            personal_runtime.get("summary"),
+            personal_runtime.get("layer"),
+            route_id=route_id,
+            source_market=source_market,
+            target_market=target_market,
+            exit_type=str(getattr(candidate, "exit_type", "")),
         )
         if scan_cfg is not None and bool(getattr(candidate, "route_wide_selected", False)):
             hop_count = int(getattr(candidate, "dest_hop_count", 1) or 1)
@@ -470,6 +539,7 @@ def _apply_confidence_calibration_to_picks(
 ) -> None:
     runtime = _confidence_calibration_runtime(cfg)
     model = runtime.get("model")
+    personal_runtime = _personal_calibration_runtime(cfg)
     for pick in list(picks or []):
         apply_calibration_to_record(
             pick,
@@ -479,6 +549,15 @@ def _apply_confidence_calibration_to_picks(
             target_market=str(pick.get("sell_at", target_market) or target_market),
             exit_type=str(pick.get("exit_type", "") or ""),
             transport_confidence=transport_confidence,
+        )
+        apply_personal_history_to_record(
+            pick,
+            personal_runtime.get("summary"),
+            personal_runtime.get("layer"),
+            route_id=route_id,
+            source_market=source_market,
+            target_market=str(pick.get("sell_at", target_market) or target_market),
+            exit_type=str(pick.get("exit_type", "") or ""),
         )
 
 
@@ -1349,6 +1428,7 @@ def run_cli() -> None:
     calibration_runtime = _build_confidence_calibration_runtime(cfg)
     if str(calibration_runtime.get("warning", "") or ""):
         print(f"Kalibrierung: {calibration_runtime['warning']}")
+    personal_calibration_runtime = _personal_calibration_runtime(cfg)
 
     replay_cfg = cfg.get("replay", {})
     replay_enabled = bool(replay_cfg.get("enabled", False))
@@ -1357,6 +1437,15 @@ def run_cli() -> None:
     if bool(character_context.get("enabled", False)) or bool(character_context.get("available", False)):
         print("")
         for line in character_status_lines(character_context):
+            print(line)
+        print("")
+    personal_history_lines = personal_history_layer_status_lines(
+        personal_calibration_runtime.get("summary"),
+        personal_calibration_runtime.get("layer"),
+    )
+    if personal_history_lines:
+        print("")
+        for line in personal_history_lines:
             print(line)
         print("")
 
@@ -1647,7 +1736,7 @@ def run_cli() -> None:
             # Apply profile-adjusted route score for leaderboard ranking
             apply_profile_to_route_result(active_profile_name, active_profile_params, result)
             result["_active_risk_profile"] = active_profile_name
-            attach_character_context_to_result(result, character_context, budget_isk=budget_isk)
+            _attach_runtime_advisories_to_result(result, character_context, personal_calibration_runtime, budget_isk=budget_isk)
             route_results.append(result)
             if "csv_path" in result:
                 created_files.append(result["csv_path"])
@@ -1777,7 +1866,7 @@ def run_cli() -> None:
             disabled, reason = evaluate_leg_disabled(leg, chain_leg_budget_util_min_pct)
             leg["leg_disabled"] = disabled
             leg["leg_disabled_reason"] = reason
-            attach_character_context_to_result(leg, character_context, budget_isk=budget_isk)
+            _attach_runtime_advisories_to_result(leg, character_context, personal_calibration_runtime, budget_isk=budget_isk)
             forward_legs_for_summary.append(leg)
             emitted_legs.append(leg)
 
@@ -1900,7 +1989,7 @@ def run_cli() -> None:
                 disabled, reason = evaluate_leg_disabled(leg, chain_leg_budget_util_min_pct)
                 leg["leg_disabled"] = disabled
                 leg["leg_disabled_reason"] = reason
-                attach_character_context_to_result(leg, character_context, budget_isk=budget_isk)
+                _attach_runtime_advisories_to_result(leg, character_context, personal_calibration_runtime, budget_isk=budget_isk)
                 return_legs_for_summary.append(leg)
                 emitted_legs.append(leg)
 
@@ -1951,7 +2040,7 @@ def run_cli() -> None:
             timestamp,
             out_dir,
         )
-        attach_character_context_to_result(forward_result, character_context, budget_isk=budget_isk)
+        _attach_runtime_advisories_to_result(forward_result, character_context, personal_calibration_runtime, budget_isk=budget_isk)
         capital_available = _apply_capital_flow_to_leg(forward_result, forward_mode, capital_available, capital_flow_cfg)
         if route_mode == "forward_only":
             print("route_mode=forward_only -> Return-Route wird uebersprungen.")
@@ -1978,7 +2067,7 @@ def run_cli() -> None:
                 timestamp,
                 out_dir,
             )
-            attach_character_context_to_result(return_result, character_context, budget_isk=budget_isk)
+            _attach_runtime_advisories_to_result(return_result, character_context, personal_calibration_runtime, budget_isk=budget_isk)
             capital_available = _apply_capital_flow_to_leg(return_result, return_mode, capital_available, capital_flow_cfg)
 
         attach_plan_metadata([forward_result, return_result], plan_id=plan_id, created_at=plan_created_at)

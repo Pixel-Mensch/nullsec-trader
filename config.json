@@ -219,6 +219,15 @@
         "stale_open_position_days": 14.0,
         "optimism_gap_warn": 0.1
     },
+    "personal_history_policy": {
+        "enabled": true,
+        "mode": "advisory",
+        "min_quality": "usable",
+        "max_negative_adjustment": 0.08,
+        "max_positive_adjustment": 0.05,
+        "require_wallet_backed_min": 8,
+        "require_reliable_min": 6
+    },
     "route_costs": {
         "o4t_to_r-arkn": {
             "fixed_isk": 0,
@@ -565,6 +574,7 @@
         "include_wallet_transactions": true,
         "wallet_journal_max_pages": 2,
         "wallet_transactions_max_pages": 2,
+        "wallet_warn_stale_after_sec": 21600,
         "profile_cache_ttl_sec": 3600,
         "show_order_exposure_in_output": true,
         "warn_if_budget_exceeds_wallet": true

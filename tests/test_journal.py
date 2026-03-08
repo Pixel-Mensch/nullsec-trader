@@ -1,6 +1,91 @@
 """Trade journal tests."""
 
+import sqlite3
+
 from tests.shared import *  # noqa: F401,F403
+
+
+def test_initialize_journal_db_migrates_legacy_schema_before_creating_new_indexes() -> None:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "legacy_journal.sqlite3")
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE journal_entries (
+                    journal_entry_id TEXT PRIMARY KEY,
+                    pick_id TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    route_id TEXT NOT NULL,
+                    route_profile TEXT NOT NULL,
+                    route_label TEXT NOT NULL,
+                    source_market TEXT NOT NULL,
+                    target_market TEXT NOT NULL,
+                    item_type_id INTEGER NOT NULL,
+                    item_name TEXT NOT NULL,
+                    proposed_qty REAL NOT NULL,
+                    proposed_buy_price REAL NOT NULL,
+                    proposed_sell_price REAL NOT NULL,
+                    proposed_full_sell_profit REAL NOT NULL,
+                    proposed_expected_profit REAL NOT NULL,
+                    proposed_expected_days_to_sell REAL NOT NULL,
+                    proposed_exit_type TEXT NOT NULL,
+                    proposed_confidence REAL NOT NULL,
+                    proposed_expected_units_sold REAL NOT NULL DEFAULT 0,
+                    proposed_expected_units_unsold REAL NOT NULL DEFAULT 0,
+                    actual_buy_qty REAL NOT NULL DEFAULT 0,
+                    actual_buy_price_avg REAL NOT NULL DEFAULT 0,
+                    actual_sell_qty REAL NOT NULL DEFAULT 0,
+                    actual_sell_price_avg REAL NOT NULL DEFAULT 0,
+                    actual_fees_paid REAL NOT NULL DEFAULT 0,
+                    actual_shipping_paid REAL NOT NULL DEFAULT 0,
+                    actual_profit_net REAL NOT NULL DEFAULT 0,
+                    first_buy_at TEXT NOT NULL DEFAULT '',
+                    last_sell_at TEXT NOT NULL DEFAULT '',
+                    status TEXT NOT NULL,
+                    calibration_warning TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE journal_events (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    journal_entry_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    qty REAL NOT NULL DEFAULT 0,
+                    price REAL NOT NULL DEFAULT 0,
+                    fees_paid REAL NOT NULL DEFAULT 0,
+                    shipping_paid REAL NOT NULL DEFAULT 0,
+                    happened_at TEXT NOT NULL,
+                    status_to TEXT NOT NULL DEFAULT '',
+                    notes TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX idx_journal_entries_status ON journal_entries(status);
+                CREATE INDEX idx_journal_entries_plan_id ON journal_entries(plan_id);
+                CREATE INDEX idx_journal_entries_route_id ON journal_entries(route_id);
+                CREATE INDEX idx_journal_entries_updated_at ON journal_entries(updated_at);
+                CREATE INDEX idx_journal_events_entry ON journal_events(journal_entry_id, happened_at, event_id);
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        path = nst.initialize_journal_db(db_path)
+        assert str(path) == db_path
+
+        conn = sqlite3.connect(db_path)
+        try:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(journal_entries)").fetchall()}
+            indexes = {str(row[1]) for row in conn.execute("PRAGMA index_list(journal_entries)").fetchall()}
+        finally:
+            conn.close()
+
+    assert "reconciliation_status" in columns
+    assert "match_confidence" in columns
+    assert "idx_journal_entries_reconciliation_status" in indexes
 
 
 def _sample_route_results() -> list[dict]:
@@ -244,6 +329,24 @@ def test_journal_report_compares_expected_vs_realized() -> None:
         assert "TRADE JOURNAL REPORT" in report_text
 
 
+def test_personal_trade_history_reports_fallback_when_no_personal_outcomes_exist() -> None:
+    route_results = _sample_route_results()
+    nst.attach_plan_metadata(route_results, plan_id="plan_test_personal_none", created_at="2026-03-07T12:00:00+00:00")
+    manifest = nst.build_trade_plan_manifest(
+        route_results,
+        plan_id="plan_test_personal_none",
+        created_at="2026-03-07T12:00:00+00:00",
+        runtime_mode="route_profiles",
+    )
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "journal.sqlite3")
+        nst.import_trade_plan_into_journal(db_path, manifest)
+        entries = nst.fetch_journal_entries(db_path)
+        personal = nst.format_personal_trade_history(entries, limit=5)
+    assert "History quality=none" in personal
+    assert "fallback generic" in personal
+
+
 def test_run_journal_cli_overview_prints_summary() -> None:
     route_results = _sample_route_results()
     nst.attach_plan_metadata(route_results, plan_id="plan_test_6", created_at="2026-03-07T12:00:00+00:00")
@@ -262,3 +365,42 @@ def test_run_journal_cli_overview_prints_summary() -> None:
         out = buf.getvalue()
     assert "TRADE JOURNAL OVERVIEW" in out
     assert "Tritanium" in out
+
+
+def test_run_journal_cli_calibration_prints_generic_and_personal_sections() -> None:
+    route_results = _sample_route_results()
+    nst.attach_plan_metadata(route_results, plan_id="plan_test_calibration_cli", created_at="2026-03-07T12:00:00+00:00")
+    manifest = nst.build_trade_plan_manifest(
+        route_results,
+        plan_id="plan_test_calibration_cli",
+        created_at="2026-03-07T12:00:00+00:00",
+        runtime_mode="route_profiles",
+    )
+    entry_id = manifest["routes"][0]["picks"][0]["journal_entry_id"]
+    cfg = _minimal_valid_config()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = os.path.join(tmpdir, "journal.sqlite3")
+        cfg_path = os.path.join(tmpdir, "config.json")
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(cfg, f)
+        nst.import_trade_plan_into_journal(db_path, manifest)
+        nst.record_journal_buy(
+            db_path,
+            entry_id,
+            qty=10,
+            price=100.0,
+            happened_at="2026-03-01T10:00:00+00:00",
+        )
+        nst.record_journal_sell(
+            db_path,
+            entry_id,
+            qty=10,
+            price=150.0,
+            happened_at="2026-03-09T10:00:00+00:00",
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            nst.run_journal_cli(["calibration", "--journal-db", db_path, "--config", cfg_path, "--limit", "3"])
+        out = buf.getvalue()
+    assert "CONFIDENCE CALIBRATION REPORT" in out
+    assert "PERSONAL CALIBRATION BASIS" in out

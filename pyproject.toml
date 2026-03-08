@@ -9,11 +9,16 @@ description = "Nullsec EVE structure trading assistant with chain routing and st
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "requests>=2.31,<3"
+  "requests>=2.31,<3",
+  "fastapi>=0.115,<1",
+  "jinja2>=3.1,<4",
+  "uvicorn>=0.30,<1",
+  "python-multipart>=0.0.9,<1"
 ]
 
 [project.scripts]
 nullsec-trader = "main:main"
+nullsec-trader-web = "webapp.app:run_dev_server"
 
 [tool.setuptools]
 py-modules = [
@@ -49,3 +54,9 @@ py-modules = [
   "scoring",
   "shipping",
 ]
+
+[tool.setuptools.packages.find]
+include = ["webapp", "webapp.*"]
+
+[tool.setuptools.package-data]
+webapp = ["templates/*.html", "static/css/*.css", "static/js/*.js"]

@@ -26,9 +26,12 @@ Current module maps:
 - `docs/module-maps/runtime_common.md`
 - `docs/module-maps/risk_profiles.md`
 - `docs/module-maps/confidence_calibration.md`
+- `docs/module-maps/journal_reporting.md`
 - `docs/module-maps/character_profile.md`
 - `docs/module-maps/eve_sso.md`
 - `docs/module-maps/eve_character_client.md`
+- `docs/module-maps/journal_reconciliation.md`
+- `docs/module-maps/webapp.md`
 
 Use the relevant module map before opening one of these larger files.
 
@@ -56,6 +59,10 @@ Use this section to avoid loading large unrelated modules.
 - Private character ESI fetches: `eve_character_client.py`
 - Character profile mapping, cache fallback, and fee/order integration:
   `character_profile.py`
+- Wallet-to-journal matching and personal trade reconciliation:
+  `journal_reconciliation.py`
+- Wallet snapshot persistence and reconciliation state storage:
+  `journal_store.py`
 - Candidate generation, planned-sell math, route-wide candidate scoring:
   `candidate_engine.py`
 - Market plausibility heuristics: `market_plausibility.py`
@@ -68,7 +75,12 @@ Use this section to avoid loading large unrelated modules.
 - CSV and summary writers: `runtime_reports.py`
 - Journal CLI and persistence: `journal_cli.py`, `journal_store.py`,
   `journal_models.py`, `journal_reporting.py`
-- Confidence calibration from journal outcomes: `confidence_calibration.py`
+- Wallet/journal reconciliation: `journal_reconciliation.py`
+- Generic confidence calibration from journal outcomes: `confidence_calibration.py`
+- Personal trade analytics and personal decision-layer basis:
+  `journal_reporting.py`, `confidence_calibration.py`
+- Local browser UI and service bridge: `webapp/app.py`, `webapp/routes/pages.py`,
+  `webapp/services/`
 - Startup node and chain resolution: `startup_helpers.py`
 
 ## Runtime Flow
@@ -87,12 +99,47 @@ The main runtime flow is:
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
 
-Confidence calibration is fed by journal data:
+Journal reconciliation flow:
+
+`eve_character_client.py` paged wallet fetches
+-> `character_profile.py` wallet snapshot with freshness / coverage metadata
+-> `journal_reconciliation.py`
+-> `journal_store.py`
+-> `journal_reporting.py` / `journal_cli.py`
+
+Generic confidence calibration is fed by journal data:
 
 `journal_store.py`
 -> `confidence_calibration.py`
 -> `runtime_runner.py` applies calibrated confidence to candidates, picks, and
 route results
+
+Local web flow is separate from the CLI and intentionally thin:
+
+`webapp/app.py`
+-> `webapp/routes/pages.py`
+-> `webapp/services/*`
+-> direct calls into `character_profile.py`, `journal_reporting.py`,
+   `confidence_calibration.py`, and `journal_store.py`
+-> or `webapp/services/runtime_bridge.py`
+-> `runtime_runner.run_cli()` in-process for full analysis runs
+-> existing artifacts and manifest files rendered into templates
+
+Personal history flow is separate on purpose and only becomes decision-relevant
+through an explicit policy gate:
+
+`journal_store.py`
+-> `journal_reporting.py`
+-> optional `confidence_calibration.py` personal summary + scoped segment index
+-> `runtime_runner.py` applies an opt-in, capped personal adjustment to
+   `decision_overall_confidence`
+-> `execution_plan.py` / runtime stdout show mode, fallback reason, and applied
+   scope
+
+The generic calibration model remains the base path. The personal layer does
+not rewrite `build_confidence_calibration()`, route-ranking formulas,
+`no_trade`, or planned-sell heuristics; it only nudges the already-consumed
+decision confidence when policy, quality, and sample-size guardrails all pass.
 
 ## Output And State Files
 
@@ -111,6 +158,15 @@ Local mutable state:
 - `config.local.json` is local-only and ignored by Git
 - `cache/` holds runtime cache, SSO token/metadata, character profile cache,
   and journal data
+- `trade_journal.sqlite3` now stores both manual trade events and optional
+  wallet-reconciliation summaries on each entry, including wallet-snapshot
+  quality fields that keep personal-history output independent from a fresh
+  live sync
+- `journal_store.initialize_journal_db()` is also responsible for migrating
+  older local journal schemas before creating newer reconciliation indexes, so
+  existing caches remain usable for CLI and web entry points
+- `webapp/` adds a local-only FastAPI/Jinja2 UI layer and does not replace the
+  CLI entry path
 
 ## Test Entry Points
 
@@ -126,38 +182,40 @@ the repository dynamically.
 
 ## Current Hotspots
 
-Observed on branch `dev` on 2026-03-07:
-
-- modified: `README.md`, `candidate_engine.py`, `execution_plan.py`,
-  `portfolio_builder.py`, `route_search.py`, `runtime_common.py`,
-  `runtime_runner.py`, `config_loader.py`, `config.json`
-- untracked: `character_profile.py`, `eve_sso.py`, `eve_character_client.py`,
-  `local_cache.py`, `tests/test_character_context.py`, `tests/test_eve_sso.py`,
-  `docs/module-maps/character_profile.md`, `docs/module-maps/eve_sso.md`,
-  `docs/module-maps/eve_character_client.md`
-
-This strongly suggests active in-flight work around:
+Most recent focused work on 2026-03-07 touched:
 
 - risk profiles and profile-aware ranking/output
 - execution-plan presentation
-- CLI/runtime integration for the new profile surface
 - optional private character context via EVE SSO / ESI
+- wallet-to-journal reconciliation and personal trade-history reporting
+- open-order warning tiers in output and journal views
+- wallet paging, freshness visibility, and conservative fee/ref matching for
+  older or truncated wallet snapshots
+- personal trade analytics, data-quality tiers, and a separate personal
+  calibration basis with explicit fallback-to-generic guardrails
+- an opt-in personal decision layer with strict caps, explainability fields,
+  and runtime / execution-plan visibility
+- a local FastAPI/Jinja2 browser UI that reuses runtime, journal, and
+  character services without rewriting trade logic
 
 Treat those areas as the most likely source of doc drift until targeted tests
-confirm the worktree state.
+confirm the current branch state.
 
 ## Source Of Truth By Concern
 
 - Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
-- Confidence calibration logic: `confidence_calibration.py`
+- Confidence calibration logic and personal decision-layer policy:
+  `confidence_calibration.py`
 - Private character auth and cacheable profile sync: `eve_sso.py`,
   `eve_character_client.py`, `character_profile.py`
+- Wallet-based personal trade reconciliation: `journal_reconciliation.py`
 - Route ranking: `route_search.py`
 - Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
 - Execution plan rendering: `execution_plan.py`
 - Runtime orchestration: `runtime_runner.py`
+- Local browser delivery and service glue: `webapp/`
 
 ## AI Navigation Notes
 

@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Dashboard | Nullsec Trader Tool{% endblock %}
+{% block content %}
+<section class="hero-card">
+  <div>
+    <p class="eyebrow">System overview</p>
+    <h2>Dashboard</h2>
+    <p class="hero-copy">Live or cached character state, wallet quality, journal health and personal history at a glance.</p>
+  </div>
+  <div class="hero-actions">
+    <a class="button primary" href="/analysis">Run analysis</a>
+    <a class="button secondary" href="/journal">Open journal</a>
+  </div>
+</section>
+
+<section class="card-grid">
+  <article class="info-card">
+    <p class="card-label">Character Context</p>
+    <h3>{{ data.character_summary.character_name or data.character_context.character_name or "Not synced" }}</h3>
+    <p class="stat-line">{{ data.character_summary.source or data.character_context.source or "generic" }}</p>
+    <p class="muted">Status lines: {{ data.character_status_lines|length }}</p>
+  </article>
+  <article class="info-card">
+    <p class="card-label">Wallet Quality</p>
+    <h3>{{ data.wallet_quality.wallet_history_quality or data.character_summary.wallet_history_quality or "unknown" }}</h3>
+    <p class="stat-line">{{ data.wallet_quality.wallet_data_freshness or data.character_summary.wallet_data_freshness or "unknown" }}</p>
+    <p class="muted">Warnings: {{ data.warnings|length }}</p>
+  </article>
+  <article class="info-card">
+    <p class="card-label">Journal</p>
+    <h3>{{ data.journal_summary.entries_total or 0 }} entries</h3>
+    <p class="stat-line">Open {{ data.journal_summary.open_count or 0 }} / Closed {{ data.journal_summary.closed_count or 0 }}</p>
+    <p class="muted">DB: {{ data.journal_db_path }}</p>
+  </article>
+  <article class="info-card">
+    <p class="card-label">Personal History</p>
+    <h3>{{ data.personal_summary.quality_level or "none" }}</h3>
+    <p class="stat-line">{{ data.personal_layer.mode or "advisory" }} / {% if data.personal_layer.active %}active{% else %}generic only{% endif %}</p>
+    <p class="muted">Wallet-backed {{ data.personal_summary.sample_size.wallet_backed_entries or 0 }}</p>
+  </article>
+</section>
+
+<section class="split-grid">
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Character and Wallet Status</h3>
+    </div>
+    <ul class="plain-list">
+      {% for line in data.character_status_lines %}
+      <li>{{ line }}</li>
+      {% else %}
+      <li>No cached character status yet.</li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Personal History Layer</h3>
+    </div>
+    <ul class="plain-list">
+      {% for line in data.personal_layer_lines %}
+      <li>{{ line }}</li>
+      {% else %}
+      <li>No personal history summary available.</li>
+      {% endfor %}
+    </ul>
+  </article>
+</section>
+
+<section class="split-grid">
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Warnings</h3>
+    </div>
+    <ul class="plain-list">
+      {% for warning in data.warnings %}
+      <li class="warning-item">{{ warning }}</li>
+      {% else %}
+      <li>No active warnings.</li>
+      {% endfor %}
+    </ul>
+  </article>
+
+  <article class="panel">
+    <div class="panel-header">
+      <h3>Recent Journal Snapshot</h3>
+    </div>
+    <div class="entry-stack">
+      {% for entry in data.journal_entries %}
+      <article class="entry-card">
+        <h4>{{ entry.item_name or entry.name or "Unknown item" }}</h4>
+        <p class="muted">{{ entry.target_market or "-" }} | {{ entry.effective_status or entry.status or "-" }}</p>
+        <p>{{ entry.reconciliation_status or "manual" }} | {{ entry.trade_history_source or "manual" }}</p>
+      </article>
+      {% else %}
+      <p class="muted">No journal entries available.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+{% if not data.config_valid %}
+<section class="panel danger">
+  <div class="panel-header">
+    <h3>Config Issues</h3>
+  </div>
+  <ul class="plain-list">
+    {% for error in data.config_errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}

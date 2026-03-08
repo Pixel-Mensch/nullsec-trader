@@ -57,6 +57,19 @@ def _make_pick_id(plan_id: str, route_id: str, type_id: int, occurrence: int, se
     return f"pick_{digest}"
 
 
+def _node_location_id(node_info: object) -> int:
+    if not isinstance(node_info, dict):
+        return 0
+    for key in ("node_id", "structure_id", "location_id", "id"):
+        try:
+            value = int(node_info.get(key, 0) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return value
+    return 0
+
+
 def attach_plan_metadata(route_results: list[dict], plan_id: str, created_at: str) -> list[dict]:
     created_at_norm = normalize_journal_timestamp(created_at)
     for route_index, route in enumerate(list(route_results or []), start=1):
@@ -157,6 +170,11 @@ def build_trade_plan_manifest(
     for route in list(route_results or []):
         if not isinstance(route, dict):
             continue
+        source_location_id = _node_location_id(route.get("source_node_info"))
+        target_location_id = _node_location_id(route.get("dest_node_info"))
+        character_summary = route.get("_character_context_summary", {})
+        if not isinstance(character_summary, dict):
+            character_summary = {}
         picks_out: list[dict] = []
         for pick in list(route.get("picks", []) or []):
             if not isinstance(pick, dict):
@@ -215,8 +233,18 @@ def build_trade_plan_manifest(
                     "proposed_expected_units_unsold": float(pick.get("expected_units_unsold_90d", 0.0) or 0.0),
                     "source_market": str(pick.get("source_market", route.get("source_label", "")) or route.get("source_label", "")),
                     "target_market": str(pick.get("target_market", route.get("dest_label", "")) or route.get("dest_label", "")),
+                    "source_location_id": int(pick.get("source_location_id", source_location_id) or source_location_id or 0),
+                    "target_location_id": int(pick.get("target_location_id", target_location_id) or target_location_id or 0),
                     "route_id": str(pick.get("route_id", route.get("route_id", route.get("route_tag", ""))) or ""),
                     "route_profile": str(pick.get("route_profile", route.get("route_profile", route.get("route_tag", ""))) or ""),
+                    "character_id": int(pick.get("character_id", character_summary.get("character_id", 0)) or 0),
+                    "character_open_orders": int(pick.get("character_open_orders", 0) or 0),
+                    "character_open_buy_orders": int(pick.get("character_open_buy_orders", 0) or 0),
+                    "character_open_sell_orders": int(pick.get("character_open_sell_orders", 0) or 0),
+                    "character_open_buy_isk_committed": float(pick.get("character_open_buy_isk_committed", 0.0) or 0.0),
+                    "character_open_sell_units": float(pick.get("character_open_sell_units", 0.0) or 0.0),
+                    "open_order_warning_tier": str(pick.get("open_order_warning_tier", "") or ""),
+                    "open_order_warning_text": str(pick.get("open_order_warning_text", "") or ""),
                 }
             )
         total_picks += len(picks_out)
@@ -277,6 +305,66 @@ def compute_actual_days_to_sell(entry: dict) -> float | None:
     return max(0.0, delta.total_seconds() / 86400.0)
 
 
+def effective_entry_status(entry: dict) -> str:
+    raw_status = str(entry.get("status", "") or "").strip().lower()
+    reconciliation_status = str(entry.get("reconciliation_status", "") or "").strip().lower()
+    mapped = {
+        "suggested_not_bought": "planned",
+        "bought_open": "bought",
+        "partially_sold": "partially_sold",
+        "fully_sold": "sold",
+        "sold_match_uncertain": "sold",
+    }
+    return mapped.get(reconciliation_status, raw_status)
+
+
+def effective_entry_qty(entry: dict, direction: str) -> float:
+    if str(direction or "").strip().lower() == "buy":
+        matched = float(entry.get("matched_buy_qty", 0.0) or 0.0)
+        actual = float(entry.get("actual_buy_qty", 0.0) or 0.0)
+    else:
+        matched = float(entry.get("matched_sell_qty", 0.0) or 0.0)
+        actual = float(entry.get("actual_sell_qty", 0.0) or 0.0)
+    return matched if matched > 0.0 else actual
+
+
+def effective_entry_profit_net(entry: dict) -> float:
+    matched_buy_qty = float(entry.get("matched_buy_qty", 0.0) or 0.0)
+    matched_sell_qty = float(entry.get("matched_sell_qty", 0.0) or 0.0)
+    if matched_buy_qty > 0.0 or matched_sell_qty > 0.0:
+        return float(entry.get("realized_profit_net", 0.0) or 0.0)
+    return float(entry.get("actual_profit_net", 0.0) or 0.0)
+
+
+def effective_entry_days_to_sell(entry: dict) -> float | None:
+    matched_buy = str(entry.get("first_matched_buy_at", "") or "").strip()
+    matched_sell = str(entry.get("last_matched_sell_at", "") or "").strip()
+    if matched_buy and matched_sell:
+        shadow = dict(entry)
+        shadow["first_buy_at"] = matched_buy
+        shadow["last_sell_at"] = matched_sell
+        return compute_actual_days_to_sell(shadow)
+    return compute_actual_days_to_sell(entry)
+
+
+def effective_entry_first_buy_at(entry: dict) -> str:
+    first_buy_at = str(entry.get("first_buy_at", "") or "").strip()
+    if first_buy_at:
+        return first_buy_at
+    first_matched_buy_at = str(entry.get("first_matched_buy_at", "") or "").strip()
+    if first_matched_buy_at:
+        return first_matched_buy_at
+    return str(entry.get("created_at", "") or "").strip()
+
+
+def effective_entry_trade_history_source(entry: dict) -> str:
+    matched_buy_qty = float(entry.get("matched_buy_qty", 0.0) or 0.0)
+    matched_sell_qty = float(entry.get("matched_sell_qty", 0.0) or 0.0)
+    if matched_buy_qty > 0.0 or matched_sell_qty > 0.0:
+        return "wallet"
+    return "manual"
+
+
 def compute_realized_outcome_score(entry: dict) -> float:
     proposed_expected_profit = float(entry.get("proposed_expected_profit", 0.0) or 0.0)
     proposed_qty = float(entry.get("proposed_qty", 0.0) or 0.0)
@@ -305,6 +393,12 @@ __all__ = [
     "build_trade_plan_manifest",
     "compute_actual_days_to_sell",
     "compute_realized_outcome_score",
+    "effective_entry_days_to_sell",
+    "effective_entry_first_buy_at",
+    "effective_entry_profit_net",
+    "effective_entry_qty",
+    "effective_entry_status",
+    "effective_entry_trade_history_source",
     "entry_profit_delta",
     "make_run_id",
     "normalize_journal_timestamp",

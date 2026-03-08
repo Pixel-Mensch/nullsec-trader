@@ -11,6 +11,8 @@ not a full line-by-line review.
 - owns `run_cli()` and the top-level runtime path
 - coordinates route, route-wide, chain, and snapshot-only execution
 - wires profiles, calibration, reporting, and plan artifacts together
+- applies the opt-in personal-history layer after generic calibration
+- attaches character/personal-history metadata and explainability to runtime results
 
 ## Inputs
 
@@ -38,6 +40,10 @@ not a full line-by-line review.
 - `run_route()`
 - `run_route_wide_leg()`
 - `run_snapshot_only()`
+- `_build_personal_calibration_runtime()`
+- `_apply_confidence_calibration_to_candidates()`
+- `_apply_confidence_calibration_to_picks()`
+- `_attach_runtime_advisories_to_result()`
 - `_write_trade_plan_artifact()`
 
 ## Depends On
@@ -58,12 +64,14 @@ not a full line-by-line review.
 
 - `main.py`
 - CLI wrapper scripts through `main.py`
+- `webapp/services/runtime_bridge.py`
 - integration-style runtime tests
 
 ## Common Change Types
 
 - add or adjust CLI/runtime modes
 - wire new profile, calibration, or ranking behavior into the main flow
+- surface runtime metadata and keep personal-layer effects explicit
 - change artifact generation or route/chain branching
 
 ## Risk Areas
@@ -72,6 +80,11 @@ not a full line-by-line review.
 - easy to duplicate business logic that belongs in domain modules
 - route summaries, output files, and metadata can drift together
 - profile and calibration changes can affect multiple runtime paths at once
+- generic calibration and the personal layer must stay ordered and separate
+- easy to accidentally apply the personal layer twice or forget the relaxed
+  candidate path in `portfolio_builder.py`
+- the local web UI currently bridges into `run_cli()` in-process, so stdout and
+  artifact output remain part of that contract
 
 ## Tests
 

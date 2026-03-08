@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Nullsec Trader Tool{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}">
+    <script defer src="{{ url_for('static', path='/js/app.js') }}"></script>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <div>
+          <p class="eyebrow">Local browser control surface</p>
+          <h1><a href="/">Nullsec Trader Tool</a></h1>
+        </div>
+        <nav class="site-nav" aria-label="Primary">
+          <a class="{% if page == 'dashboard' %}is-active{% endif %}" href="/">Dashboard</a>
+          <a class="{% if page == 'analysis' %}is-active{% endif %}" href="/analysis">Analyze</a>
+          <a class="{% if page == 'journal' %}is-active{% endif %}" href="/journal">Journal</a>
+          <a class="{% if page == 'character' %}is-active{% endif %}" href="/character">Character</a>
+          <a class="{% if page == 'config' %}is-active{% endif %}" href="/config">Config</a>
+        </nav>
+      </header>
+
+      <main class="page-content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  <script>
+    (function () {
+      function ping() { fetch('/heartbeat', {method:'POST'}).catch(function(){}); }
+      ping();
+      setInterval(ping, 5000);
+    })();
+  </script>
+  </body>
+</html>

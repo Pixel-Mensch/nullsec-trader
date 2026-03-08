@@ -9,6 +9,7 @@ character-profile layer.
 
 - call authenticated character endpoints
 - paginate character orders and wallet endpoints
+- return wallet paging metadata when the caller asks for it
 - resolve names for skills and item types
 - keep raw transport separate from business mapping
 
@@ -21,6 +22,7 @@ character-profile layer.
 ## Outputs
 
 - raw JSON payloads from character ESI endpoints
+- optional wallet paging metadata (`pages_loaded`, `total_pages`, `history_truncated`)
 - resolved ID->name mappings
 
 ## Key Files
@@ -53,12 +55,14 @@ character-profile layer.
 
 - add new character endpoints
 - change pagination rules
+- change wallet metadata returned to the profile layer
 - tighten HTTP error handling
 
 ## Risk Areas
 
 - path/scope mismatch breaks sync quickly
 - over-eager pagination can create large sync payloads
+- wallet paging changes silently affect reconciliation coverage downstream
 - transport logic must stay free of trading heuristics
 
 ## Tests

@@ -15,6 +15,8 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Execution Plans, Route Leaderboard, CSV-Exporte und Candidate-Dumps
 - Lokales Trade Journal fuer Soll/Ist-Abgleich von vorgeschlagenen und tatsaechlich ausgefuehrten Trades
 - Optionaler persoenlicher Character Context via EVE SSO / ESI: Character-Identitaet, Skills, optionale Skill Queue, offene Orders und Wallet-Snapshots mit lokalem Cache/Fallback
+- Wallet-/Journal-Reconciliation fuer persoenliche Handels-Historie mit Match-Confidence, offenen Positionen und ungematchter Wallet-Aktivitaet
+- persoenliche Journal-Analytics mit Datenqualitaetsstufen, Sample-Size-Hinweisen und optionalem, explizitem Personal-History-Layer mit harten Guardrails
 - Replay-Unterstuetzung fuer reproduzierbare Analysen und Regressionstests
 - Snapshot-Only-Modus zum Bauen neuer Replay-Snapshots aus Live-Daten
 
@@ -105,6 +107,44 @@ python .\main.py character status
 ```
 
 Wenn `--cargo-m3` oder `--budget-isk` fehlen, fragt die CLI interaktiv nach Cargo und Budget.
+
+### Lokale Web App
+
+Die CLI bleibt der produktive Kernpfad. Zusaetzlich gibt es jetzt eine lokale
+Web-App fuer Browser-Nutzung auf demselben Rechner.
+
+Start:
+
+```powershell
+python -m uvicorn webapp.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+oder nach Installation ueber den Console-Script-Einstieg:
+
+```powershell
+nullsec-trader-web
+```
+
+Dann im Browser:
+
+`http://127.0.0.1:8000`
+
+Aktuelle Seiten:
+
+- Dashboard
+- Analyze
+- Journal
+- Character
+- Config
+
+Wichtige Grenzen:
+
+- lokal gedacht, keine oeffentliche Deployment-Architektur
+- keine neue Nutzerverwaltung
+- keine Shell-Wrapper im Browser; die Web-Schicht nutzt kleine Services und
+  fuer Vollruns einen in-process Runtime-Bridge auf `runtime_runner.run_cli()`
+- CLI, Route-Ranking, Candidate-Scoring, `no_trade`, Reconciliation und
+  persoenliche Analytics bleiben fachlich dieselben Pfade
 
 ### Risk Profiles / Handelsmodi
 
@@ -199,7 +239,7 @@ statt generischer Annahmen nutzen.
 - optionale Skill Queue
 - offene Character Market Orders als Exposure-Signal im Output
 - Wallet Balance sowie Wallet Journal / Transactions als lokale Snapshots fuer
-  spaetere persoenliche Handelsauswertung
+  persoenliche Handels-Historie, Reconciliation und Soll/Ist-Abgleich
 
 #### Verifizierte offizielle SSO-/ESI-Pfade
 
@@ -249,7 +289,10 @@ Beispiel fuer `config.local.json`:
   },
   "character_context": {
     "enabled": true,
-    "include_skill_queue": false
+    "include_skill_queue": false,
+    "wallet_journal_max_pages": 2,
+    "wallet_transactions_max_pages": 2,
+    "wallet_warn_stale_after_sec": 21600
   }
 }
 ```
@@ -273,9 +316,145 @@ Artefakte liegen unter dem ohnehin ignorierten `cache/`-Bereich:
 - Ohne Character-Kontext bleiben Live-Marktlogik, Replay und Offline-Nutzung
   weiter lauffaehig.
 
+#### Wallet + Journal Reconciliation
+
+Die persoenliche Handels-Historie ist jetzt als erste nutzbare Basis mit dem
+lokalen Trade Journal verknuepft.
+
+Verfuegbare Journal-Kommandos:
+
+```powershell
+python .\main.py journal reconcile
+python .\main.py journal personal
+python .\main.py journal unmatched
+```
+
+Was `journal reconcile` aktuell macht:
+
+- laedt Character Context wie gewohnt live oder aus Cache
+- nutzt `wallet_snapshot.transactions` und `wallet_snapshot.journal_entries`
+- matched Wallet-Transactions gegen lokale Journal-Eintraege
+- speichert Match-Ergebnis, Match-Confidence, Wallet-IDs, Fee-Match-Qualitaet,
+  Snapshot-Freshness und Reconciliation-Status im lokalen Journal
+- zeigt an, ob die Wallet-Historie frisch, alt, teilweise oder durch
+  Page-Limits abgeschnitten ist
+
+Was `journal personal` jetzt zusaetzlich zeigt:
+
+- persoenliche Trefferquoten von vorgeschlagen -> gekauft und gekauft ->
+  vollstaendig verkauft
+- Anteil teilweise verkaufter Trades, unsicherer Matches und
+  `wallet_unmatched`-Faelle
+- realer vs erwarteter Profit und reale vs erwartete Sell-Dauer
+- offene Positionen nach Altersklassen
+- haeufige Problemklassen wie zu optimistische Profit-/Sell-Dauer-Annahmen,
+  ungekaufte Vorschlaege, offene Langdreher und Order-Overlap
+- Datenqualitaet, Sample Size und Guardrail-Hinweise fuer persoenliche Aussagen
+
+Was `journal calibration` jetzt zusaetzlich zeigt:
+
+- den bisherigen generischen Calibration-Report unveraendert
+- plus eine separate `PERSONAL CALIBRATION BASIS`
+- inklusive Quality-Level (`none`, `very_low`, `low`, `usable`, `good`),
+  Sample Size, Warning-Hinweisen und `fallback to generic`-Policy
+
+Was normale Runs jetzt zusaetzlich zeigen:
+
+- eine kleine `Personal Layer`-Sektion im normalen Runtime-Output und im
+  Execution Plan
+- Modus `OFF`, `ADVISORY`, `SOFT` oder `STRICT`
+- Quality-Level, Sample Size sowie wallet-backed/reliable Count
+- bei schwacher Basis: klare Begruendung fuer `generic only` /
+  `fallback to generic`
+- bei aktivem Layer: kompakte Anzeige des angewandten scoped Effekts
+  (`exit_type`, `target_market`, `route_id`) inklusive Staerke
+
+#### Personal History Policy (optional)
+
+Die persoenliche Historie bleibt standardmaessig kontrolliert und klein.
+Der generische Calibration-Pfad bleibt die Basis. Der optionale Personal-Layer
+darf nur `decision_overall_confidence` leicht und gedeckelt verschieben.
+
+Konfigurationsblock:
+
+```json
+"personal_history_policy": {
+  "enabled": true,
+  "mode": "advisory",
+  "min_quality": "usable",
+  "max_negative_adjustment": 0.08,
+  "max_positive_adjustment": 0.05,
+  "require_wallet_backed_min": 8,
+  "require_reliable_min": 6
+}
+```
+
+Modi:
+
+- `off`: komplett deaktiviert
+- `advisory`: nur sichtbar, kein Score-Effekt
+- `soft`: kleine, streng gedeckelte Anpassung
+- `strict`: gleiche Logik, aber mit voller konfigurierter Kappe
+
+Guardrails:
+
+- `none`, `very_low` und `low` fuehren zu keinem Effekt
+- zu wenig wallet-backed oder reliable Sample fuehrt zu keinem Effekt
+- stale, truncierte oder unsichere Wallet-Basis reduziert die Wirkung oder
+  fuehrt weiter zu `fallback to generic`
+- die generische `build_confidence_calibration()` bleibt unveraendert
+- wenn der Layer aktiv ist, kann er bestehende Entscheidungswege indirekt ueber
+  das bereits verwendete `decision_overall_confidence` beeinflussen; die
+  Ranking- und Filterformeln selbst werden dabei nicht umgeschrieben
+- keine stillen Eingriffe in `no_trade`, geplante Exit-Heuristiken oder
+  sonstige globale Marktlogik
+
+Aktuelle Matching-Signale:
+
+- `character_id`, wenn im Plan/Journal vorhanden
+- `type_id`
+- Buy vs Sell Richtung
+- Menge
+- Preisnaehe zu geplantem oder bereits manuell erfasstem Preis
+- Zeitfenster relativ zu Plan-/Trade-Zeit
+- Markt-/Location-ID, wenn im Plan vorhanden
+- verknuepfte Wallet-Journal-Refs fuer Gebuehren, wenn ESI diese liefert
+- konservativer Zeitfenster-Fallback fuer Gebuehren nur dann, wenn genau ein
+  plausibler Journal-Kandidat existiert
+
+Wichtige Ehrlichkeit:
+
+- Matching ist absichtlich nicht als perfekt modelliert
+- persoenliche Analytics sind absichtlich nicht als globale Marktwahrheit
+  modelliert
+- unklare Faelle bleiben als `match_uncertain`
+- nicht zuordenbare Wallet-Events bleiben in `journal unmatched` sichtbar
+- Wallet-basierter Profit ist nur so gut wie die vorhandenen Wallet-Seiten und
+  die verknuepfbaren Fee-/Tax-Refs
+- Wallet-Reconciliation bleibt snapshot-basiert; alte Trades koennen trotz
+  Paging-Verbesserungen unsicher bleiben, wenn die geladene Historie das echte
+  Trade-Fenster nicht mehr abdeckt
+- `wallet_journal_max_pages` und `wallet_transactions_max_pages` begrenzen
+  bewusst den Abruf; wenn die Historie dadurch abgeschnitten wird, erscheint das
+  als `truncated`-Hinweis im Output
+- Fee-Matches werden jetzt als `exact`, `partial`, `fallback`, `uncertain` oder
+  `unavailable` kenntlich gemacht, statt schwache Verknuepfungen still zu
+  erzwingen
+- Shipping und andere Kosten ausserhalb von Wallet-Daten bleiben separat
+- keine oder schlechte persoenliche Historie fuehrt nicht zu einer stillen
+  Bestrafung; ohne ausreichende Qualitaet oder Stichprobe bleibt der Lauf auf
+  dem generischen Pfad
+- wenn der Personal-Layer aktiv ist, beeinflusst er nur
+  `decision_overall_confidence`, nie ungebremst und immer mit sichtbarem Grund
+- geringe Sample Size oder schwache Datenqualitaet werden offen als
+  `fallback to generic` bzw. `insufficient personal history` markiert
+
 ### Trade Journal
 
 Normale Runs schreiben jetzt zusaetzlich eine maschinenlesbare Plan-Datei `trade_plan_<plan_id>.json`. Darin stehen `plan_id`, `route_id` und stabile `pick_id`s fuer die vorgeschlagenen Picks.
+
+Neue Plan-Importe speichern zusaetzlich Matching-Hilfen wie Character-ID,
+Markt-Location-IDs und vorhandene Open-Order-Warnhinweise mit ins Journal.
 
 Damit kann ein Plan spaeter ins lokale Journal uebernommen werden:
 
@@ -287,6 +466,9 @@ python .\main.py journal overview
 python .\main.py journal open
 python .\main.py journal closed
 python .\main.py journal report
+python .\main.py journal reconcile
+python .\main.py journal personal
+python .\main.py journal unmatched
 ```
 
 ### Wichtige Konfigurationsstellen
@@ -344,6 +526,8 @@ Pro Route werden unter anderem ausgegeben:
 - Prune- oder Downgrade-Gruende
 - optionaler Character-Context-Status (live/cache/default), Wallet-Balance und
   offene Order-Anzahl
+- sichtbarer Order-Overlap-Hinweis, wenn vorgeschlagene Picks bereits mit
+  eigenen Character-Orders kollidieren
 
 Pro Pick werden unter anderem ausgegeben:
 
@@ -358,6 +542,8 @@ Pro Pick werden unter anderem ausgegeben:
 - Fees, Taxes und Transportkosten
 - bei Ueberlappung mit bestehenden Character-Orders: offenes Exposure fuer
   denselben Type
+- staerkerer Warning-Tier fuer vorhandene Character-Sell-/Buy-Orders auf
+  demselben Type
 
 Auf Pick-Ebene kann `transport_confidence` als Modellstatus wie `normal`, `exception` oder `blocked` erscheinen. Auf Route-Ebene ist es ein zusammengefasster Confidence-Wert.
 
@@ -396,6 +582,7 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`eve_character_client.py`](./eve_character_client.py): private Character-ESI-Endpunkte fuer Skills, Orders und Wallet
 - [`fees.py`](./fees.py), [`fee_engine.py`](./fee_engine.py): Gebuehrenmodell
 - [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
+- [`journal_reconciliation.py`](./journal_reconciliation.py): Wallet-Transaction-/Wallet-Journal-Matching gegen lokale Journal-Eintraege mit Confidence und Unmatched-Tracking
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
 - [`route_search.py`](./route_search.py): Route Search, Ranking und Route-Summary fuer das Leaderboard
 - [`portfolio_builder.py`](./portfolio_builder.py): Portfolio-Bau unter Risiko-, Nachfrage-, Budget- und Cargo-Grenzen
@@ -404,6 +591,9 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`market_normalization.py`](./market_normalization.py): Replay-Snapshot-Normalisierung
 - [`startup_helpers.py`](./startup_helpers.py): Node-, Chain- und Label-Aufloesung
 - [`models.py`](./models.py): zentrale Datenmodelle wie `TradeCandidate`
+- [`webapp/`](./webapp): lokale FastAPI-/Jinja2-Webschicht mit Services,
+  Templates und statischen Assets fuer Dashboard, Analyse, Journal und
+  Character-Status
 
 ### Runtime-Helfer
 
@@ -430,6 +620,9 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
 - Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
   harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell
   im Ranking.
+- Wallet-Reconciliation ist snapshot-basiert. Bei kurzer Cache-Historie oder
+  limitierter ESI-Paginierung koennen echte Trades als ungematcht oder unsicher
+  erscheinen.
 - Ein blockierter oder leerer Plan ist oft die richtige Antwort. Das Tool soll lieber nichts empfehlen als schlechte Trades normal ausgeben.
 
 ## Entwicklung und Tests
@@ -452,6 +645,7 @@ Die Test-Suite deckt unter anderem ab:
 - Route Search, Ranking und nicht handelbare Routen
 - Portfolio-Caps fuer Liquidationsdauer, Nachfrage und Konzentration
 - Replay-Integration ueber `main.py`
+- lokale FastAPI-Webseiten und robuste Browser-Routen ohne Live-Login
 - Architektur-Regeln wie den echten Runtime-Pfad und die duenne Rolle von `nullsectrader.py`
 
 ### Worauf bei Refactors zu achten ist

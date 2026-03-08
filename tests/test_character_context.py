@@ -45,11 +45,15 @@ class _FakeCharacterClient:
     def get_wallet_balance(self, character_id: int, *, allow_login=True):
         return 125_000_000.0
 
-    def get_wallet_journal(self, character_id: int, *, max_pages=None, allow_login=True):
-        return [{"id": 1, "amount": 1_000_000.0}]
+    def get_wallet_journal(self, character_id: int, *, max_pages=None, allow_login=True, with_meta=False):
+        rows = [{"id": 1, "amount": 1_000_000.0, "date": "2026-03-05T10:00:00+00:00"}]
+        meta = {"pages_loaded": 2, "total_pages": 4, "page_limit": int(max_pages or 0), "history_truncated": True}
+        return (rows, meta) if with_meta else rows
 
-    def get_wallet_transactions(self, character_id: int, *, max_pages=None, allow_login=True):
-        return [{"transaction_id": 1, "type_id": 34, "quantity": 100}]
+    def get_wallet_transactions(self, character_id: int, *, max_pages=None, allow_login=True, with_meta=False):
+        rows = [{"transaction_id": 1, "type_id": 34, "quantity": 100, "date": "2026-03-06T10:00:00+00:00"}]
+        meta = {"pages_loaded": 2, "total_pages": 3, "page_limit": int(max_pages or 0), "history_truncated": True}
+        return (rows, meta) if with_meta else rows
 
     def resolve_names(self, ids: list[int]):
         mapping = {
@@ -64,6 +68,22 @@ class _FakeCharacterClient:
 class _FailingCharacterClient:
     def get_identity(self, requested_scopes, *, allow_login=True):
         raise nst.CharacterESIError("network down")
+
+
+class _FakeSSO:
+    def ensure_token(self, requested_scopes, *, allow_login=True):
+        return {"access_token": "fake-token"}
+
+
+class _CharacterSeqSession:
+    def __init__(self, responses: list[_SeqResponse]):
+        self._responses = list(responses)
+        self.headers = {}
+
+    def get(self, url, params=None, headers=None, timeout=30):
+        if not self._responses:
+            raise RuntimeError("no fake responses left")
+        return self._responses.pop(0)
 
 
 def test_decode_access_token_claims_extracts_identity() -> None:
@@ -90,6 +110,31 @@ def test_parse_cli_args_supports_auth_and_character_commands() -> None:
     assert char_args["character_action"] == "sync"
 
 
+def test_eve_character_client_reports_wallet_paging_metadata() -> None:
+    cfg = _minimal_valid_config()
+    session = _CharacterSeqSession(
+        [
+            _SeqResponse(200, [{"transaction_id": 1, "type_id": 34, "quantity": 5}], {"X-Pages": "3"}),
+            _SeqResponse(200, [{"transaction_id": 2, "type_id": 34, "quantity": 7}], {"X-Pages": "3"}),
+            _SeqResponse(200, [{"id": 10, "amount": -5.0}], {"X-Pages": "4"}),
+            _SeqResponse(200, [{"id": 11, "amount": -6.0}], {"X-Pages": "4"}),
+        ]
+    )
+    client = nst.EveCharacterClient(cfg, session=session, sso=_FakeSSO())
+
+    tx_rows, tx_meta = client.get_wallet_transactions(90000001, max_pages=2, with_meta=True)
+    journal_rows, journal_meta = client.get_wallet_journal(90000001, max_pages=2, with_meta=True)
+
+    assert len(tx_rows) == 2
+    assert tx_meta["pages_loaded"] == 2
+    assert tx_meta["total_pages"] == 3
+    assert tx_meta["history_truncated"] is True
+    assert len(journal_rows) == 2
+    assert journal_meta["pages_loaded"] == 2
+    assert journal_meta["total_pages"] == 4
+    assert journal_meta["history_truncated"] is True
+
+
 def test_sync_character_profile_maps_skills_orders_wallet_and_queue() -> None:
     cfg = _minimal_valid_config()
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -113,6 +158,11 @@ def test_sync_character_profile_maps_skills_orders_wallet_and_queue() -> None:
     assert abs(float(context["wallet_balance"]) - 125_000_000.0) < 1e-9
     queue = context["profile"]["skill_queue_snapshot"]
     assert int(queue["count"]) == 1
+    wallet_snapshot = context["profile"]["wallet_snapshot"]
+    assert int(wallet_snapshot["journal_pages_loaded"]) == 2
+    assert int(wallet_snapshot["transactions_pages_loaded"]) == 2
+    assert bool(wallet_snapshot["history_truncated"]) is True
+    assert str(wallet_snapshot["transactions_oldest_at"]).startswith("2026-03-06T10:00:00")
 
 
 def test_resolve_character_context_falls_back_to_cache_when_live_sync_fails() -> None:
@@ -203,11 +253,18 @@ def test_attach_character_context_to_result_marks_order_overlap() -> None:
     summary = updated["_character_context_summary"]
     assert summary["overlapping_pick_count"] == 1
     assert summary["budget_exceeds_wallet"] is True
+    assert summary["wallet_data_freshness"] in {"fresh", "unknown"}
 
 
 def test_validate_config_rejects_invalid_character_context_fields() -> None:
     cfg = _minimal_valid_config()
-    cfg["character_context"] = {"enabled": "yes", "profile_cache_ttl_sec": -1}
+    cfg["character_context"] = {"enabled": "yes", "profile_cache_ttl_sec": -1, "wallet_warn_stale_after_sec": -5}
+    cfg["personal_history_policy"] = {"enabled": "yes", "mode": "magic", "min_quality": "low", "max_negative_adjustment": 2.0}
     vr = nst.validate_config(cfg)
     assert any("character_context.enabled must be a boolean" in str(e) for e in vr.get("errors", []))
     assert any("character_context.profile_cache_ttl_sec" in str(e) for e in vr.get("errors", []))
+    assert any("character_context.wallet_warn_stale_after_sec" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.enabled must be a boolean" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.mode must be one of" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.min_quality must be one of" in str(e) for e in vr.get("errors", []))
+    assert any("personal_history_policy.max_negative_adjustment must be a number in range [0..1]" in str(e) for e in vr.get("errors", []))

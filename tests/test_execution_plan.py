@@ -526,6 +526,74 @@ class TestWriteExecutionPlanProfiles:
         assert "Trader One" in content
         assert "Open Orders 4" in content
 
+    def test_personal_history_warning_shown_in_header(self):
+        result = _make_route_result()
+        result["_personal_calibration_summary"] = {
+            "quality_level": "low",
+            "sample_size": {
+                "eligible_entries": 4,
+                "wallet_backed_entries": 4,
+                "reliable_entries": 1,
+            },
+            "policy": {
+                "fallback_to_generic": True,
+                "reason": "unreliable personal history",
+            },
+            "warnings": ["unreliable personal history"],
+            "diagnostics": {"overall": {}},
+        }
+        result["_personal_history_layer"] = {
+            "mode": "advisory",
+            "quality_level": "low",
+            "active": False,
+            "reason": "weak personal history quality",
+        }
+        content = self._write_and_read([result])
+        assert "Personal Layer: ADVISORY | quality LOW | generic only" in content
+        assert "Personal Basis: sample 4 | wallet-backed 4 | reliable 1" in content
+
+    def test_personal_history_good_basis_shown_in_header(self):
+        result = _make_route_result()
+        result["_personal_calibration_summary"] = {
+            "quality_level": "good",
+            "sample_size": {
+                "eligible_entries": 12,
+                "wallet_backed_entries": 10,
+                "reliable_entries": 9,
+            },
+            "policy": {
+                "fallback_to_generic": False,
+                "reason": "",
+            },
+            "warnings": [],
+            "diagnostics": {
+                "overall": {
+                    "diagnosis": "well_aligned",
+                    "actual_success_rate": 0.83,
+                    "optimism_gap": -0.04,
+                }
+            },
+        }
+        result["_personal_history_layer"] = {
+            "mode": "soft",
+            "quality_level": "good",
+            "active": True,
+            "reason": "personal decision layer active",
+            "max_positive_adjustment": 0.025,
+            "max_negative_adjustment": 0.040,
+        }
+        result["_personal_history_effect_summary"] = {
+            "applied": True,
+            "effect_value": -0.03,
+            "scope": "target_market+exit_type",
+            "reason": "target_market=o4t (n=8, gap=-0.14)",
+        }
+        content = self._write_and_read([result])
+        assert "Personal Layer: SOFT | quality GOOD | active" in content
+        assert "Personal Basis: sample 12 | wallet-backed 10 | reliable 9" in content
+        assert "Policy: scoped confidence adjustments enabled" in content
+        assert "Applied: -0.030 confidence | target_market+exit_type" in content
+
     def test_character_order_overlap_shown_in_pick_block(self):
         pick = _planned_pick(
             character_open_orders=2,

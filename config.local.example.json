@@ -5,7 +5,10 @@
   },
   "character_context": {
     "enabled": true,
-    "include_skill_queue": false
+    "include_skill_queue": false,
+    "wallet_journal_max_pages": 2,
+    "wallet_transactions_max_pages": 2,
+    "wallet_warn_stale_after_sec": 21600
   },
   "replay": {
     "enabled": false

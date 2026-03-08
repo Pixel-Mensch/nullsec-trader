@@ -11,6 +11,7 @@ annotation.
 - resolve `character_context` config defaults
 - decide between live sync, cache, and generic fallback
 - map skills, skill queue, orders, and wallet data into one local profile
+- preserve wallet snapshot paging / freshness metadata for later reconciliation
 - derive fee-skill overrides and order-exposure hints
 - attach character summary data to route results and picks
 
@@ -26,6 +27,7 @@ annotation.
 - cached `character_profile.json`
 - fee-skill override metadata
 - pick/result annotations for output
+- wallet snapshot quality hints (age, page depth, truncation)
 
 ## Key Files
 
@@ -51,12 +53,15 @@ annotation.
 ## Used By
 
 - `runtime_runner.py`
+- `webapp/services/dashboard_service.py`
+- `webapp/services/character_service.py`
 - tests for character context / output integration
 
 ## Common Change Types
 
 - add new cached character data domains
 - change fallback rules between live/cache/default
+- tune wallet snapshot metadata or stale/truncation policy
 - extend fee-skill mapping
 - surface new order or wallet summaries in runtime/output
 
@@ -64,6 +69,7 @@ annotation.
 
 - easy to blur runtime policy and raw API mapping
 - cache freshness rules affect whether sync happens at run start
+- wallet page-depth defaults can quietly limit later journal reconciliation
 - fee override changes can silently affect all profit calculations
 - order-exposure annotation should stay diagnostic unless explicitly promoted to scoring
 
