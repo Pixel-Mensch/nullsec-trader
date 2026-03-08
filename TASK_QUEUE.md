@@ -132,6 +132,25 @@ full backlog scrape.
     `1st Taj Mahgoon -> UALX-3` as `internal_self_haul` instead of transport
     blocked
 
+### Task 3c: Fix horizontal overflow on `/analysis/run` results page
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - widened the analysis page shell so the results view uses desktop width more
+    effectively instead of staying artificially narrow
+  - fixed the real overflow cause in the web layout: grid/flex result cards now
+    shrink with `min-width: 0` and narrow-screen grid minima no longer force
+    overflow
+  - long snapshot paths and artifact paths now wrap safely inside their cards
+  - runtime/report `<pre>` blocks on the results page are now isolated via a
+    dedicated `log-output` class so long lines stay inside the panel instead of
+    widening the whole page
+  - targeted regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**
+
 ### Task 3: Reduce AI context cost around large orchestration modules
 
 - Priority: P1

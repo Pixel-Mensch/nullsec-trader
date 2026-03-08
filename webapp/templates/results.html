@@ -52,7 +52,7 @@
     <p class="card-label">Replay</p>
     <h3>{% if result.used_replay %}Enabled{% else %}Disabled{% endif %}</h3>
     <p class="stat-line">Exit code {{ result.exit_code }}</p>
-    <p class="muted">Snapshot {{ result.snapshot_path or "-" }}</p>
+    <p class="muted path-text">Snapshot {{ result.snapshot_path or "-" }}</p>
   </article>
   <article class="info-card">
     <p class="card-label">Artifacts</p>
@@ -80,7 +80,7 @@
     <div class="panel-header">
       <h3>Artifacts</h3>
     </div>
-    <ul class="plain-list">
+    <ul class="plain-list path-list">
       {% for path in result.created_files %}
       <li>{{ path }}</li>
       {% else %}
@@ -175,7 +175,7 @@
   </div>
   <details {% if result.exit_code and result.exit_code != 0 %}open{% endif %}>
     <summary>{% if result.exit_code and result.exit_code != 0 %}Fehlerdetails anzeigen{% else %}Vollstaendige Ausgabe{% endif %} ({{ result.stdout | length }} Zeichen)</summary>
-    <pre>{{ result.stdout }}</pre>
+    <pre class="log-output">{{ result.stdout }}</pre>
   </details>
 </section>
 {% endif %}
@@ -188,25 +188,25 @@
   {% if result.no_trade_text %}
   <details open>
     <summary>No-trade report</summary>
-    <pre>{{ result.no_trade_text }}</pre>
+    <pre class="log-output">{{ result.no_trade_text }}</pre>
   </details>
   {% endif %}
   {% if result.summary_text %}
   <details>
     <summary>Roundtrip summary</summary>
-    <pre>{{ result.summary_text }}</pre>
+    <pre class="log-output">{{ result.summary_text }}</pre>
   </details>
   {% endif %}
   {% if result.leaderboard_text %}
   <details>
     <summary>Route leaderboard</summary>
-    <pre>{{ result.leaderboard_text }}</pre>
+    <pre class="log-output">{{ result.leaderboard_text }}</pre>
   </details>
   {% endif %}
   {% if result.execution_plan_text %}
   <details>
     <summary>Execution plan text</summary>
-    <pre>{{ result.execution_plan_text }}</pre>
+    <pre class="log-output">{{ result.execution_plan_text }}</pre>
   </details>
   {% endif %}
 </section>

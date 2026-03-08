@@ -182,6 +182,7 @@ def test_analysis_form_renders(monkeypatch) -> None:
     client = _client(monkeypatch)
     response = client.get("/analysis")
     assert response.status_code == 200
+    assert 'class="page-analysis"' in response.text
     assert "Run analysis" in response.text
     assert "balanced" in response.text
 
@@ -195,6 +196,7 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     assert "Personal Layer" in response.text
     assert "Budget 45.3%" in response.text
     assert "Snapshot C:/tmp/replay_snapshot.json" in response.text
+    assert 'class="log-output"' in response.text
 
 
 def test_journal_views_render(monkeypatch) -> None:
@@ -237,6 +239,9 @@ def test_static_assets_are_served(monkeypatch) -> None:
     response = client.get("/static/css/app.css")
     assert response.status_code == 200
     assert "--accent" in response.text
+    assert "body.page-analysis" in response.text
+    assert ".log-output" in response.text
+    assert "overflow-wrap: anywhere;" in response.text
 
 
 def test_runtime_bridge_extracts_replay_snapshot_path() -> None:

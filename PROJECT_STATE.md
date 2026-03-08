@@ -155,6 +155,9 @@ Not fully re-audited this session:
   live runs, so the browser shows the real snapshot path after a live analysis
 - the web app no longer auto-shuts down during a long-running analysis request;
   active in-flight requests now block the heartbeat idle-exit path
+- the `/analysis` and `/analysis/run` browser layout now allows analysis cards
+  and log/report blocks to shrink correctly within the viewport; long paths and
+  runtime logs no longer create page-wide horizontal overflow
 - a new real-data replay regression fixture now exists:
   `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
 - all webapp routes are confirmed reachable (200 OK) under real service data

@@ -129,6 +129,12 @@ Local web flow is separate from the CLI and intentionally thin:
 to auto-shutdown, so long-running `/analysis/run` requests are not killed by
 the idle timer mid-response.
 
+The analysis/result browser views now rely on a small page-level layout
+modifier in `base.html` plus overflow-safe CSS in `webapp/static/css/app.css`:
+analysis pages can use a wider shell, grid items are allowed to shrink with
+`min-width: 0`, and large runtime/report `<pre>` blocks are constrained inside
+their own panels instead of widening the full page.
+
 `shipping.py` now owns a central transport-mode decision seam:
 
 - Jita-connected routes stay on the external shipping path (ITL/HWL lanes or
