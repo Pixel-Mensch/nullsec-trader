@@ -131,6 +131,56 @@ def test_attach_plan_metadata_assigns_stable_ids() -> None:
     assert str(pick["journal_entry_id"]) == str(pick["pick_id"])
 
 
+def test_trade_plan_manifest_falls_back_to_sell_avg_for_instant_picks() -> None:
+    route_results = [
+        {
+            "route_tag": "o4t_to_jita",
+            "route_label": "o4t -> jita_44",
+            "source_label": "o4t",
+            "dest_label": "jita_44",
+            "route_actionable": True,
+            "isk_used": 1000.0,
+            "budget_total": 2000.0,
+            "budget_util_pct": 50.0,
+            "m3_used": 10.0,
+            "cargo_total": 20.0,
+            "cargo_util_pct": 50.0,
+            "expected_realized_profit_total": 500.0,
+            "full_sell_profit_total": 550.0,
+            "picks": [
+                {
+                    "type_id": 35,
+                    "name": "Pyerite",
+                    "qty": 5,
+                    "buy_avg": 100.0,
+                    "sell_avg": 250.0,
+                    "target_sell_price": 0.0,
+                    "gross_profit_if_full_sell": 550.0,
+                    "expected_realized_profit_90d": 500.0,
+                    "expected_days_to_sell": 0.0,
+                    "exit_type": "instant",
+                    "overall_confidence": 0.88,
+                    "instant": True,
+                    "mode": "instant",
+                }
+            ],
+        }
+    ]
+    nst.attach_plan_metadata(route_results, plan_id="plan_test_sell_avg", created_at="2026-03-07T12:00:00+00:00")
+    manifest = nst.build_trade_plan_manifest(
+        route_results,
+        plan_id="plan_test_sell_avg",
+        created_at="2026-03-07T12:00:00+00:00",
+        runtime_mode="route_profiles",
+    )
+    route = manifest["routes"][0]
+    pick = route["picks"][0]
+    assert float(pick["proposed_sell_price"]) == 250.0
+    assert float(route["budget_util_pct"]) == 50.0
+    assert float(route["cargo_util_pct"]) == 50.0
+    assert float(route["expected_realized_profit_total"]) == 500.0
+
+
 def test_trade_plan_import_creates_journal_entry() -> None:
     route_results = _sample_route_results()
     nst.attach_plan_metadata(route_results, plan_id="plan_test_2", created_at="2026-03-07T12:00:00+00:00")
@@ -150,6 +200,7 @@ def test_trade_plan_import_creates_journal_entry() -> None:
         assert str(entry["plan_id"]) == "plan_test_2"
         assert str(entry["route_label"]) == "jita_44 -> o4t"
         assert int(entry["item_type_id"]) == 34
+        assert float(entry["proposed_sell_price"]) == 155.0
         assert float(entry["proposed_expected_profit"]) == 500.0
         assert abs(float(entry["proposed_overall_confidence_raw"]) - 0.72) < 1e-9
         assert abs(float(entry["proposed_overall_confidence_calibrated"]) - 0.72) < 1e-9

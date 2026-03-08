@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+import webapp.app as web_app
 from webapp.app import create_app
 from webapp.routes import pages
+from webapp.services import runtime_bridge
 
 
 def _dashboard_data() -> dict:
@@ -64,7 +66,7 @@ def _analysis_result() -> dict:
         "pick_count": 2,
         "actionable_route_count": 1,
         "used_replay": False,
-        "snapshot_path": "",
+        "snapshot_path": "C:/tmp/replay_snapshot.json",
         "created_files": ["execution_plan_2026.txt", "trade_plan_plan-123.json"],
         "personal_layer_lines": [
             "Personal Layer: ADVISORY | quality USABLE | generic only",
@@ -78,8 +80,13 @@ def _analysis_result() -> dict:
                 "route_confidence": 0.72,
                 "transport_confidence": 0.84,
                 "capital_lock_risk": 0.18,
+                "budget_util_pct": 45.3,
+                "cargo_util_pct": 37.7,
+                "isk_used": 226373819.86,
                 "expected_profit_total": 12000000.0,
+                "full_sell_profit_total": 15000000.0,
                 "pick_count": 2,
+                "warnings": ["calibration fallback"],
                 "calibration_warning": "",
                 "route_prune_reason": "",
                 "picks": [
@@ -175,6 +182,7 @@ def test_analysis_form_renders(monkeypatch) -> None:
     client = _client(monkeypatch)
     response = client.get("/analysis")
     assert response.status_code == 200
+    assert 'class="page-analysis"' in response.text
     assert "Run analysis" in response.text
     assert "balanced" in response.text
 
@@ -186,6 +194,9 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     assert "Analysis results" in response.text
     assert "Jita -&gt; Amarr" in response.text
     assert "Personal Layer" in response.text
+    assert "Budget 45.3%" in response.text
+    assert "Snapshot C:/tmp/replay_snapshot.json" in response.text
+    assert 'class="log-output"' in response.text
 
 
 def test_journal_views_render(monkeypatch) -> None:
@@ -228,3 +239,31 @@ def test_static_assets_are_served(monkeypatch) -> None:
     response = client.get("/static/css/app.css")
     assert response.status_code == 200
     assert "--accent" in response.text
+    assert "body.page-analysis" in response.text
+    assert ".log-output" in response.text
+    assert "overflow-wrap: anywhere;" in response.text
+
+
+def test_runtime_bridge_extracts_replay_snapshot_path() -> None:
+    output = "\n".join(
+        [
+            "Replay-Snapshot geschrieben: C:/tmp/live_snapshot.json",
+            "=== ERSTELLTE DATEIEN ===",
+            "C:/tmp/execution_plan.txt",
+        ]
+    )
+    assert runtime_bridge._extract_snapshot_path(output) == "C:/tmp/live_snapshot.json"
+
+
+def test_webapp_shutdown_waits_for_active_request() -> None:
+    old_last_ping = web_app._last_ping
+    old_active_request_count = web_app._active_request_count
+    try:
+        web_app._last_ping = 0.0
+        web_app._active_request_count = 1
+        assert web_app._should_auto_shutdown(now=999.0) is False
+        web_app._active_request_count = 0
+        assert web_app._should_auto_shutdown(now=999.0) is True
+    finally:
+        web_app._last_ping = old_last_ping
+        web_app._active_request_count = old_active_request_count

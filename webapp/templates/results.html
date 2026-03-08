@@ -52,7 +52,7 @@
     <p class="card-label">Replay</p>
     <h3>{% if result.used_replay %}Enabled{% else %}Disabled{% endif %}</h3>
     <p class="stat-line">Exit code {{ result.exit_code }}</p>
-    <p class="muted">Snapshot {{ result.snapshot_path or "-" }}</p>
+    <p class="muted path-text">Snapshot {{ result.snapshot_path or "-" }}</p>
   </article>
   <article class="info-card">
     <p class="card-label">Artifacts</p>
@@ -80,7 +80,7 @@
     <div class="panel-header">
       <h3>Artifacts</h3>
     </div>
-    <ul class="plain-list">
+    <ul class="plain-list path-list">
       {% for path in result.created_files %}
       <li>{{ path }}</li>
       {% else %}
@@ -105,13 +105,21 @@
       <span>Confidence {{ "%.2f"|format(route.route_confidence or 0) }}</span>
       <span>Transport {{ "%.2f"|format(route.transport_confidence or 0) }}</span>
       <span>Capital lock {{ "%.2f"|format(route.capital_lock_risk or 0) }}</span>
+      <span>Budget {{ "%.1f"|format(route.budget_util_pct or 0) }}%</span>
+      <span>Cargo {{ "%.1f"|format(route.cargo_util_pct or 0) }}%</span>
+      <span>Total cost {{ "%.0f"|format(route.isk_used or 0) }} ISK</span>
       <span>Expected profit {{ "%.0f"|format(route.expected_profit_total or 0) }} ISK</span>
+      <span>Full sell {{ "%.0f"|format(route.full_sell_profit_total or 0) }} ISK</span>
       <span>Picks {{ route.pick_count }}</span>
     </div>
-    {% if route.calibration_warning or route.route_prune_reason %}
+    {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason %}
     <ul class="plain-list">
-      {% if route.calibration_warning %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
-      {% if route.route_prune_reason %}<li>{{ route.route_prune_reason }}</li>{% endif %}
+      {% for warning in route.warnings %}
+      <li class="warning-item">{{ warning }}</li>
+      {% endfor %}
+      {% if route.cost_model_warning and route.cost_model_warning not in route.warnings %}<li class="warning-item">{{ route.cost_model_warning }}</li>{% endif %}
+      {% if route.calibration_warning and route.calibration_warning not in route.warnings %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
+      {% if route.route_prune_reason and route.route_prune_reason not in route.warnings %}<li>{{ route.route_prune_reason }}</li>{% endif %}
     </ul>
     {% endif %}
     <div class="table-wrap">
@@ -167,7 +175,7 @@
   </div>
   <details {% if result.exit_code and result.exit_code != 0 %}open{% endif %}>
     <summary>{% if result.exit_code and result.exit_code != 0 %}Fehlerdetails anzeigen{% else %}Vollstaendige Ausgabe{% endif %} ({{ result.stdout | length }} Zeichen)</summary>
-    <pre>{{ result.stdout }}</pre>
+    <pre class="log-output">{{ result.stdout }}</pre>
   </details>
 </section>
 {% endif %}
@@ -180,25 +188,25 @@
   {% if result.no_trade_text %}
   <details open>
     <summary>No-trade report</summary>
-    <pre>{{ result.no_trade_text }}</pre>
+    <pre class="log-output">{{ result.no_trade_text }}</pre>
   </details>
   {% endif %}
   {% if result.summary_text %}
   <details>
     <summary>Roundtrip summary</summary>
-    <pre>{{ result.summary_text }}</pre>
+    <pre class="log-output">{{ result.summary_text }}</pre>
   </details>
   {% endif %}
   {% if result.leaderboard_text %}
   <details>
     <summary>Route leaderboard</summary>
-    <pre>{{ result.leaderboard_text }}</pre>
+    <pre class="log-output">{{ result.leaderboard_text }}</pre>
   </details>
   {% endif %}
   {% if result.execution_plan_text %}
   <details>
     <summary>Execution plan text</summary>
-    <pre>{{ result.execution_plan_text }}</pre>
+    <pre class="log-output">{{ result.execution_plan_text }}</pre>
   </details>
   {% endif %}
 </section>

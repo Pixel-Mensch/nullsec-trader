@@ -45,6 +45,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Instant-Exits und gelistete Exits werden unterschiedlich bepreist. Gelistete Exits enthalten zusaetzlich Broker, SCC und optionales Relist-Budget.
 - Shipping- und zusaetzliche Routenkosten werden vor dem finalen Ranking vom Profit abgezogen.
 - Wenn fuer eine Route kein belastbares Transportmodell existiert, wird sie standardmaessig blockiert. Eine Zero-Cost-Ausnahme ist nur explizit ueber `route_search.allow_zero_transport_cost_for_routes` moeglich.
+- Interne Struktur-zu-Struktur-Routen ohne Jita werden dabei separat behandelt: sie laufen standardmaessig als `internal_self_haul` und werden nicht wegen fehlender externer Shipping-Lanes blockiert. Solange keine expliziten internen `route_costs` gesetzt sind, gelten dort aktuell `0 ISK` Transportkosten.
 
 ### Wichtiger Unterschied: Papierprofit vs. erwartbarer Profit
 

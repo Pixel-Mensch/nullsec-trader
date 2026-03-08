@@ -39,8 +39,12 @@ def _route_cards(manifest: dict) -> list[dict]:
         if not isinstance(route, dict):
             continue
         picks = [pick for pick in list(route.get("picks", []) or []) if isinstance(pick, dict)]
-        expected_total = sum(float(pick.get("proposed_expected_profit", 0.0) or 0.0) for pick in picks)
-        full_total = sum(float(pick.get("proposed_full_sell_profit", 0.0) or 0.0) for pick in picks)
+        expected_total = float(route.get("expected_realized_profit_total", 0.0) or 0.0)
+        if expected_total <= 0.0:
+            expected_total = sum(float(pick.get("proposed_expected_profit", 0.0) or 0.0) for pick in picks)
+        full_total = float(route.get("full_sell_profit_total", 0.0) or 0.0)
+        if full_total <= 0.0:
+            full_total = sum(float(pick.get("proposed_full_sell_profit", 0.0) or 0.0) for pick in picks)
         cards.append(
             {
                 "route_id": str(route.get("route_id", "") or ""),
@@ -51,9 +55,22 @@ def _route_cards(manifest: dict) -> list[dict]:
                 "capital_lock_risk": float(route.get("capital_lock_risk", 0.0) or 0.0),
                 "calibration_warning": str(route.get("calibration_warning", "") or ""),
                 "route_prune_reason": str(route.get("route_prune_reason", "") or ""),
-                "pick_count": len(picks),
+                "cost_model_confidence": str(route.get("cost_model_confidence", "normal") or "normal"),
+                "cost_model_warning": str(route.get("cost_model_warning", "") or ""),
+                "pick_count": int(route.get("items_count", len(picks)) or len(picks)),
+                "isk_used": float(route.get("isk_used", 0.0) or 0.0),
+                "budget_total": float(route.get("budget_total", 0.0) or 0.0),
+                "budget_util_pct": float(route.get("budget_util_pct", 0.0) or 0.0),
+                "m3_used": float(route.get("m3_used", 0.0) or 0.0),
+                "cargo_total": float(route.get("cargo_total", 0.0) or 0.0),
+                "cargo_util_pct": float(route.get("cargo_util_pct", 0.0) or 0.0),
+                "net_revenue_total": float(route.get("net_revenue_total", 0.0) or 0.0),
+                "total_fees_taxes": float(route.get("total_fees_taxes", 0.0) or 0.0),
+                "total_transport_cost": float(route.get("total_transport_cost", 0.0) or 0.0),
+                "shipping_cost_total": float(route.get("shipping_cost_total", 0.0) or 0.0),
                 "expected_profit_total": expected_total,
                 "full_sell_profit_total": full_total,
+                "warnings": [str(item).strip() for item in list(route.get("warnings", []) or []) if str(item).strip()],
                 "picks": picks,
             }
         )

@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 11 local web UI)
+Last updated: 2026-03-08 (session 14 live/replay/web verification)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -107,6 +107,49 @@ full backlog scrape.
 - Expected result: one narrow automated test or smoke-test script confirms that
   the CLI can parse profile flags and reach the expected runtime path without
   requiring a broad end-to-end environment.
+
+### Task 3b: Stop falsely blocking profitable internal nullsec routes
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - `shipping.py` now classifies configured structure-to-structure nullsec
+    routes without Jita as `internal_self_haul` instead of treating them as
+    missing external shipping models
+  - those routes now remain actionable with `0 ISK` default transport cost
+    unless explicit internal `route_costs` are configured later
+  - Jita-connected routes still use the existing ITL/HWL / shipping-lane path
+  - `execution_plan.py`, `runtime_runner.py`, and `journal_models.py` now
+    surface `transport_mode` and the self-haul note in artifacts
+  - `config.json` now includes missing `structure_regions` for `UALX-3` and
+    `R-ARKN`, and the duplicate `c-j6mt` structure alias was removed
+  - targeted tests plus replay verification:
+    `python -m pytest -q tests/test_shipping.py tests/test_config.py tests/test_route_search.py tests/test_integration.py`
+    -> **81 passed**
+  - real replay verification on `replay_snapshot.json` showed internal routes
+    such as `O4T -> UALX-3`, `R-ARKN -> 1st Taj Mahgoon`, and
+    `1st Taj Mahgoon -> UALX-3` as `internal_self_haul` instead of transport
+    blocked
+
+### Task 3c: Fix horizontal overflow on `/analysis/run` results page
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - widened the analysis page shell so the results view uses desktop width more
+    effectively instead of staying artificially narrow
+  - fixed the real overflow cause in the web layout: grid/flex result cards now
+    shrink with `min-width: 0` and narrow-screen grid minima no longer force
+    overflow
+  - long snapshot paths and artifact paths now wrap safely inside their cards
+  - runtime/report `<pre>` blocks on the results page are now isolated via a
+    dedicated `log-output` class so long lines stay inside the panel instead of
+    widening the whole page
+  - targeted regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**
 
 ### Task 3: Reduce AI context cost around large orchestration modules
 
@@ -331,3 +374,30 @@ full backlog scrape.
     match real service output (added `default_profile_name`, removed fake
     `config.risk_profile` struct that was masking the crash).
   - Full suite: **325 passed**; real HTTP check: all routes 200 OK.
+
+### Task 7e: Prove live -> replay reproducibility and harden the browser flow
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - Ran a focused real live CLI route search against Jita/O4T using a local
+    overlay config, captured a fresh replay snapshot, then reran the same flow
+    in replay mode
+  - Fixed unstable replay identity drift: `runtime_runner.py` now derives a
+    deterministic `plan_id` from snapshot+inputs, so identical replay runs keep
+    the same `plan_id` and `pick_id` set
+  - Fixed `journal_models.py` manifest serialization so `instant` picks no
+    longer write `proposed_sell_price=0` when `sell_avg` is the real exit price
+  - Extended the trade-plan manifest with route budget/cargo/cost fields for
+    web/CLI parity and surfaced them in `webapp/templates/results.html`
+  - Fixed `webapp/services/runtime_bridge.py` so live runs expose the written
+    replay snapshot path in the browser (`Replay-Snapshot geschrieben: ...`)
+  - Fixed `webapp/app.py` idle auto-shutdown so it does not kill long-running
+    `/analysis/run` requests while a request is still active
+  - Added a real-data replay regression fixture:
+    `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
+  - Added replay reproducibility tests in `tests/test_integration.py`,
+    manifest-serialization regression in `tests/test_journal.py`, and
+    runtime-bridge / shutdown regressions in `tests/test_webapp.py`
+  - Full suite: **330 passed**

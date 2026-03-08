@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-07
+Last updated: 2026-03-08
 
 ## Evidence And Limits
 
@@ -125,6 +125,27 @@ Local web flow is separate from the CLI and intentionally thin:
 -> `runtime_runner.run_cli()` in-process for full analysis runs
 -> existing artifacts and manifest files rendered into templates
 
+`webapp.app` now tracks in-flight requests before the heartbeat watcher decides
+to auto-shutdown, so long-running `/analysis/run` requests are not killed by
+the idle timer mid-response.
+
+The analysis/result browser views now rely on a small page-level layout
+modifier in `base.html` plus overflow-safe CSS in `webapp/static/css/app.css`:
+analysis pages can use a wider shell, grid items are allowed to shrink with
+`min-width: 0`, and large runtime/report `<pre>` blocks are constrained inside
+their own panels instead of widening the full page.
+
+`shipping.py` now owns a central transport-mode decision seam:
+
+- Jita-connected routes stay on the external shipping path (ITL/HWL lanes or
+  explicit `route_costs`)
+- internal structure-to-structure nullsec routes are classified as
+  `internal_self_haul`
+- `internal_self_haul` currently defaults to `0 ISK` transport cost unless an
+  explicit internal `route_costs` entry is present
+- route blocking for missing transport models still applies to non-internal,
+  non-modeled routes
+
 Personal history flow is separate on purpose and only becomes decision-relevant
 through an explicit policy gate:
 
@@ -152,6 +173,11 @@ Confirmed output families from the current docs and entry modules:
 - `*_top_candidates_<timestamp>.txt`
 - `trade_plan_<plan_id>.json`
 - `market_snapshot.json`
+
+`plan_id` / `pick_id` identity is now intentionally deterministic for identical
+snapshot+input runs. The human-readable text artifacts still keep their own
+wall-clock timestamps, but the canonical trade-plan JSON is keyed by the stable
+plan id so replayed runs can be compared or imported with the same IDs.
 
 Local mutable state:
 
@@ -205,6 +231,7 @@ confirm the current branch state.
 
 - Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
+- Internal self-haul vs external shipping classification: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
 - Confidence calibration logic and personal decision-layer policy:
   `confidence_calibration.py`

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 
 
 JOURNAL_ALLOWED_STATUSES = (
@@ -44,10 +45,11 @@ def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> f
     return float(numerator) / float(denominator)
 
 
-def make_run_id(timestamp: str | None = None) -> str:
+def make_run_id(timestamp: str | None = None, stable_suffix_source: str | None = None) -> str:
     base = str(timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")).strip() or "run"
     safe_base = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in base)
-    digest = hashlib.sha1(f"{safe_base}|{utc_now_iso()}".encode("utf-8")).hexdigest()[:8]
+    suffix_source = str(stable_suffix_source or utc_now_iso())
+    digest = hashlib.sha1(f"{safe_base}|{suffix_source}".encode("utf-8")).hexdigest()[:8]
     return f"plan_{safe_base}_{digest}"
 
 
@@ -55,6 +57,13 @@ def _make_pick_id(plan_id: str, route_id: str, type_id: int, occurrence: int, se
     payload = f"{plan_id}|{route_id}|{int(type_id)}|{int(occurrence)}|{sell_at}|{exit_type}"
     digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
     return f"pick_{digest}"
+
+
+def _pick_proposed_sell_price(pick: dict) -> float:
+    target_sell_price = float(pick.get("target_sell_price", 0.0) or 0.0)
+    if target_sell_price > 0.0:
+        return target_sell_price
+    return float(pick.get("sell_avg", pick.get("suggested_sell_price", 0.0)) or 0.0)
 
 
 def _node_location_id(node_info: object) -> int:
@@ -175,6 +184,18 @@ def build_trade_plan_manifest(
         character_summary = route.get("_character_context_summary", {})
         if not isinstance(character_summary, dict):
             character_summary = {}
+        route_prune_reason = str(route.get("route_prune_reason", "") or "")
+        route_warning_lines = []
+        for raw in (
+            route.get("cost_model_warning", ""),
+            route.get("calibration_warning", ""),
+            route_prune_reason,
+            route.get("budget_left_reason", ""),
+        ):
+            text = str(raw or "").strip()
+            if text:
+                route_warning_lines.append(text)
+        route_warning_lines = list(dict.fromkeys(route_warning_lines))
         picks_out: list[dict] = []
         for pick in list(route.get("picks", []) or []):
             if not isinstance(pick, dict):
@@ -187,7 +208,7 @@ def build_trade_plan_manifest(
                     "item_name": str(pick.get("name", "") or ""),
                     "proposed_qty": float(pick.get("qty", 0.0) or 0.0),
                     "proposed_buy_price": float(pick.get("buy_avg", 0.0) or 0.0),
-                    "proposed_sell_price": float(pick.get("target_sell_price", pick.get("sell_avg", 0.0)) or 0.0),
+                    "proposed_sell_price": float(_pick_proposed_sell_price(pick)),
                     "proposed_full_sell_profit": float(pick.get("gross_profit_if_full_sell", pick.get("profit", 0.0)) or 0.0),
                     "proposed_expected_profit": float(
                         pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0
@@ -269,8 +290,28 @@ def build_trade_plan_manifest(
                 ),
                 "capital_lock_risk": float(route.get("capital_lock_risk", 0.0) or 0.0),
                 "calibration_warning": str(route.get("calibration_warning", "") or ""),
+                "cost_model_confidence": str(route.get("cost_model_confidence", "normal") or "normal"),
+                "cost_model_warning": str(route.get("cost_model_warning", "") or ""),
                 "actionable": bool(route.get("route_actionable", False)),
-                "route_prune_reason": str(route.get("route_prune_reason", "") or ""),
+                "route_prune_reason": route_prune_reason,
+                "items_count": int(route.get("items_count", len(picks_out)) or len(picks_out)),
+                "isk_used": float(route.get("isk_used", 0.0) or 0.0),
+                "budget_total": float(route.get("budget_total", 0.0) or 0.0),
+                "budget_util_pct": float(route.get("budget_util_pct", 0.0) or 0.0),
+                "net_revenue_total": float(route.get("net_revenue_total", 0.0) or 0.0),
+                "total_fees_taxes": float(route.get("total_fees_taxes", 0.0) or 0.0),
+                "expected_realized_profit_total": float(route.get("expected_realized_profit_total", 0.0) or 0.0),
+                "full_sell_profit_total": float(route.get("full_sell_profit_total", route.get("profit_total", 0.0)) or 0.0),
+                "m3_used": float(route.get("m3_used", route.get("total_route_m3", 0.0)) or 0.0),
+                "cargo_total": float(route.get("cargo_total", 0.0) or 0.0),
+                "cargo_util_pct": float(route.get("cargo_util_pct", 0.0) or 0.0),
+                "shipping_cost_total": float(route.get("shipping_cost_total", route.get("total_shipping_cost", 0.0)) or 0.0),
+                "total_route_cost": float(route.get("total_route_cost", 0.0) or 0.0),
+                "total_transport_cost": float(route.get("total_transport_cost", 0.0) or 0.0),
+                "transport_mode": str(route.get("transport_mode", "") or ""),
+                "transport_mode_note": str(route.get("transport_mode_note", "") or ""),
+                "budget_left_reason": str(route.get("budget_left_reason", "") or ""),
+                "warnings": json.loads(json.dumps(route_warning_lines, ensure_ascii=False)),
                 "picks": picks_out,
             }
         )

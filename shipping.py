@@ -2,6 +2,60 @@ import math
 from location_utils import normalize_location_label
 
 
+def _collect_internal_structure_ids(cfg: dict) -> set[int]:
+    out: set[int] = set()
+    structures_cfg = cfg.get("structures", {})
+    if isinstance(structures_cfg, dict):
+        for raw in structures_cfg.values():
+            sid = 0
+            if isinstance(raw, dict):
+                try:
+                    sid = int(raw.get("id", 0) or 0)
+                except Exception:
+                    sid = 0
+            else:
+                try:
+                    sid = int(raw)
+                except Exception:
+                    sid = 0
+            if sid > 0:
+                out.add(int(sid))
+    chain_cfg = cfg.get("route_chain", {})
+    legs = chain_cfg.get("legs", []) if isinstance(chain_cfg, dict) else []
+    if isinstance(legs, list):
+        for leg in legs:
+            if not isinstance(leg, dict):
+                continue
+            try:
+                sid = int(leg.get("id", 0) or 0)
+            except Exception:
+                sid = 0
+            if sid > 0:
+                out.add(int(sid))
+    return out
+
+
+def _is_internal_structure_route(
+    cfg: dict,
+    source_label: str,
+    dest_label: str,
+    source_id: int | None = None,
+    dest_id: int | None = None,
+) -> bool:
+    src_norm = normalize_location_label(source_label)
+    dst_norm = normalize_location_label(dest_label)
+    if not src_norm or not dst_norm:
+        return False
+    if "jita" in (src_norm, dst_norm):
+        return False
+    sid = int(source_id or 0)
+    did = int(dest_id or 0)
+    if sid <= 0 or did <= 0:
+        return False
+    internal_ids = _collect_internal_structure_ids(cfg)
+    return bool(internal_ids and sid in internal_ids and did in internal_ids)
+
+
 def _lane_provider_from_cfg(lane_id: str, lane_cfg: dict | None) -> str:
     lid = str(lane_id or "").strip().lower()
     model = str((lane_cfg or {}).get("pricing_model", "") or "").strip().lower()
@@ -426,6 +480,14 @@ def build_route_context(
     if not isinstance(shipping_defaults, dict):
         shipping_defaults = {}
     zero_transport_allowlist = _resolve_zero_transport_allowlist(cfg)
+    internal_structure_route = _is_internal_structure_route(
+        cfg,
+        source_label,
+        dest_label,
+        source_id=source_id,
+        dest_id=dest_id,
+    )
+    transport_mode = "internal_self_haul" if internal_structure_route else "external_shipping"
     return {
         "route_id": str(route_id or ""),
         "source_label": str(source_label or ""),
@@ -443,6 +505,8 @@ def build_route_context(
         "shipping_defaults": shipping_defaults,
         "route_cost_cfg": route_cost_cfg,
         "allow_zero_transport_cost_for_routes": list(zero_transport_allowlist),
+        "internal_structure_route": bool(internal_structure_route),
+        "transport_mode": str(transport_mode),
     }
 
 
@@ -463,51 +527,128 @@ def _extract_shipping_lane_params(lane_cfg: dict | None) -> dict:
     }
 
 
+def _internal_self_haul_note(transport_total: float, route_total: float) -> str:
+    total = max(0.0, float(transport_total or 0.0))
+    route_cost = max(0.0, float(route_total or 0.0))
+    if total <= 0.0:
+        return (
+            "Internal self haul: structure-to-structure nullsec route; "
+            "external shipping lanes are not required and transport is currently 0 ISK."
+        )
+    if route_cost > 0.0:
+        return (
+            "Internal self haul: structure-to-structure nullsec route; "
+            "external shipping lanes are not required and explicit internal route_costs are applied."
+        )
+    return (
+        "Internal self haul: structure-to-structure nullsec route; "
+        "external shipping lanes are not required."
+    )
+
+
+def _summarize_transport_policy(
+    route_context: dict,
+    *,
+    selected_lane_cfg: dict | None,
+    lane_candidates: list[tuple[str, dict]],
+    route_cost_is_explicit: bool,
+    route_total: float = 0.0,
+    transport_total: float = 0.0,
+) -> dict:
+    transport_mode = str(route_context.get("transport_mode", "") or "").strip().lower()
+    if transport_mode == "internal_self_haul":
+        return {
+            "transport_mode": "internal_self_haul",
+            "transport_mode_note": _internal_self_haul_note(transport_total, route_total),
+            "cost_model_status": "internal_self_haul",
+            "cost_model_confidence": "normal",
+            "transport_cost_assumed_zero": False,
+            "cost_model_warning": "",
+            "zero_transport_exception": False,
+            "route_blocked_due_to_transport": False,
+            "route_actionable": True,
+            "route_prune_reason": "",
+            "shipping_provider": "INTERNAL",
+            "shipping_pricing_model": "internal_self_haul",
+        }
+
+    zero_transport_exception = _route_matches_zero_transport_exception(route_context)
+    missing_cost_model = (
+        selected_lane_cfg is None
+        and not lane_candidates
+        and not route_cost_is_explicit
+    )
+    route_blocked = bool(missing_cost_model and not zero_transport_exception)
+    if route_blocked:
+        cost_model_confidence = "blocked"
+        cost_model_status = "missing_transport_model_blocked"
+    elif missing_cost_model:
+        cost_model_confidence = "exception"
+        cost_model_status = "allowed_zero_transport_exception"
+    else:
+        cost_model_confidence = "normal"
+        cost_model_status = "configured"
+    cost_model_warning = ""
+    if route_blocked:
+        cost_model_warning = (
+            "No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled."
+        )
+    elif missing_cost_model:
+        cost_model_warning = (
+            "No shipping lane or explicit route_costs matched this route; zero transport cost is only used because this route is explicitly allowlisted."
+        )
+    return {
+        "transport_mode": "external_shipping",
+        "transport_mode_note": "",
+        "cost_model_status": cost_model_status,
+        "cost_model_confidence": cost_model_confidence,
+        "transport_cost_assumed_zero": bool(missing_cost_model),
+        "cost_model_warning": cost_model_warning,
+        "zero_transport_exception": bool(zero_transport_exception),
+        "route_blocked_due_to_transport": bool(route_blocked),
+        "route_actionable": bool(not route_blocked),
+        "route_prune_reason": "missing_transport_cost_model" if route_blocked else "",
+        "shipping_provider": "",
+        "shipping_pricing_model": "",
+    }
+
+
 def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
     if not picks:
         route_cfg = route_context.get("route_cost_cfg", {})
         if not isinstance(route_cfg, dict):
             route_cfg = {}
         route_cost_is_explicit = bool(route_cfg.get("is_explicit", False))
-        zero_transport_exception = _route_matches_zero_transport_exception(route_context)
-        missing_cost_model = (
-            route_context.get("shipping_lane_cfg") is None
-            and not list(route_context.get("shipping_lane_candidates", []) or [])
-            and not route_cost_is_explicit
+        policy_summary = _summarize_transport_policy(
+            route_context,
+            selected_lane_cfg=route_context.get("shipping_lane_cfg"),
+            lane_candidates=[] if not isinstance(route_context.get("shipping_lane_candidates", []), list) else [
+                (str(c.get("id", "") or ""), dict(c.get("cfg") or {}))
+                for c in list(route_context.get("shipping_lane_candidates", []) or [])
+                if isinstance(c, dict) and str(c.get("id", "") or "") and isinstance(c.get("cfg"), dict)
+            ],
+            route_cost_is_explicit=route_cost_is_explicit,
+            route_total=0.0,
+            transport_total=0.0,
         )
-        route_blocked = bool(missing_cost_model and not zero_transport_exception)
-        if route_blocked:
-            cost_model_confidence = "blocked"
-            cost_model_status = "missing_transport_model_blocked"
-        elif missing_cost_model:
-            cost_model_confidence = "exception"
-            cost_model_status = "allowed_zero_transport_exception"
-        else:
-            cost_model_confidence = "normal"
-            cost_model_status = "configured"
-        cost_model_warning = ""
-        if route_blocked:
-            cost_model_warning = (
-                "No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled."
-            )
-        elif missing_cost_model:
-            cost_model_warning = (
-                "No shipping lane or explicit route_costs matched this route; zero transport cost is only used because this route is explicitly allowlisted."
-            )
         return {
             "total_shipping_cost": 0.0,
             "total_route_cost": 0.0,
             "total_transport_cost": 0.0,
             "shipping_lane_id": str(route_context.get("shipping_lane_id", "") or ""),
             "route_cost_is_explicit": bool(route_cost_is_explicit),
-            "cost_model_status": cost_model_status,
-            "cost_model_confidence": cost_model_confidence,
-            "transport_cost_assumed_zero": bool(missing_cost_model),
-            "cost_model_warning": cost_model_warning,
-            "zero_transport_exception": bool(zero_transport_exception),
-            "route_blocked_due_to_transport": bool(route_blocked),
-            "route_actionable": bool(not route_blocked),
-            "route_prune_reason": "missing_transport_cost_model" if route_blocked else "",
+            "shipping_pricing_model": str(policy_summary.get("shipping_pricing_model", "") or ""),
+            "shipping_provider": str(policy_summary.get("shipping_provider", "") or ""),
+            "transport_mode": str(policy_summary.get("transport_mode", route_context.get("transport_mode", "")) or ""),
+            "transport_mode_note": str(policy_summary.get("transport_mode_note", "") or ""),
+            "cost_model_status": str(policy_summary.get("cost_model_status", "configured") or "configured"),
+            "cost_model_confidence": str(policy_summary.get("cost_model_confidence", "normal") or "normal"),
+            "transport_cost_assumed_zero": bool(policy_summary.get("transport_cost_assumed_zero", False)),
+            "cost_model_warning": str(policy_summary.get("cost_model_warning", "") or ""),
+            "zero_transport_exception": bool(policy_summary.get("zero_transport_exception", False)),
+            "route_blocked_due_to_transport": bool(policy_summary.get("route_blocked_due_to_transport", False)),
+            "route_actionable": bool(policy_summary.get("route_actionable", True)),
+            "route_prune_reason": str(policy_summary.get("route_prune_reason", "") or ""),
         }
     total_volume = sum(max(0.0, float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0))) for p in picks)
     if total_volume <= 0:
@@ -605,31 +746,17 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
     route_cost_is_explicit = bool(route_cfg.get("is_explicit", False))
     route_total = route_fixed + (route_per_m3 * total_volume)
     transport_total = shipping_total + route_total
-    zero_transport_exception = _route_matches_zero_transport_exception(route_context)
-    missing_cost_model = (
-        selected_lane_cfg is None
-        and not lane_candidates
-        and not route_cost_is_explicit
+    policy_summary = _summarize_transport_policy(
+        route_context,
+        selected_lane_cfg=selected_lane_cfg,
+        lane_candidates=lane_candidates,
+        route_cost_is_explicit=route_cost_is_explicit,
+        route_total=route_total,
+        transport_total=transport_total,
     )
-    route_blocked = bool(missing_cost_model and not zero_transport_exception)
-    if route_blocked:
-        cost_model_confidence = "blocked"
-        cost_model_status = "missing_transport_model_blocked"
-    elif missing_cost_model:
-        cost_model_confidence = "exception"
-        cost_model_status = "allowed_zero_transport_exception"
-    else:
-        cost_model_confidence = "normal"
-        cost_model_status = "configured"
-    cost_model_warning = ""
-    if route_blocked:
-        cost_model_warning = (
-            "No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled."
-        )
-    elif missing_cost_model:
-        cost_model_warning = (
-            "No shipping lane or explicit route_costs matched this route; zero transport cost is only used because this route is explicitly allowlisted."
-        )
+    cost_model_confidence = str(policy_summary.get("cost_model_confidence", "normal") or "normal")
+    cost_model_warning = str(policy_summary.get("cost_model_warning", "") or "")
+    route_blocked = bool(policy_summary.get("route_blocked_due_to_transport", False))
 
     if transport_total > 0.0 and total_volume > 0.0:
         for p in picks:
@@ -681,22 +808,24 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
         "total_route_cost": float(route_total),
         "total_transport_cost": float(transport_total),
         "shipping_lane_id": str(selected_lane_id or route_context.get("shipping_lane_id", "") or ""),
-        "shipping_pricing_model": shipping_pricing_model,
-        "shipping_provider": shipping_provider,
+        "shipping_pricing_model": str(policy_summary.get("shipping_pricing_model", shipping_pricing_model) or shipping_pricing_model),
+        "shipping_provider": str(policy_summary.get("shipping_provider", shipping_provider) or shipping_provider),
         "shipping_contracts_used": int(shipping_contracts_used),
         "shipping_split_reason": shipping_split_reason,
         "estimated_collateral_isk": float(estimated_collateral_isk),
         "shipping_lane_params": _extract_shipping_lane_params(selected_lane_cfg),
         "total_route_m3": float(total_volume),
         "route_cost_is_explicit": bool(route_cost_is_explicit),
-        "cost_model_status": cost_model_status,
+        "transport_mode": str(policy_summary.get("transport_mode", route_context.get("transport_mode", "")) or ""),
+        "transport_mode_note": str(policy_summary.get("transport_mode_note", "") or ""),
+        "cost_model_status": str(policy_summary.get("cost_model_status", "configured") or "configured"),
         "cost_model_confidence": cost_model_confidence,
-        "transport_cost_assumed_zero": bool(missing_cost_model),
+        "transport_cost_assumed_zero": bool(policy_summary.get("transport_cost_assumed_zero", False)),
         "cost_model_warning": cost_model_warning,
-        "zero_transport_exception": bool(zero_transport_exception),
+        "zero_transport_exception": bool(policy_summary.get("zero_transport_exception", False)),
         "route_blocked_due_to_transport": bool(route_blocked),
-        "route_actionable": bool(not route_blocked),
-        "route_prune_reason": "missing_transport_cost_model" if route_blocked else "",
+        "route_actionable": bool(policy_summary.get("route_actionable", not route_blocked)),
+        "route_prune_reason": str(policy_summary.get("route_prune_reason", "")) or "",
     }
 
 

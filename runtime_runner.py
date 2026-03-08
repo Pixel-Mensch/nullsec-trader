@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -131,6 +132,47 @@ def evaluate_leg_disabled(leg_result: dict, budget_util_min_pct: float) -> tuple
     if float(leg_result.get("budget_util_pct", 0.0)) < float(budget_util_min_pct):
         return True, f"low_budget_util<{budget_util_min_pct:.2f}%"
     return False, ""
+
+
+def _stable_plan_timestamp(snapshot_payload: dict | None, fallback_timestamp: str) -> str:
+    meta = snapshot_payload.get("meta", {}) if isinstance(snapshot_payload, dict) else {}
+    try:
+        snapshot_ts = int(meta.get("timestamp", 0) or 0)
+    except Exception:
+        snapshot_ts = 0
+    if snapshot_ts <= 0:
+        return str(fallback_timestamp)
+    from datetime import datetime
+
+    return datetime.fromtimestamp(snapshot_ts).strftime("%Y-%m-%d_%H-%M-%S")
+
+
+def _build_plan_id_seed(
+    *,
+    snapshot_payload: dict | None,
+    budget_isk: float,
+    cargo_m3: float,
+    active_profile_name: str,
+    route_mode: str,
+    forward_mode: str,
+    return_mode: str,
+    route_search_cfg: dict,
+    route_profiles: list[dict],
+    chain_enabled: bool,
+) -> str:
+    identity = {
+        "snapshot": snapshot_payload if isinstance(snapshot_payload, dict) else {},
+        "budget_isk": float(budget_isk),
+        "cargo_m3": float(cargo_m3),
+        "profile": str(active_profile_name or ""),
+        "route_mode": str(route_mode or ""),
+        "forward_mode": str(forward_mode or ""),
+        "return_mode": str(return_mode or ""),
+        "route_search": dict(route_search_cfg or {}),
+        "route_profiles": list(route_profiles or []),
+        "chain_enabled": bool(chain_enabled),
+    }
+    return json.dumps(identity, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
 
 
 def _resolve_capital_flow_cfg(cfg: dict) -> dict:
@@ -714,6 +756,10 @@ def _finalize_route_result(
     if bool(transport_summary.get("route_blocked_due_to_transport", False)):
         if warn_msg:
             print(f"    BLOCKED: {route_label}: {warn_msg}")
+    elif str(transport_summary.get("transport_mode", "") or "").strip().lower() == "internal_self_haul":
+        info_msg = str(transport_summary.get("transport_mode_note", "") or "")
+        if info_msg:
+            print(f"    INFO: {route_label}: {info_msg}")
     elif bool(transport_summary.get("transport_cost_assumed_zero", False)) and warn_msg:
         print(f"    WARN: {route_label}: {warn_msg}")
 
@@ -794,6 +840,8 @@ def _finalize_route_result(
         "estimated_collateral_isk": float(transport_summary.get("estimated_collateral_isk", 0.0)),
         "shipping_lane_params": dict(transport_summary.get("shipping_lane_params", {})),
         "total_route_m3": float(transport_summary.get("total_route_m3", total_m3)),
+        "transport_mode": str(transport_summary.get("transport_mode", "")),
+        "transport_mode_note": str(transport_summary.get("transport_mode_note", "")),
         "route_cost_is_explicit": bool(transport_summary.get("route_cost_is_explicit", False)),
         "cost_model_status": str(transport_summary.get("cost_model_status", "configured")),
         "cost_model_confidence": str(transport_summary.get("cost_model_confidence", "normal")),
@@ -1517,6 +1565,7 @@ def run_cli() -> None:
 
     default_replay_path = os.path.join(os.path.dirname(__file__), "replay_snapshot.json")
     replay_snapshot = None
+    plan_snapshot_payload: dict | None = None
     structure_orders_by_id: dict[int, list[dict]] = {}
     replay_structs: dict | None = None
     if replay_enabled:
@@ -1532,6 +1581,7 @@ def run_cli() -> None:
         print(f"Replay-Mode aktiv. Nutze Snapshot: {replay_path}")
         snap_structs = replay_snapshot.get("structures", {})
         replay_structs = snap_structs if isinstance(snap_structs, dict) else {}
+        plan_snapshot_payload = replay_snapshot
         if chain_enabled:
             missing_chain_nodes = []
             for n in chain_nodes:
@@ -1615,8 +1665,7 @@ def run_cli() -> None:
         "structures": {str(int(sid)): {"orders_count": len(structure_orders_by_id.get(int(sid), []))} for sid in sorted(required_structure_ids)},
     }
     save_json(os.path.join(os.path.dirname(__file__), "market_snapshot.json"), snapshot)
-    if not replay_enabled and bool(replay_cfg.get("write_snapshot_after_fetch", True)):
-        replay_path = str(replay_cfg.get("snapshot_path", default_replay_path))
+    if not replay_enabled:
         cached_types_from_disk = load_json(TYPE_CACHE_PATH, {})
         live_type_cache = getattr(esi, "type_cache", {})
         merged_type_cache = {}
@@ -1624,7 +1673,10 @@ def run_cli() -> None:
             merged_type_cache.update(cached_types_from_disk)
         if isinstance(live_type_cache, dict):
             merged_type_cache.update(live_type_cache)
-        replay_payload = make_snapshot_payload(structure_orders_by_id, merged_type_cache)
+        plan_snapshot_payload = make_snapshot_payload(structure_orders_by_id, merged_type_cache)
+    if not replay_enabled and bool(replay_cfg.get("write_snapshot_after_fetch", True)):
+        replay_path = str(replay_cfg.get("snapshot_path", default_replay_path))
+        replay_payload = plan_snapshot_payload if isinstance(plan_snapshot_payload, dict) else make_snapshot_payload(structure_orders_by_id, {})
         save_json(replay_path, replay_payload)
         print(f"Replay-Snapshot geschrieben: {replay_path}")
 
@@ -1669,7 +1721,22 @@ def run_cli() -> None:
     from datetime import datetime
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    plan_id = make_run_id(timestamp)
+    plan_timestamp = _stable_plan_timestamp(plan_snapshot_payload, timestamp)
+    plan_id = make_run_id(
+        plan_timestamp,
+        stable_suffix_source=_build_plan_id_seed(
+            snapshot_payload=plan_snapshot_payload,
+            budget_isk=float(budget_isk),
+            cargo_m3=float(cargo_m3),
+            active_profile_name=active_profile_name,
+            route_mode=route_mode,
+            forward_mode=str(forward_mode or ""),
+            return_mode=str(return_mode or ""),
+            route_search_cfg=route_search_cfg,
+            route_profiles=route_profiles,
+            chain_enabled=chain_enabled,
+        ),
+    )
     plan_created_at = utc_now_iso()
     created_files = []
     route_profiles_active = False

@@ -299,6 +299,15 @@ def _write_route_trip_summary(
         f"  Picks:     {n_total} total — "
         f"{n_mandatory} MANDATORY, {n_optional} OPTIONAL, {n_speculative} SPECULATIVE"
     )
+    transport_mode = str(leg.get("transport_mode", "") or "").strip()
+    transport_note = str(leg.get("transport_mode_note", "") or "").strip()
+    if transport_mode:
+        lines.append(
+            f"  Transport: {transport_mode}  "
+            f"|  Cost: {fmt_isk_de(float(leg.get('total_transport_cost', 0.0) or 0.0))}"
+        )
+        if transport_note:
+            lines.append(f"  Transport Note: {transport_note}")
     leg_shipping_costs = float(leg.get("total_shipping_cost", 0.0) or 0.0)
     if leg_shipping_costs > 0.0:
         lines.append(f"  Shipping:  {fmt_isk_de(leg_shipping_costs)} (transport cost)")
@@ -601,6 +610,13 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
 
         # Shipping lane (always relevant for the trip)
         shipping_lane_id = str(leg.get("shipping_lane_id", "") or "")
+        transport_mode = str(leg.get("transport_mode", "") or "")
+        transport_note = str(leg.get("transport_mode_note", "") or "")
+        if transport_mode:
+            lines.append(f"Transport Mode: {transport_mode}")
+            lines.append(f"  transport_cost_total: {fmt_isk_de(float(leg.get('total_transport_cost', 0.0) or 0.0))}")
+            if transport_note:
+                lines.append(f"  note: {transport_note}")
         if shipping_lane_id:
             lines.append(f"Shipping Lane: {shipping_lane_id}")
             provider = str(leg.get("shipping_provider", "") or "")
@@ -818,6 +834,9 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"{idx}. Route {r.get('route_label', '')}")
         lines.append(f"   Start: {r.get('source_label', '')}")
         lines.append(f"   Ziel: {r.get('dest_label', '')}")
+        transport_mode = str(r.get("transport_mode", "") or "")
+        if transport_mode:
+            lines.append(f"   transport_mode: {transport_mode}")
         lines.append(f"   provider: {str(r.get('shipping_provider', '') or '')}")
         lines.append(f"   route_confidence: {float(summary.get('route_confidence', 0.0)):.2f}")
         lines.append(f"   raw_route_confidence: {float(summary.get('raw_route_confidence', summary.get('route_confidence', 0.0))):.2f}")
@@ -845,6 +864,10 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Total Fees and Taxes: {fmt_isk_de(float(r.get('total_fees_taxes', 0.0) or 0.0))}")
         lines.append(f"   Total Route Costs: {fmt_isk_de(float(r.get('total_route_cost', 0.0) or 0.0))}")
         lines.append(f"   Total Shipping Cost: {fmt_isk_de(float(r.get('shipping_cost_total', 0.0) or 0.0))}")
+        lines.append(f"   Total Transport Cost: {fmt_isk_de(float(r.get('total_transport_cost', 0.0) or 0.0))}")
+        transport_note = str(r.get("transport_mode_note", "") or "")
+        if transport_note:
+            lines.append(f"   transport_note: {transport_note}")
         lines.append(f"   Profit per m3: {profit / max(1e-9, m3_used):.2f} ISK/m3")
         lines.append(f"   Profit per ISK: {profit / max(1e-9, isk_used):.6f}")
         lines.append(f"   Gesamt m3: {m3_used:.2f}")

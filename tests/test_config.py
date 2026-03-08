@@ -1,6 +1,14 @@
 """Config tests."""
 
-from tests.shared import *  # noqa: F401,F403
+import io
+import json
+import os
+import tempfile
+from contextlib import redirect_stdout
+
+import nullsectrader as nst
+
+from tests.shared import _minimal_valid_config
 
 def test_validate_config_accepts_minimal_valid_config() -> None:
     cfg = _minimal_valid_config()
@@ -237,4 +245,46 @@ def test_non_strict_region_mapping_warns() -> None:
     assert 2 in missing
     assert "WARN: Kein region_id Mapping fuer aktive Structure IDs: 2 (cj6)." in out
     assert "planned_sell wird restriktiv" in out
+
+
+def test_repo_config_has_unique_structure_ids() -> None:
+    with open("config.json", "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    structures = dict(cfg.get("structures", {}) or {})
+    seen: dict[int, str] = {}
+    duplicates: list[tuple[int, str, str]] = []
+    for label, raw in structures.items():
+        if isinstance(raw, dict):
+            sid = int(raw.get("id", 0) or 0)
+        else:
+            sid = int(raw or 0)
+        if sid in seen and seen[sid] != str(label):
+            duplicates.append((sid, seen[sid], str(label)))
+        seen[sid] = str(label)
+    assert duplicates == []
+
+
+def test_repo_config_covers_internal_chain_structure_regions_for_planned_sell() -> None:
+    with open("config.json", "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    structure_region_map = nst._resolve_structure_region_map(cfg)
+    required_structure_ids = {
+        1040804972352,  # O4T
+        1048663825563,  # R-ARKN
+        1046664001931,  # UALX-3
+        1049588174021,  # 1st Taj Mahgoon / CJ6
+    }
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        missing = nst._validate_structure_region_mapping(
+            cfg=cfg,
+            structure_region_map=structure_region_map,
+            required_structure_ids=required_structure_ids,
+            planned_mode_active=True,
+        )
+    out = buf.getvalue()
+    assert missing == []
+    assert "planned_sell wird restriktiv" not in out
+    assert int(structure_region_map.get(1048663825563, 0)) == 10000039
+    assert int(structure_region_map.get(1046664001931, 0)) == 10000061
 
