@@ -105,13 +105,21 @@
       <span>Confidence {{ "%.2f"|format(route.route_confidence or 0) }}</span>
       <span>Transport {{ "%.2f"|format(route.transport_confidence or 0) }}</span>
       <span>Capital lock {{ "%.2f"|format(route.capital_lock_risk or 0) }}</span>
+      <span>Budget {{ "%.1f"|format(route.budget_util_pct or 0) }}%</span>
+      <span>Cargo {{ "%.1f"|format(route.cargo_util_pct or 0) }}%</span>
+      <span>Total cost {{ "%.0f"|format(route.isk_used or 0) }} ISK</span>
       <span>Expected profit {{ "%.0f"|format(route.expected_profit_total or 0) }} ISK</span>
+      <span>Full sell {{ "%.0f"|format(route.full_sell_profit_total or 0) }} ISK</span>
       <span>Picks {{ route.pick_count }}</span>
     </div>
-    {% if route.calibration_warning or route.route_prune_reason %}
+    {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason %}
     <ul class="plain-list">
-      {% if route.calibration_warning %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
-      {% if route.route_prune_reason %}<li>{{ route.route_prune_reason }}</li>{% endif %}
+      {% for warning in route.warnings %}
+      <li class="warning-item">{{ warning }}</li>
+      {% endfor %}
+      {% if route.cost_model_warning and route.cost_model_warning not in route.warnings %}<li class="warning-item">{{ route.cost_model_warning }}</li>{% endif %}
+      {% if route.calibration_warning and route.calibration_warning not in route.warnings %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
+      {% if route.route_prune_reason and route.route_prune_reason not in route.warnings %}<li>{{ route.route_prune_reason }}</li>{% endif %}
     </ul>
     {% endif %}
     <div class="table-wrap">

@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-07 (session 11 local web UI)
+Last updated: 2026-03-08 (session 14 live/replay/web verification)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -331,3 +331,30 @@ full backlog scrape.
     match real service output (added `default_profile_name`, removed fake
     `config.risk_profile` struct that was masking the crash).
   - Full suite: **325 passed**; real HTTP check: all routes 200 OK.
+
+### Task 7e: Prove live -> replay reproducibility and harden the browser flow
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - Ran a focused real live CLI route search against Jita/O4T using a local
+    overlay config, captured a fresh replay snapshot, then reran the same flow
+    in replay mode
+  - Fixed unstable replay identity drift: `runtime_runner.py` now derives a
+    deterministic `plan_id` from snapshot+inputs, so identical replay runs keep
+    the same `plan_id` and `pick_id` set
+  - Fixed `journal_models.py` manifest serialization so `instant` picks no
+    longer write `proposed_sell_price=0` when `sell_avg` is the real exit price
+  - Extended the trade-plan manifest with route budget/cargo/cost fields for
+    web/CLI parity and surfaced them in `webapp/templates/results.html`
+  - Fixed `webapp/services/runtime_bridge.py` so live runs expose the written
+    replay snapshot path in the browser (`Replay-Snapshot geschrieben: ...`)
+  - Fixed `webapp/app.py` idle auto-shutdown so it does not kill long-running
+    `/analysis/run` requests while a request is still active
+  - Added a real-data replay regression fixture:
+    `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
+  - Added replay reproducibility tests in `tests/test_integration.py`,
+    manifest-serialization regression in `tests/test_journal.py`, and
+    runtime-bridge / shutdown regressions in `tests/test_webapp.py`
+  - Full suite: **330 passed**

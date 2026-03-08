@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-07
+Last updated: 2026-03-08
 
 ## Snapshot
 
@@ -34,6 +34,7 @@ Reviewed this session:
 - `webapp/services/journal_service.py`
 - `webapp/services/character_service.py`
 - `webapp/services/runtime_bridge.py`
+- `webapp/templates/results.html`
 - `journal_reconciliation.py`
 - `journal_store.py`
 - `journal_reporting.py`
@@ -45,6 +46,7 @@ Reviewed this session:
 - `risk_profiles.py`
 - `tests/run_all.py`
 - `tests/test_character_context.py`
+- `tests/test_integration.py`
 - `tests/test_journal.py`
 - `tests/test_journal_reconciliation.py`
 - `tests/test_eve_sso.py`
@@ -55,6 +57,9 @@ Reviewed this session:
 - `tests/test_webapp.py`
 - current `git status`
 - `python -m pytest -q`
+- focused live CLI run on 2026-03-08 using local overlay config
+- replay CLI run on 2026-03-08 against the freshly written live snapshot
+- real HTTP `uvicorn` checks for `/analysis` replay and long-running live POST
 
 Not fully re-audited this session:
 
@@ -127,6 +132,19 @@ Not fully re-audited this session:
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
+- focused live verification on 2026-03-08 produced a real actionable
+  `o4t -> jita_44` route and wrote a reusable replay snapshot outside the repo
+- live and replay now produce the same deterministic `plan_id` / `pick_id`
+  set when they run against the same snapshot and inputs; only timestamped text
+  artifact filenames still differ between runs
+- `trade_plan_*.json` now preserves route budget/cargo/cost metrics for browser
+  parity and no longer serializes `instant` picks with `proposed_sell_price=0`
+- the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
+  live runs, so the browser shows the real snapshot path after a live analysis
+- the web app no longer auto-shuts down during a long-running analysis request;
+  active in-flight requests now block the heartbeat idle-exit path
+- a new real-data replay regression fixture now exists:
+  `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
 - all webapp routes are confirmed reachable (200 OK) under real service data
   after session 13 bug fixes; `GET /analysis` was previously returning 500
 - local journal initialization now migrates older `trade_journal.sqlite3`
@@ -164,6 +182,8 @@ Not fully re-audited this session:
 - the web UI currently depends on stdout/artifact parsing for full analysis
   runs; that is acceptable for an MVP but still tighter coupling than a future
   structured runtime API
+- the default operator config is broad enough that a naive live full-run can
+  take several minutes and fetch far more markets than a focused regression run
 - business docs are strong, but session-state docs were not keeping pace
 - legacy live market auth in `runtime_clients.py` and new private-character SSO
   in `eve_sso.py` are separate paths for now; that is intentional for low-risk
@@ -262,6 +282,13 @@ Files that indicate this focus:
   `GET /analysis` 500, dashboard stat mismatches, and input parse robustness).
   Full-run analysis still depends on CLI-style stdout and artifact contracts
   exposed by `runtime_runner.py`.
+- Browser analysis now survives long runtime calls because `webapp.app` blocks
+  idle auto-shutdown while a request is still in flight, but the browser layer
+  still depends on heartbeat semantics for idle lifetime once requests finish.
+- Stable replay IDs now intentionally reuse the same `trade_plan_<plan_id>.json`
+  filename for identical snapshot+input runs. That improves reproducibility and
+  journal parity, but the canonical trade-plan file is overwritten when the
+  content is recomputed for the same plan.
 - Legacy local journal databases with missing reconciliation columns are now
   upgraded in place on startup instead of failing during index creation.
 - Matching remains intentionally honest rather than magical: ambiguous

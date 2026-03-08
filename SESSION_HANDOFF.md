@@ -1,87 +1,140 @@
 # Session Handoff
 
-Date: 2026-03-08 (session 13 webapp bugfix)
+Date: 2026-03-08 (session 14 live/replay/web verification)
 Branch: `dev`
 
 ## Completed This Session
 
-### Full webapp analysis and targeted bugfixes
+### Real live run -> replay run -> web verification
 
-Performed a complete read-through of all webapp source files, services,
-templates, and tests. Then ran real HTTP checks against the actual service
-layer (not just the monkeypatched test suite) to surface genuine runtime
-failures.
+Performed a full local verification cycle instead of a code-only review:
 
-**Bug 1 - CRITICAL: GET /analysis returned 500**
+- ran a focused real live CLI route-search flow with local ESI credentials
+- wrote a fresh replay snapshot from that live run
+- reran the exact same flow in replay mode against that snapshot
+- compared live vs replay artifacts and manifest data
+- started the real FastAPI app under `uvicorn`
+- exercised `/analysis` and `/analysis/run` over HTTP in replay and live mode
 
-- Root cause: `analysis.html` line 69 accessed `data.config.risk_profile.name`
-  but the config dict has no `risk_profile` key. Jinja2 raised `UndefinedError`
-  on every load of the analysis form.
-- Fix A: Added `default_profile_name` (from `risk_profiles.DEFAULT_PROFILE`) to
-  `get_analysis_form_data()` in `webapp/services/analysis_service.py`.
-- Fix B: Updated `analysis.html` to use
-  `{{ data.default_profile_name or "balanced" }}`.
-- Fix C: Updated `_analysis_form()` test fixture in `tests/test_webapp.py` to
-  supply `default_profile_name` and removed the fake `config.risk_profile`
-  struct that was masking the bug.
+### Fixes
 
-**Bug 2 - SILENT DATA MISMATCH: Dashboard journal stats always showed 0**
+**Bug 1 - replay identity drift**
 
-- Root cause: `dashboard.html` used `data.journal_summary.total_entries`,
-  `open_entries`, `closed_entries` but `build_journal_report()` actually
-  returns `entries_total`, `open_count`, `closed_count`.
-- Fix: Updated `dashboard.html` to use the real field names.
+- Root cause: `plan_id` used wall-clock time, so identical replay runs produced
+  different `plan_id` and `pick_id` values even when snapshot and inputs were
+  identical.
+- Fix: `runtime_runner.py` now derives a deterministic plan-id seed from the
+  snapshot payload plus runtime inputs. Live and replay now keep the same
+  `plan_id` / `pick_id` set for the same snapshot+input combination.
 
-**Bug 3 - ROBUSTNESS: No error handling for invalid cargo/budget input**
+**Bug 2 - manifest serialized `instant` exit price as 0**
 
-- `analysis_service.run_analysis()` called `float(cargo_m3_raw)` and
-  `parse_isk(budget_isk_raw)` without guards. A non-numeric user input would
-  propagate as a 500.
-- Fix: Both calls are now wrapped in `try/except (ValueError, TypeError)` that
-  return a clean error dict instead of crashing.
+- Root cause: `journal_models.build_trade_plan_manifest()` preferred
+  `target_sell_price` even when it existed but was `0.0` for `instant` picks,
+  so `sell_avg` was never used as fallback.
+- Fix: added a proper sell-price resolver. `instant` picks now export the real
+  executable exit price in `proposed_sell_price`.
 
-## Tests
+**Bug 3 - web runtime bridge lost live replay snapshot path**
 
-- Targeted: `python -m pytest -q tests/test_webapp.py` -> **7 passed**
-- Full suite: `python -m pytest -q` -> **325 passed**
-- Real HTTP check (no monkeypatch, real service layer): all 15 routes/methods
-  -> **200 OK**
+- Root cause: `webapp/services/runtime_bridge.py` only parsed
+  `Snapshot geschrieben: ...`, not `Replay-Snapshot geschrieben: ...`.
+- Fix: the bridge now captures both forms, so live browser runs show the real
+  snapshot path and include it in the result payload.
 
-## Current Assessment
+**Bug 4 - browser server killed long `/analysis/run` requests**
 
-- All webapp routes are now reachable without errors under real service data.
-- Dashboard journal stats are now correct.
-- Analysis form loads without crashing.
-- Input validation now returns a visible error message instead of 500.
-- Test fixtures now reflect real service contracts (no more hidden
-  `config.risk_profile` stub masking a crash).
+- Root cause: `webapp/app.py` used only heartbeat timestamps for auto-shutdown.
+  Long analysis POSTs had no concurrent heartbeat and the watcher could exit
+  the process mid-request.
+- Fix: the app now tracks active requests and suppresses auto-shutdown while a
+  request is still in flight.
 
-## Known Limits (unchanged from session 12)
+**Bug 5 - browser route cards hid important route-level metrics**
 
-- Full analysis in the web UI still depends on the runtime bridge parsing
-  stdout and artifact files from `runtime_runner.run_cli()`.
-- There is no background job queue or persistent run history for browser runs.
-- Journal pages still render formatted text reports rather than per-field
-  browser tables.
-- Character auth login action (`/character/auth/login`) attempts to open a
-  browser for EVE SSO; this is expected local-tool behavior and not a bug.
+- Fix: the trade-plan manifest now includes route budget/cargo/cost metrics and
+  warning lines; `analysis_service.py` and `results.html` now surface them in
+  the browser.
+
+## Tests And Verification
+
+- Targeted regression set:
+  `python -m pytest -q tests/test_journal.py tests/test_integration.py tests/test_webapp.py`
+  -> **32 passed**
+- Full suite:
+  `python -m pytest -q`
+  -> **330 passed**
+
+### Real runtime checks
+
+- Focused live CLI run: **success**
+  - actionable route: `o4t -> jita_44`
+  - route count: 2
+  - pick count: 3
+  - expected realized profit: about **240.66m ISK**
+  - replay snapshot written to:
+    `C:\Users\marck\AppData\Local\Temp\nullsec_live_replay_snapshot_focused.json`
+- Replay CLI run against that snapshot: **success**
+  - same `plan_id` as live run
+  - same `pick_id` set as live run
+  - execution plan / leaderboard differ only in their artifact timestamp lines
+- Real HTTP replay run: **GET /analysis 200**, **POST /analysis/run 200**
+  - browser result matched CLI replay plan id and route metrics
+- Real HTTP live run: **POST /analysis/run 200** after ~216s
+  - browser stayed alive for the full request
+  - result page showed the written replay snapshot path
+
+## New Regression Coverage
+
+- `tests/test_integration.py`
+  - real-data replay fixture stays actionable and keeps the expected pick set
+  - repeated replay runs keep the same stable `plan_id` / `pick_id` values
+- `tests/test_journal.py`
+  - manifest falls back to `sell_avg` when `target_sell_price` is `0.0`
+- `tests/test_webapp.py`
+  - runtime bridge parses `Replay-Snapshot geschrieben: ...`
+  - web auto-shutdown waits until no active request is running
+
+## New Fixture
+
+- Added:
+  `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
+- Purpose:
+  compact replay regression based on real live market data captured on
+  2026-03-08 for the focused O4T <-> Jita route test
+
+## Known Limits
+
+- Full browser analysis still depends on stdout/artifact parsing from
+  `runtime_runner.run_cli()` rather than a structured runtime service API.
+- Stable plan IDs now intentionally reuse the same canonical
+  `trade_plan_<plan_id>.json` path for identical snapshot+input runs. That is
+  good for reproducibility and journal parity, but the canonical trade-plan
+  file is overwritten when the same plan is recomputed.
+- The focused live verification used a local overlay config to keep the run
+  practical. The default operator config is broader and can take several
+  minutes while fetching extra markets.
 
 ## Next Recommended Task
 
-Choose one of these, in priority order:
+- Reduce `webapp/services/runtime_bridge.py` dependence on stdout parsing by
+  exposing a small structured runtime result API from `runtime_runner.py`
+- Decide whether the canonical stable `trade_plan_<plan_id>.json` path should
+  also get an optional run-scoped copy for easier side-by-side artifact review
 
-- Task 7b: Reduce `runtime_bridge.py` dependence on stdout/artifact parsing
-  (structured runtime API for analysis runs)
-- Improve journal web pages from text-dump toward per-field tables where that
-  can be done without duplicating journal reporting logic
-- Keep browser output aligned with CLI/runtime warnings as new trading features
-  land
+## Files Touched
 
-## Relevant Files For The Next Session
-
+- `journal_models.py`
+- `runtime_runner.py`
+- `webapp/app.py`
 - `webapp/services/analysis_service.py`
 - `webapp/services/runtime_bridge.py`
-- `webapp/templates/analysis.html`
 - `webapp/templates/results.html`
-- `webapp/templates/dashboard.html`
+- `tests/test_integration.py`
+- `tests/test_journal.py`
 - `tests/test_webapp.py`
+- `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
+- `PROJECT_STATE.md`
+- `TASK_QUEUE.md`
+- `ARCHITECTURE.md`
+- `SESSION_HANDOFF.md`

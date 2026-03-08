@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-07
+Last updated: 2026-03-08
 
 ## Evidence And Limits
 
@@ -125,6 +125,10 @@ Local web flow is separate from the CLI and intentionally thin:
 -> `runtime_runner.run_cli()` in-process for full analysis runs
 -> existing artifacts and manifest files rendered into templates
 
+`webapp.app` now tracks in-flight requests before the heartbeat watcher decides
+to auto-shutdown, so long-running `/analysis/run` requests are not killed by
+the idle timer mid-response.
+
 Personal history flow is separate on purpose and only becomes decision-relevant
 through an explicit policy gate:
 
@@ -152,6 +156,11 @@ Confirmed output families from the current docs and entry modules:
 - `*_top_candidates_<timestamp>.txt`
 - `trade_plan_<plan_id>.json`
 - `market_snapshot.json`
+
+`plan_id` / `pick_id` identity is now intentionally deterministic for identical
+snapshot+input runs. The human-readable text artifacts still keep their own
+wall-clock timestamps, but the canonical trade-plan JSON is keyed by the stable
+plan id so replayed runs can be compared or imported with the same IDs.
 
 Local mutable state:
 

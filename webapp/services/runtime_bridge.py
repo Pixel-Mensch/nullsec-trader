@@ -47,7 +47,7 @@ def _extract_plan_id(output: str) -> str:
 
 
 def _extract_snapshot_path(output: str) -> str:
-    match = re.search(r"^Snapshot geschrieben:\s*(.+)$", str(output or ""), flags=re.MULTILINE)
+    match = re.search(r"^(?:Replay-)?Snapshot geschrieben:\s*(.+)$", str(output or ""), flags=re.MULTILINE)
     return str(match.group(1)).strip() if match else ""
 
 
