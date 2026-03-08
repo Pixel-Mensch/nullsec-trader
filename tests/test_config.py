@@ -1,6 +1,14 @@
 """Config tests."""
 
-from tests.shared import *  # noqa: F401,F403
+import io
+import json
+import os
+import tempfile
+from contextlib import redirect_stdout
+
+import nullsectrader as nst
+
+from tests.shared import _minimal_valid_config
 
 def test_validate_config_accepts_minimal_valid_config() -> None:
     cfg = _minimal_valid_config()
