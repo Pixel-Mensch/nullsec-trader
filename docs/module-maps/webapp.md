@@ -12,6 +12,8 @@ journal, character, and config workflows without replacing the CLI.
 - reuse existing runtime, journal, and character functions instead of redoing
   trade logic in HTML handlers
 - stay local-only and optional
+- keep process lifetime simple; the local server no longer uses browser
+  heartbeat or idle auto-shutdown logic
 
 ## Inputs
 

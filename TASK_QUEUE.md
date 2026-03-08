@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-08 (session 14 live/replay/web verification)
+Last updated: 2026-03-08 (session 18 remove web heartbeat)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -401,3 +401,17 @@ full backlog scrape.
     manifest-serialization regression in `tests/test_journal.py`, and
     runtime-bridge / shutdown regressions in `tests/test_webapp.py`
   - Full suite: **330 passed**
+
+### Task 7f: Remove browser heartbeat / idle auto-shutdown from the local web app
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - Removed the heartbeat endpoint and shutdown watcher from `webapp/app.py`
+  - Removed the browser-side heartbeat ping from `webapp/templates/base.html`
+  - Replaced the old shutdown regression in `tests/test_webapp.py` with a
+    regression that confirms `/heartbeat` is no longer exposed
+  - Targeted regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**

@@ -153,8 +153,8 @@ Not fully re-audited this session:
   parity and no longer serializes `instant` picks with `proposed_sell_price=0`
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
-- the web app no longer auto-shuts down during a long-running analysis request;
-  active in-flight requests now block the heartbeat idle-exit path
+- the local web app no longer uses a browser heartbeat or idle auto-shutdown;
+  it now stays up until the operator stops the process explicitly
 - the `/analysis` and `/analysis/run` browser layout now allows analysis cards
   and log/report blocks to shrink correctly within the viewport; long paths and
   runtime logs no longer create page-wide horizontal overflow
@@ -301,9 +301,8 @@ Files that indicate this focus:
   `GET /analysis` 500, dashboard stat mismatches, and input parse robustness).
   Full-run analysis still depends on CLI-style stdout and artifact contracts
   exposed by `runtime_runner.py`.
-- Browser analysis now survives long runtime calls because `webapp.app` blocks
-  idle auto-shutdown while a request is still in flight, but the browser layer
-  still depends on heartbeat semantics for idle lifetime once requests finish.
+- Browser analysis no longer depends on heartbeat semantics; the local web app
+  stays alive until it is stopped explicitly.
 - Stable replay IDs now intentionally reuse the same `trade_plan_<plan_id>.json`
   filename for identical snapshot+input runs. That improves reproducibility and
   journal parity, but the canonical trade-plan file is overwritten when the

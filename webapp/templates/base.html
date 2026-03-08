@@ -27,12 +27,5 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-  <script>
-    (function () {
-      function ping() { fetch('/heartbeat', {method:'POST'}).catch(function(){}); }
-      ping();
-      setInterval(ping, 5000);
-    })();
-  </script>
   </body>
 </html>

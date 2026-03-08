@@ -1,43 +1,54 @@
 # Session Handoff
 
-Date: 2026-03-08 (session 17 test import cleanup)
+Date: 2026-03-08 (session 18 remove web heartbeat)
 Branch: `dev`
 
 ## Completed This Session
 
-Fixed a test/IDE hygiene issue in `tests/test_config.py`: the file relied on
-`from tests.shared import *`, which pytest handled but some IDE analyzers
-flagged as undefined names such as `_minimal_valid_config`.
+Removed the local webapp heartbeat and idle auto-shutdown path. The browser no
+longer posts `/heartbeat`, and the FastAPI app now stays up until it is stopped
+explicitly.
 
 ## Root Cause
 
-- `tests/test_config.py` used `from tests.shared import *`
-- runtime pytest import worked, but static analysis in the IDE could not
-  reliably resolve helper names pulled in through the wildcard import
-- the visible symptom was undefined-name warnings like
-  `_minimal_valid_config is not defined`
+- `webapp/app.py` still carried a browser-heartbeat endpoint, request-tracking
+  middleware, and an auto-exit watcher thread
+- `webapp/templates/base.html` posted heartbeat pings every 5 seconds
+- that lifecycle behavior was no longer wanted and added avoidable local
+  process churn
 
 ## What Changed
 
-- `tests/test_config.py`
-  - replaced the wildcard shared import with explicit imports:
-    `io`, `json`, `os`, `tempfile`, `redirect_stdout`, `nullsectrader as nst`,
-    and `_minimal_valid_config`
-  - no test behavior changed; this was a name-resolution cleanup for tooling
+- `webapp/app.py`
+  - removed heartbeat timeout state, request-tracking middleware, shutdown
+    watcher thread, and `/heartbeat` route
+  - kept `create_app()` as a plain FastAPI app factory with static mount and
+    page router registration
+- `webapp/templates/base.html`
+  - removed the inline browser heartbeat script
+- `tests/test_webapp.py`
+  - removed the shutdown watcher test tied to internal heartbeat state
+  - added a regression that asserts `POST /heartbeat` now returns `404`
+- control files updated to reflect that the web app no longer uses heartbeat
+  lifecycle behavior
 
 ## Tests And Verification
 
 - Targeted regression:
-  - `python -m pytest -q tests/test_config.py`
-    -> **22 passed**
+  - `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**
 
 ## Remaining Limits
 
-- other test modules still use `from tests.shared import *`; if the IDE shows
-  the same undefined-name warnings there, they should get the same explicit
-  import cleanup
+- the local web server now remains running until it is stopped manually; there
+  is no automatic idle exit anymore
 
 ## Files Touched
 
-- `tests/test_config.py`
+- `webapp/app.py`
+- `webapp/templates/base.html`
+- `tests/test_webapp.py`
+- `PROJECT_STATE.md`
+- `TASK_QUEUE.md`
+- `ARCHITECTURE.md`
 - `SESSION_HANDOFF.md`

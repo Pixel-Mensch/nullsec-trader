@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-import webapp.app as web_app
 from webapp.app import create_app
 from webapp.routes import pages
 from webapp.services import runtime_bridge
@@ -255,15 +254,7 @@ def test_runtime_bridge_extracts_replay_snapshot_path() -> None:
     assert runtime_bridge._extract_snapshot_path(output) == "C:/tmp/live_snapshot.json"
 
 
-def test_webapp_shutdown_waits_for_active_request() -> None:
-    old_last_ping = web_app._last_ping
-    old_active_request_count = web_app._active_request_count
-    try:
-        web_app._last_ping = 0.0
-        web_app._active_request_count = 1
-        assert web_app._should_auto_shutdown(now=999.0) is False
-        web_app._active_request_count = 0
-        assert web_app._should_auto_shutdown(now=999.0) is True
-    finally:
-        web_app._last_ping = old_last_ping
-        web_app._active_request_count = old_active_request_count
+def test_webapp_has_no_heartbeat_endpoint(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    response = client.post("/heartbeat")
+    assert response.status_code == 404

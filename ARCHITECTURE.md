@@ -125,9 +125,9 @@ Local web flow is separate from the CLI and intentionally thin:
 -> `runtime_runner.run_cli()` in-process for full analysis runs
 -> existing artifacts and manifest files rendered into templates
 
-`webapp.app` now tracks in-flight requests before the heartbeat watcher decides
-to auto-shutdown, so long-running `/analysis/run` requests are not killed by
-the idle timer mid-response.
+`webapp.app` is now a plain local FastAPI app without browser-heartbeat or
+idle auto-shutdown behavior. The local web process stays up until it is
+stopped explicitly.
 
 The analysis/result browser views now rely on a small page-level layout
 modifier in `base.html` plus overflow-safe CSS in `webapp/static/css/app.css`:
