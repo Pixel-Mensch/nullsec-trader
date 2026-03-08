@@ -137,6 +137,18 @@ Not fully re-audited this session:
 - live and replay now produce the same deterministic `plan_id` / `pick_id`
   set when they run against the same snapshot and inputs; only timestamped text
   artifact filenames still differ between runs
+- internal structure-to-structure nullsec routes are now classified centrally
+  as `internal_self_haul` in `shipping.py`; they no longer get blocked just
+  because no external ITL/HWL lane exists
+- Jita routes still use the existing external shipping model; the new internal
+  self-haul policy does not zero out Jita transport costs
+- the default repo config now includes `structure_regions` for `UALX-3`
+  (`1046664001931 -> 10000061`) and `R-ARKN`
+  (`1048663825563 -> 10000039`), so `planned_sell` no longer becomes
+  unnecessarily restrictive on those internal targets
+- the duplicate `structures` alias `c-j6mt` was removed from `config.json`;
+  canonical startup still uses required key `cj6`, while shipping/route label
+  normalization continues to understand `cj6`, `c-j6mt`, and `1st`
 - `trade_plan_*.json` now preserves route budget/cargo/cost metrics for browser
   parity and no longer serializes `instant` picks with `proposed_sell_price=0`
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
@@ -201,6 +213,10 @@ Not fully re-audited this session:
 - the personal decision layer is intentionally narrow: it only adjusts
   `decision_overall_confidence` with hard caps and explainability, so evidence
   for broader scope tuning is still limited
+- transport policy now has two explicit modes in practice: external shipping
+  for Jita-connected routes and `internal_self_haul` for internal nullsec
+  structure routes. Future internal ansiplex/fuel/risk surcharges can attach to
+  the same central transport-mode seam.
 
 ## Current Focus
 

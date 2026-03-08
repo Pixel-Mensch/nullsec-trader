@@ -129,6 +129,17 @@ Local web flow is separate from the CLI and intentionally thin:
 to auto-shutdown, so long-running `/analysis/run` requests are not killed by
 the idle timer mid-response.
 
+`shipping.py` now owns a central transport-mode decision seam:
+
+- Jita-connected routes stay on the external shipping path (ITL/HWL lanes or
+  explicit `route_costs`)
+- internal structure-to-structure nullsec routes are classified as
+  `internal_self_haul`
+- `internal_self_haul` currently defaults to `0 ISK` transport cost unless an
+  explicit internal `route_costs` entry is present
+- route blocking for missing transport models still applies to non-internal,
+  non-modeled routes
+
 Personal history flow is separate on purpose and only becomes decision-relevant
 through an explicit policy gate:
 
@@ -214,6 +225,7 @@ confirm the current branch state.
 
 - Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
+- Internal self-haul vs external shipping classification: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
 - Confidence calibration logic and personal decision-layer policy:
   `confidence_calibration.py`

@@ -108,6 +108,30 @@ full backlog scrape.
   the CLI can parse profile flags and reach the expected runtime path without
   requiring a broad end-to-end environment.
 
+### Task 3b: Stop falsely blocking profitable internal nullsec routes
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - `shipping.py` now classifies configured structure-to-structure nullsec
+    routes without Jita as `internal_self_haul` instead of treating them as
+    missing external shipping models
+  - those routes now remain actionable with `0 ISK` default transport cost
+    unless explicit internal `route_costs` are configured later
+  - Jita-connected routes still use the existing ITL/HWL / shipping-lane path
+  - `execution_plan.py`, `runtime_runner.py`, and `journal_models.py` now
+    surface `transport_mode` and the self-haul note in artifacts
+  - `config.json` now includes missing `structure_regions` for `UALX-3` and
+    `R-ARKN`, and the duplicate `c-j6mt` structure alias was removed
+  - targeted tests plus replay verification:
+    `python -m pytest -q tests/test_shipping.py tests/test_config.py tests/test_route_search.py tests/test_integration.py`
+    -> **81 passed**
+  - real replay verification on `replay_snapshot.json` showed internal routes
+    such as `O4T -> UALX-3`, `R-ARKN -> 1st Taj Mahgoon`, and
+    `1st Taj Mahgoon -> UALX-3` as `internal_self_haul` instead of transport
+    blocked
+
 ### Task 3: Reduce AI context cost around large orchestration modules
 
 - Priority: P1

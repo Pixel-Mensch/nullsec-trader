@@ -756,6 +756,10 @@ def _finalize_route_result(
     if bool(transport_summary.get("route_blocked_due_to_transport", False)):
         if warn_msg:
             print(f"    BLOCKED: {route_label}: {warn_msg}")
+    elif str(transport_summary.get("transport_mode", "") or "").strip().lower() == "internal_self_haul":
+        info_msg = str(transport_summary.get("transport_mode_note", "") or "")
+        if info_msg:
+            print(f"    INFO: {route_label}: {info_msg}")
     elif bool(transport_summary.get("transport_cost_assumed_zero", False)) and warn_msg:
         print(f"    WARN: {route_label}: {warn_msg}")
 
@@ -836,6 +840,8 @@ def _finalize_route_result(
         "estimated_collateral_isk": float(transport_summary.get("estimated_collateral_isk", 0.0)),
         "shipping_lane_params": dict(transport_summary.get("shipping_lane_params", {})),
         "total_route_m3": float(transport_summary.get("total_route_m3", total_m3)),
+        "transport_mode": str(transport_summary.get("transport_mode", "")),
+        "transport_mode_note": str(transport_summary.get("transport_mode_note", "")),
         "route_cost_is_explicit": bool(transport_summary.get("route_cost_is_explicit", False)),
         "cost_model_status": str(transport_summary.get("cost_model_status", "configured")),
         "cost_model_confidence": str(transport_summary.get("cost_model_confidence", "normal")),

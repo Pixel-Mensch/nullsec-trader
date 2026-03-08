@@ -1,139 +1,131 @@
 # Session Handoff
 
-Date: 2026-03-08 (session 14 live/replay/web verification)
+Date: 2026-03-08 (session 15 internal self-haul fix)
 Branch: `dev`
 
 ## Completed This Session
 
-### Real live run -> replay run -> web verification
+### False transport blocking on internal nullsec routes
 
-Performed a full local verification cycle instead of a code-only review:
+Fixed the concrete business bug where profitable internal nullsec routes were
+found by candidate generation but later blocked with:
 
-- ran a focused real live CLI route-search flow with local ESI credentials
-- wrote a fresh replay snapshot from that live run
-- reran the exact same flow in replay mode against that snapshot
-- compared live vs replay artifacts and manifest data
-- started the real FastAPI app under `uvicorn`
-- exercised `/analysis` and `/analysis/run` over HTTP in replay and live mode
+`No shipping lane or explicit route_costs matched this route; route is blocked until transport cost is modeled.`
 
-### Fixes
+The fix is now centralized in `shipping.py` instead of being spread across
+route consumers.
 
-**Bug 1 - replay identity drift**
+## Root Cause
 
-- Root cause: `plan_id` used wall-clock time, so identical replay runs produced
-  different `plan_id` and `pick_id` values even when snapshot and inputs were
-  identical.
-- Fix: `runtime_runner.py` now derives a deterministic plan-id seed from the
-  snapshot payload plus runtime inputs. Live and replay now keep the same
-  `plan_id` / `pick_id` set for the same snapshot+input combination.
+- transport blocking previously treated every route without a matched shipping
+  lane or explicit `route_costs` as unresolved external transport
+- that was correct for Jita-connected routes, but wrong for internal
+  structure-to-structure nullsec movement between the operator's own trading
+  structures
+- the runtime therefore found profitable internal candidates and then pruned
+  them during transport-cost application
 
-**Bug 2 - manifest serialized `instant` exit price as 0**
+## What Changed
 
-- Root cause: `journal_models.build_trade_plan_manifest()` preferred
-  `target_sell_price` even when it existed but was `0.0` for `instant` picks,
-  so `sell_avg` was never used as fallback.
-- Fix: added a proper sell-price resolver. `instant` picks now export the real
-  executable exit price in `proposed_sell_price`.
-
-**Bug 3 - web runtime bridge lost live replay snapshot path**
-
-- Root cause: `webapp/services/runtime_bridge.py` only parsed
-  `Snapshot geschrieben: ...`, not `Replay-Snapshot geschrieben: ...`.
-- Fix: the bridge now captures both forms, so live browser runs show the real
-  snapshot path and include it in the result payload.
-
-**Bug 4 - browser server killed long `/analysis/run` requests**
-
-- Root cause: `webapp/app.py` used only heartbeat timestamps for auto-shutdown.
-  Long analysis POSTs had no concurrent heartbeat and the watcher could exit
-  the process mid-request.
-- Fix: the app now tracks active requests and suppresses auto-shutdown while a
-  request is still in flight.
-
-**Bug 5 - browser route cards hid important route-level metrics**
-
-- Fix: the trade-plan manifest now includes route budget/cargo/cost metrics and
-  warning lines; `analysis_service.py` and `results.html` now surface them in
-  the browser.
+- `shipping.py`
+  - added central route classification for internal structure-to-structure
+    nullsec routes using configured `structures` plus `route_chain.legs`
+  - internal routes without Jita now use `transport_mode=internal_self_haul`
+  - `internal_self_haul` no longer blocks on missing external shipping lanes
+  - default internal transport cost is currently `0 ISK`
+  - Jita routes still stay on the external shipping model
+- `runtime_runner.py`
+  - now prints an explicit `INFO` line when a route is using
+    `internal_self_haul`
+  - carries `transport_mode` and `transport_mode_note` into route results
+- `execution_plan.py`
+  - now shows `Transport Mode: internal_self_haul`
+  - now shows `Transport: internal_self_haul | Cost: 0,00 ISK`
+- `journal_models.py`
+  - trade-plan manifest now includes `transport_mode` and
+    `transport_mode_note`
+- `config.json`
+  - removed duplicate `structures.c-j6mt` alias that reused the `cj6` ID
+  - added `structure_regions` for:
+    - `1046664001931 -> 10000061` (`UALX-3`, Tenerifis)
+    - `1048663825563 -> 10000039` (`R-ARKN`, Esoteria)
+- `README.md`
+  - documents the new `internal_self_haul` rule for non-Jita internal routes
 
 ## Tests And Verification
 
 - Targeted regression set:
-  `python -m pytest -q tests/test_journal.py tests/test_integration.py tests/test_webapp.py`
-  -> **32 passed**
-- Full suite:
-  `python -m pytest -q`
-  -> **330 passed**
+  - `python -m pytest -q tests/test_shipping.py tests/test_config.py`
+    -> **59 passed**
+  - `python -m pytest -q tests/test_route_search.py tests/test_integration.py`
+    -> **22 passed**
 
-### Real runtime checks
+### New regression coverage
 
-- Focused live CLI run: **success**
-  - actionable route: `o4t -> jita_44`
-  - route count: 2
-  - pick count: 3
-  - expected realized profit: about **240.66m ISK**
-  - replay snapshot written to:
-    `C:\Users\marck\AppData\Local\Temp\nullsec_live_replay_snapshot_focused.json`
-- Replay CLI run against that snapshot: **success**
-  - same `plan_id` as live run
-  - same `pick_id` set as live run
-  - execution plan / leaderboard differ only in their artifact timestamp lines
-- Real HTTP replay run: **GET /analysis 200**, **POST /analysis/run 200**
-  - browser result matched CLI replay plan id and route metrics
-- Real HTTP live run: **POST /analysis/run 200** after ~216s
-  - browser stayed alive for the full request
-  - result page showed the written replay snapshot path
+- `tests/test_shipping.py`
+  - Jita -> internal keeps `external_shipping`
+  - internal -> Jita keeps `external_shipping`
+  - internal -> internal without shipping lane becomes `internal_self_haul`
+  - internal self-haul route is not blocked and gets `0 ISK`
+  - execution plan prints the internal self-haul transport mode and zero-cost note
+- `tests/test_config.py`
+  - repo `config.json` now has unique structure IDs
+  - repo `config.json` now covers internal chain structure regions, so
+    planned-sell validation does not warn about missing region mappings for
+    `UALX-3` or `R-ARKN`
 
-## New Regression Coverage
+### Real replay verification
 
-- `tests/test_integration.py`
-  - real-data replay fixture stays actionable and keeps the expected pick set
-  - repeated replay runs keep the same stable `plan_id` / `pick_id` values
-- `tests/test_journal.py`
-  - manifest falls back to `sell_avg` when `target_sell_price` is `0.0`
-- `tests/test_webapp.py`
-  - runtime bridge parses `Replay-Snapshot geschrieben: ...`
-  - web auto-shutdown waits until no active request is running
+Ran:
 
-## New Fixture
+`$env:NULLSEC_REPLAY_ENABLED='1'; python .\main.py --cargo-m3 10000 --budget-isk 500m`
 
-- Added:
-  `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
-- Purpose:
-  compact replay regression based on real live market data captured on
-  2026-03-08 for the focused O4T <-> Jita route test
+Observed in real runtime output:
+
+- no duplicate-structure warning anymore
+- no missing-`structure_regions` warning for `UALX-3` / `R-ARKN`
+- internal routes now print `INFO: ... Internal self haul ... 0 ISK`
+- internal routes that still have no picks are now `no_picks`, not
+  `missing_transport_cost_model`
+- profitable internal routes remained actionable, for example:
+  - `O4T -> UALX-3`
+  - `R-ARKN -> 1st Taj Mahgoon`
+  - `1st Taj Mahgoon -> UALX-3`
+
+Checked generated artifacts from that replay run:
+
+- `execution_plan_2026-03-08_03-47-44.txt`
+  - contains `Transport Mode: internal_self_haul`
+  - contains `Transport: internal_self_haul  |  Cost: 0,00 ISK`
+- `route_leaderboard_2026-03-08_03-47-44.txt`
+  - shows `transport_mode: internal_self_haul` on ranked internal routes
 
 ## Known Limits
 
-- Full browser analysis still depends on stdout/artifact parsing from
-  `runtime_runner.run_cli()` rather than a structured runtime service API.
-- Stable plan IDs now intentionally reuse the same canonical
-  `trade_plan_<plan_id>.json` path for identical snapshot+input runs. That is
-  good for reproducibility and journal parity, but the canonical trade-plan
-  file is overwritten when the same plan is recomputed.
-- The focused live verification used a local overlay config to keep the run
-  practical. The default operator config is broader and can take several
-  minutes while fetching extra markets.
+- `internal_self_haul` is intentionally a zero-cost placeholder policy for now
+  and does not yet model ansiplex fuel, move risk, or time cost
+- future internal cost modeling should attach to the same central seam in
+  `shipping.py` instead of reintroducing route-by-route exceptions
+- replay run artifacts were used for verification but not committed
 
 ## Next Recommended Task
 
-- Reduce `webapp/services/runtime_bridge.py` dependence on stdout parsing by
-  exposing a small structured runtime result API from `runtime_runner.py`
-- Decide whether the canonical stable `trade_plan_<plan_id>.json` path should
-  also get an optional run-scoped copy for easier side-by-side artifact review
+- if desired, extend `internal_self_haul` with optional internal
+  `route_costs` presets for ansiplex/fuel/risk without changing the Jita
+  shipping path
+- decide whether the web route cards should also render `transport_mode` now
+  that the manifest exposes it
 
 ## Files Touched
 
-- `journal_models.py`
+- `shipping.py`
 - `runtime_runner.py`
-- `webapp/app.py`
-- `webapp/services/analysis_service.py`
-- `webapp/services/runtime_bridge.py`
-- `webapp/templates/results.html`
-- `tests/test_integration.py`
-- `tests/test_journal.py`
-- `tests/test_webapp.py`
-- `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
+- `execution_plan.py`
+- `journal_models.py`
+- `config.json`
+- `README.md`
+- `tests/test_shipping.py`
+- `tests/test_config.py`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
 - `ARCHITECTURE.md`

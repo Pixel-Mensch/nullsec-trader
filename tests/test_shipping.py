@@ -595,3 +595,164 @@ def test_resolve_shipping_lane_cfg_prefers_policy_provider() -> None:
     assert resolved is not None
     assert str(resolved[0]) == "itl_jita_ualx"
 
+
+def test_build_route_context_keeps_jita_to_internal_on_external_shipping_model() -> None:
+    cfg = {
+        "structures": {"o4t": 1040804972352, "cj6": 1049588174021},
+        "locations": {"jita_44": {"location_id": 60003760, "region_id": 10000002}},
+        "route_chain": {"enabled": True, "legs": [{"id": 1046664001931, "label": "UALX-3"}]},
+        "shipping_lanes": {
+            "itl_jita_ualx": {
+                "enabled": True,
+                "pricing_model": "itl_max",
+                "from": "jita_44",
+                "to": "ualx-3",
+                "from_location_id": 60003760,
+                "to_structure_id": 1046664001931,
+                "per_m3_rate": 1100.0,
+                "minimum_reward": 5_000_000.0,
+                "full_load_reward": 380_000_000.0,
+                "collateral_rate": 0.0,
+            }
+        },
+    }
+    ctx = nst.build_route_context(
+        cfg,
+        route_id="jita_to_ualx",
+        source_label="jita_44",
+        dest_label="UALX-3",
+        source_id=60003760,
+        dest_id=1046664001931,
+    )
+    assert str(ctx.get("transport_mode", "")) == "external_shipping"
+    assert str(ctx.get("shipping_lane_id", "")) == "itl_jita_ualx"
+
+
+def test_build_route_context_keeps_internal_to_jita_on_external_shipping_model() -> None:
+    cfg = {
+        "structures": {"o4t": 1040804972352, "cj6": 1049588174021},
+        "locations": {"jita_44": {"location_id": 60003760, "region_id": 10000002}},
+        "route_chain": {"enabled": True, "legs": [{"id": 1046664001931, "label": "UALX-3"}]},
+        "shipping_lanes": {
+            "itl_ualx_jita": {
+                "enabled": True,
+                "pricing_model": "itl_max",
+                "from": "ualx-3",
+                "to": "jita_44",
+                "from_structure_id": 1046664001931,
+                "to_location_id": 60003760,
+                "per_m3_rate": 1100.0,
+                "minimum_reward": 5_000_000.0,
+                "full_load_reward": 380_000_000.0,
+                "collateral_rate": 0.005,
+            }
+        },
+    }
+    ctx = nst.build_route_context(
+        cfg,
+        route_id="ualx_to_jita",
+        source_label="UALX-3",
+        dest_label="jita_44",
+        source_id=1046664001931,
+        dest_id=60003760,
+    )
+    assert str(ctx.get("transport_mode", "")) == "external_shipping"
+    assert str(ctx.get("shipping_lane_id", "")) == "itl_ualx_jita"
+
+
+def test_internal_structure_route_uses_internal_self_haul_with_zero_cost() -> None:
+    picks = [{
+        "type_id": 1,
+        "name": "Internal Test",
+        "qty": 10,
+        "unit_volume": 5.0,
+        "cost": 100_000.0,
+        "revenue_net": 150_000.0,
+        "profit": 50_000.0,
+        "turnover_factor": 1.0,
+    }]
+    cfg = {
+        "structures": {"o4t": 1040804972352, "cj6": 1049588174021},
+        "route_chain": {
+            "enabled": True,
+            "legs": [
+                {"id": 1040804972352, "label": "O4T"},
+                {"id": 1046664001931, "label": "UALX-3"},
+            ],
+        },
+        "shipping_lanes": {},
+        "route_costs": {},
+    }
+    ctx = nst.build_route_context(
+        cfg,
+        route_id="o4t_to_ualx",
+        source_label="O4T",
+        dest_label="UALX-3",
+        source_id=1040804972352,
+        dest_id=1046664001931,
+    )
+    summary = nst.apply_route_costs_to_picks(picks, ctx)
+    assert str(ctx.get("transport_mode", "")) == "internal_self_haul"
+    assert str(summary.get("transport_mode", "")) == "internal_self_haul"
+    assert bool(summary.get("route_blocked_due_to_transport", False)) is False
+    assert abs(float(summary.get("total_transport_cost", 0.0)) - 0.0) < 1e-6
+    assert abs(float(summary.get("total_shipping_cost", 0.0)) - 0.0) < 1e-6
+    assert str(summary.get("shipping_provider", "")) == "INTERNAL"
+    assert "0 ISK" in str(summary.get("transport_mode_note", ""))
+
+
+def test_execution_plan_shows_internal_self_haul_transport_mode() -> None:
+    route_results = [{
+        "route_label": "O4T -> UALX-3",
+        "source_label": "O4T",
+        "dest_label": "UALX-3",
+        "source_node_info": {"node_label": "O4T", "node_kind": "structure", "structure_id": 1040804972352, "node_id": 1040804972352},
+        "dest_node_info": {"node_label": "UALX-3", "node_kind": "structure", "structure_id": 1046664001931, "node_id": 1046664001931},
+        "transport_mode": "internal_self_haul",
+        "transport_mode_note": "Internal self haul: structure-to-structure nullsec route; external shipping lanes are not required and transport is currently 0 ISK.",
+        "shipping_provider": "INTERNAL",
+        "shipping_lane_id": "",
+        "shipping_pricing_model": "internal_self_haul",
+        "isk_used": 10_000_000.0,
+        "profit_total": 5_000_000.0,
+        "budget_total": 20_000_000.0,
+        "total_shipping_cost": 0.0,
+        "shipping_cost_total": 0.0,
+        "total_route_cost": 0.0,
+        "total_transport_cost": 0.0,
+        "total_route_m3": 50.0,
+        "route_blocked_due_to_transport": False,
+        "route_prune_reason": "",
+        "cost_model_confidence": "normal",
+        "picks": [{
+            "type_id": 34,
+            "name": "Tritanium",
+            "qty": 1,
+            "buy_avg": 10_000_000.0,
+            "target_sell_price": 16_000_000.0,
+            "sell_avg": 16_000_000.0,
+            "instant": True,
+            "fill_probability": 1.0,
+            "expected_days_to_sell": 0.0,
+            "profit": 5_000_000.0,
+            "revenue_net": 15_000_000.0,
+            "transport_cost": 0.0,
+            "buy_broker_fee_total": 0.0,
+            "sell_broker_fee_total": 0.0,
+            "sales_tax_total": 0.0,
+            "relist_budget_total": 0.0,
+            "unit_volume": 50.0,
+            "buy_at": "O4T",
+            "sell_at": "UALX-3",
+        }],
+    }]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "execution_plan_internal.txt")
+        nst.write_execution_plan_profiles(out_path, "2026-03-08_00-00-00", route_results)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "Transport: internal_self_haul" in content
+    assert "Transport Mode: internal_self_haul" in content
+    assert "transport_cost_total: 0,00 ISK" in content
+    assert "transport is currently 0 ISK" in content
+

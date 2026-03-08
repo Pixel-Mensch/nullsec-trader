@@ -308,6 +308,8 @@ def build_trade_plan_manifest(
                 "shipping_cost_total": float(route.get("shipping_cost_total", route.get("total_shipping_cost", 0.0)) or 0.0),
                 "total_route_cost": float(route.get("total_route_cost", 0.0) or 0.0),
                 "total_transport_cost": float(route.get("total_transport_cost", 0.0) or 0.0),
+                "transport_mode": str(route.get("transport_mode", "") or ""),
+                "transport_mode_note": str(route.get("transport_mode_note", "") or ""),
                 "budget_left_reason": str(route.get("budget_left_reason", "") or ""),
                 "warnings": json.loads(json.dumps(route_warning_lines, ensure_ascii=False)),
                 "picks": picks_out,
