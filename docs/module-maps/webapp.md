@@ -74,6 +74,8 @@ journal, character, and config workflows without replacing the CLI.
 - improve browser-safe formatting of runtime or journal outputs
 - tighten service boundaries around runtime and character calls
 - expose more status metadata without changing trading logic
+- make the journal web flow clearly distinguish local journal entries from
+  current character snapshot / reconcile data
 
 ## Risk Areas
 

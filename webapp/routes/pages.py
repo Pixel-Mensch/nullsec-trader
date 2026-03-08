@@ -52,6 +52,12 @@ def journal_page(request: Request, tab: str = "overview", limit: int = 20):
     return _render(request, "journal.html", page="journal", data=data)
 
 
+@router.get("/journal/reconcile", response_class=HTMLResponse)
+def journal_reconcile_page(request: Request, limit: int = 20):
+    data = journal_service.run_reconciliation(limit=int(limit))
+    return _render(request, "journal.html", page="journal", data=data)
+
+
 @router.post("/journal/reconcile", response_class=HTMLResponse)
 def journal_reconcile(request: Request, limit: int = Form(20)):
     data = journal_service.run_reconciliation(limit=int(limit))

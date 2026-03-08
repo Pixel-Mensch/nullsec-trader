@@ -118,6 +118,19 @@ def _journal_page(tab: str = "overview") -> dict:
         "entry_count": 4,
         "journal_db_path": "cache/trade_journal.sqlite3",
         "has_reconciliation_result": tab in {"reconcile", "unmatched"},
+        "character_summary": {
+            "character_name": "Capsuleer",
+            "source": "cache",
+            "warnings": [],
+            "open_orders_count": 7,
+            "sell_order_count": 5,
+            "buy_order_count": 2,
+            "wallet_transactions_count": 42,
+            "wallet_journal_count": 84,
+            "wallet_data_freshness": "fresh",
+            "wallet_history_quality": "usable",
+        },
+        "empty_notice": "",
     }
 
 
@@ -201,12 +214,18 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
 def test_journal_views_render(monkeypatch) -> None:
     client = _client(monkeypatch)
     overview = client.get("/journal?tab=overview")
+    reconcile_get = client.get("/journal/reconcile?limit=20")
     reconcile = client.post("/journal/reconcile", data={"limit": 20})
     unmatched = client.get("/journal/unmatched")
     assert overview.status_code == 200
+    assert reconcile_get.status_code == 200
     assert reconcile.status_code == 200
     assert unmatched.status_code == 200
     assert "content for overview" in overview.text
+    assert "Capsuleer" in overview.text
+    assert "Open orders" in overview.text
+    assert "42 tx" in overview.text
+    assert "content for reconcile" in reconcile_get.text
     assert "content for reconcile" in reconcile.text
     assert "content for unmatched" in unmatched.text
 

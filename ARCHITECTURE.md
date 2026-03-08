@@ -129,6 +129,18 @@ Local web flow is separate from the CLI and intentionally thin:
 idle auto-shutdown behavior. The local web process stays up until it is
 stopped explicitly.
 
+The journal web path has two distinct data sources on purpose:
+
+- the local journal DB drives overview/open/closed/report/personal/calibration
+  pages
+- character cache or live wallet data drives the journal page's snapshot
+  summary plus the dedicated reconcile/unmatched views
+
+The browser now makes that separation explicit: the journal page always shows
+the current character snapshot summary it can resolve, and opening the
+Reconcile/Unmatched tabs triggers real reconciliation work instead of showing a
+pure placeholder.
+
 The analysis/result browser views now rely on a small page-level layout
 modifier in `base.html` plus overflow-safe CSS in `webapp/static/css/app.css`:
 analysis pages can use a wider shell, grid items are allowed to shrink with

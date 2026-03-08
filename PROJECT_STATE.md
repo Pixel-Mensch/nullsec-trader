@@ -155,6 +155,10 @@ Not fully re-audited this session:
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
   it now stays up until the operator stops the process explicitly
+- the web journal page now surfaces current cached character snapshot data
+  (open orders plus wallet transaction/journal counts) even when the local
+  journal DB is empty; opening the dedicated Reconcile/Unmatched tabs now
+  triggers the real reconciliation flow instead of showing an inert placeholder
 - the `/analysis` and `/analysis/run` browser layout now allows analysis cards
   and log/report blocks to shrink correctly within the viewport; long paths and
   runtime logs no longer create page-wide horizontal overflow
@@ -303,6 +307,10 @@ Files that indicate this focus:
   exposed by `runtime_runner.py`.
 - Browser analysis no longer depends on heartbeat semantics; the local web app
   stays alive until it is stopped explicitly.
+- The local journal remains plan-centric by design: overview/open/closed/report/
+  personal/calibration still depend on imported or recorded journal entries.
+  The web UI now makes that clearer by showing character snapshot counts and by
+  fetching real reconcile/unmatched data on the dedicated tabs.
 - Stable replay IDs now intentionally reuse the same `trade_plan_<plan_id>.json`
   filename for identical snapshot+input runs. That improves reproducibility and
   journal parity, but the canonical trade-plan file is overwritten when the

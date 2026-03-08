@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-08 (session 18 remove web heartbeat)
+Last updated: 2026-03-08 (session 19 journal web current-data visibility)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -413,5 +413,25 @@ full backlog scrape.
   - Replaced the old shutdown regression in `tests/test_webapp.py` with a
     regression that confirms `/heartbeat` is no longer exposed
   - Targeted regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**
+
+### Task 7g: Make journal web views show current character data instead of looking empty
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - `webapp/services/journal_service.py` now loads a character snapshot summary
+    for journal pages, so open-order and wallet-history counts are visible even
+    when the local journal DB has zero entries
+  - the journal empty-state text now explains the real distinction between an
+    empty local journal and available character / wallet data
+  - added `GET /journal/reconcile` in `webapp/routes/pages.py`, and the
+    journal tab link now opens the real reconciliation flow instead of a static
+    placeholder
+  - `GET /journal/unmatched` now auto-populates reconciliation data on first
+    use so unmatched wallet activity is visible without a prior manual POST
+  - targeted regression:
     `python -m pytest -q tests/test_webapp.py`
     -> **9 passed**
