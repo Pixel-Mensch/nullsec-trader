@@ -1336,7 +1336,7 @@ def compute_candidates(
         profit_at_usable_depth = float(expected_realized_profit_90d)
         profit_at_conservative_executable_price = float(expected_realized_profit_90d)
         if bool(plaus_cfg.get("enabled", True)):
-            exit_levels = dst_buy_lv if instant_flag else dst_sell_lv
+            exit_levels = dst_lv if instant_flag else dst_sell_lv
             reference_anchor_price = float(reference_price_adjusted if reference_price_adjusted > 0.0 else reference_price)
             market_plausibility = assess_market_plausibility(
                 source_levels=src_lv,

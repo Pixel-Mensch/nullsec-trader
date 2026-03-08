@@ -26,6 +26,13 @@
   </ul>
   {% endif %}
 </section>
+{% elif result.exit_code and result.exit_code != 0 %}
+<section class="panel danger">
+  <div class="panel-header">
+    <h3>Runtime failed (exit code {{ result.exit_code }})</h3>
+  </div>
+  <p class="muted">Der Runtime hat mit Fehlercode {{ result.exit_code }} beendet. Details im Log unten.</p>
+</section>
 {% endif %}
 
 <section class="card-grid">
@@ -137,14 +144,31 @@
   {% endfor %}
 </section>
 {% else %}
-<section class="panel">
+<section class="panel {% if result.exit_code and result.exit_code != 0 %}danger{% endif %}">
   <div class="panel-header">
-    <h3>No route cards</h3>
+    <h3>{% if result.exit_code and result.exit_code != 0 %}Run failed — keine Route berechnet{% else %}No route cards{% endif %}</h3>
   </div>
+  {% if result.exit_code and result.exit_code != 0 %}
+  <p class="muted">Der Runtime hat die Analyse nicht abgeschlossen. Haefigste Ursachen: ESI-Token abgelaufen oder falscher Character, kein Zugriff auf Struktur-Marktdaten (HTTP 403), fehlende Konfiguration.</p>
+  <p class="muted">Loesung: <strong>python main.py auth login</strong> im Terminal ausfuehren und mit dem Character einloggen der Docking-Rechte hat.</p>
+  {% else %}
   <p class="muted">This can be normal for snapshot-only runs or no-trade outcomes.</p>
+  {% endif %}
   {% if result.snapshot_path %}
   <p>Snapshot written to {{ result.snapshot_path }}</p>
   {% endif %}
+</section>
+{% endif %}
+
+{% if result.stdout %}
+<section class="panel">
+  <div class="panel-header">
+    <h3>Runtime log</h3>
+  </div>
+  <details {% if result.exit_code and result.exit_code != 0 %}open{% endif %}>
+    <summary>{% if result.exit_code and result.exit_code != 0 %}Fehlerdetails anzeigen{% else %}Vollstaendige Ausgabe{% endif %} ({{ result.stdout | length }} Zeichen)</summary>
+    <pre>{{ result.stdout }}</pre>
+  </details>
 </section>
 {% endif %}
 

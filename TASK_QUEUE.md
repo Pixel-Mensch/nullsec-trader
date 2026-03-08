@@ -308,3 +308,26 @@ full backlog scrape.
   - Prevented the local web dashboard from failing with `sqlite3.OperationalError:
     no such column: reconciliation_status` on pre-migration caches
   - Added a regression test in `tests/test_journal.py` for legacy schema upgrade
+
+### Task 7d: Fix web UI crashes and silent data mismatches
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - Fixed `GET /analysis` returning 500 due to `data.config.risk_profile.name`
+    in `analysis.html`; config dict does not have a `risk_profile` key.
+    Added `default_profile_name` to `get_analysis_form_data()` in
+    `analysis_service.py` and updated the template to use that field.
+  - Fixed `dashboard.html` journal summary stats always showing 0 because
+    template field names (`total_entries`, `open_entries`, `closed_entries`)
+    did not match real service output (`entries_total`, `open_count`,
+    `closed_count`).
+  - Added `try/except (ValueError, TypeError)` guards around
+    `float(cargo_m3_raw)` and `parse_isk(budget_isk_raw)` in
+    `analysis_service.run_analysis()` so invalid user input returns a visible
+    error instead of a 500.
+  - Updated `_analysis_form()` test fixture in `tests/test_webapp.py` to
+    match real service output (added `default_profile_name`, removed fake
+    `config.risk_profile` struct that was masking the crash).
+  - Full suite: **325 passed**; real HTTP check: all routes 200 OK.

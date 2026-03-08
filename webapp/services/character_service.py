@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+
 from character_profile import (
     build_character_context_summary,
     character_status_lines,
@@ -10,6 +13,7 @@ from character_profile import (
 )
 from config_loader import load_config
 from eve_sso import EveSSOAuth
+from runtime_common import TOKEN_PATH
 
 
 def _cfg_with_enabled_character_context(cfg: dict) -> dict:
@@ -59,16 +63,46 @@ def get_character_page(*, action_message: str = "", action_error: str = "") -> d
     }
 
 
+def _all_scopes(cfg: dict) -> list[str]:
+    """Return character scopes + market auth scope merged (deduplicated)."""
+    char_scopes = requested_character_scopes(cfg)
+    market_scope = str((cfg.get("esi", {}) or {}).get("scope", "") or "").strip()
+    seen: set[str] = set()
+    out: list[str] = []
+    for s in char_scopes + ([market_scope] if market_scope else []):
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _sync_market_token(sso_token_path: str) -> None:
+    """Copy the character SSO token to TOKEN_PATH so the runtime uses the same character."""
+    try:
+        if not os.path.exists(sso_token_path):
+            return
+        with open(sso_token_path, encoding="utf-8") as fh:
+            token_data = json.load(fh)
+        os.makedirs(os.path.dirname(TOKEN_PATH), exist_ok=True)
+        with open(TOKEN_PATH, "w", encoding="utf-8") as fh:
+            json.dump(token_data, fh, indent=2)
+    except Exception:
+        pass
+
+
 def run_auth_action(action: str) -> dict:
     cfg = load_config()
     cfg_for_auth = _cfg_with_enabled_character_context(cfg)
     sso = _build_sso(cfg_for_auth)
     if sso is None:
         return get_character_page(action_error="ESI client_id fehlt fuer EVE SSO.")
-    requested_scopes = requested_character_scopes(cfg_for_auth)
     try:
         if str(action or "").strip().lower() == "login":
-            sso.ensure_token(requested_scopes, allow_login=True)
+            all_scopes = _all_scopes(cfg_for_auth)
+            sso.ensure_token(all_scopes, allow_login=True)
+            # Mirror the token to TOKEN_PATH so the runtime uses the same character.
+            char_cfg = resolve_character_context_cfg(cfg_for_auth)
+            _sync_market_token(str(char_cfg.get("token_path", "") or ""))
         return get_character_page(action_message=f"Auth action '{action}' abgeschlossen.")
     except Exception as exc:
         return get_character_page(action_error=f"Auth action fehlgeschlagen: {exc}")

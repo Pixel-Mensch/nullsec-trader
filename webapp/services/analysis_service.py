@@ -1,10 +1,36 @@
 from __future__ import annotations
 
-from risk_profiles import BUILTIN_PROFILES
-from runtime_common import parse_isk
+import base64
+import json
+import os
+
+from risk_profiles import BUILTIN_PROFILES, DEFAULT_PROFILE
+from runtime_common import TOKEN_PATH, parse_isk
 
 from config_loader import load_config, validate_config
 from webapp.services.runtime_bridge import extract_personal_layer_lines, invoke_runtime
+
+
+def _market_auth_info() -> dict:
+    """Read the current market-auth JWT and return the character name and token status."""
+    try:
+        if not os.path.exists(TOKEN_PATH):
+            return {"character_name": "", "token_path": TOKEN_PATH, "has_token": False}
+        with open(TOKEN_PATH, encoding="utf-8") as fh:
+            tok = json.load(fh)
+        access_token = str(tok.get("access_token", "") or "")
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return {"character_name": "", "token_path": TOKEN_PATH, "has_token": bool(access_token)}
+        padded = parts[1] + "=" * (4 - len(parts[1]) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+        return {
+            "character_name": str(payload.get("name", "") or ""),
+            "token_path": TOKEN_PATH,
+            "has_token": True,
+        }
+    except Exception:
+        return {"character_name": "", "token_path": TOKEN_PATH, "has_token": False}
 
 
 def _route_cards(manifest: dict) -> list[dict]:
@@ -50,6 +76,8 @@ def get_analysis_form_data() -> dict:
             for name, spec in BUILTIN_PROFILES.items()
         ],
         "route_mode": str(cfg.get("route_mode", "roundtrip") or "roundtrip"),
+        "default_profile_name": DEFAULT_PROFILE,
+        "market_auth": _market_auth_info(),
     }
 
 
@@ -74,9 +102,23 @@ def run_analysis(
     if snapshot_only:
         argv.append("--snapshot-only")
     if cargo_m3_raw:
-        argv.extend(["--cargo-m3", str(float(cargo_m3_raw))])
+        try:
+            argv.extend(["--cargo-m3", str(float(cargo_m3_raw))])
+        except (ValueError, TypeError):
+            return {
+                "ok": False,
+                "error": f"Ungueltige Cargo-Angabe: '{cargo_m3_raw}'. Bitte eine Zahl eingeben (z.B. 10000).",
+                "form": get_analysis_form_data(),
+            }
     if budget_isk_raw:
-        argv.extend(["--budget-isk", str(parse_isk(str(budget_isk_raw)))])
+        try:
+            argv.extend(["--budget-isk", str(parse_isk(str(budget_isk_raw)))])
+        except (ValueError, TypeError):
+            return {
+                "ok": False,
+                "error": f"Ungueltige Budget-Angabe: '{budget_isk_raw}'. Bitte eine Zahl eingeben (z.B. 500m oder 500000000).",
+                "form": get_analysis_form_data(),
+            }
     profile_name = str(risk_profile or "").strip().lower()
     if profile_name:
         argv.extend(["--profile", profile_name])

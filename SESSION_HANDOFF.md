@@ -1,69 +1,87 @@
 # Session Handoff
 
-Date: 2026-03-08 (session 12 journal schema hotfix)
+Date: 2026-03-08 (session 13 webapp bugfix)
 Branch: `dev`
 
 ## Completed This Session
 
-### Task 7c - Legacy Journal Schema Hotfix For Web UI
+### Full webapp analysis and targeted bugfixes
 
-What changed:
+Performed a complete read-through of all webapp source files, services,
+templates, and tests. Then ran real HTTP checks against the actual service
+layer (not just the monkeypatched test suite) to surface genuine runtime
+failures.
 
-- Reproduced the browser `Internal Server Error` on `/` with a real local cache
-- Root cause was not the template layer; it was
-  `journal_store.initialize_journal_db()` creating the new
-  `idx_journal_entries_reconciliation_status` index before migrating older
-  local `journal_entries` tables
-- Moved index creation behind schema migration:
-  - create tables
-  - add missing journal columns
-  - create indexes only after the required columns exist
-- Added a regression test for a legacy `trade_journal.sqlite3` that lacks the
-  newer reconciliation columns
+**Bug 1 - CRITICAL: GET /analysis returned 500**
+
+- Root cause: `analysis.html` line 69 accessed `data.config.risk_profile.name`
+  but the config dict has no `risk_profile` key. Jinja2 raised `UndefinedError`
+  on every load of the analysis form.
+- Fix A: Added `default_profile_name` (from `risk_profiles.DEFAULT_PROFILE`) to
+  `get_analysis_form_data()` in `webapp/services/analysis_service.py`.
+- Fix B: Updated `analysis.html` to use
+  `{{ data.default_profile_name or "balanced" }}`.
+- Fix C: Updated `_analysis_form()` test fixture in `tests/test_webapp.py` to
+  supply `default_profile_name` and removed the fake `config.risk_profile`
+  struct that was masking the bug.
+
+**Bug 2 - SILENT DATA MISMATCH: Dashboard journal stats always showed 0**
+
+- Root cause: `dashboard.html` used `data.journal_summary.total_entries`,
+  `open_entries`, `closed_entries` but `build_journal_report()` actually
+  returns `entries_total`, `open_count`, `closed_count`.
+- Fix: Updated `dashboard.html` to use the real field names.
+
+**Bug 3 - ROBUSTNESS: No error handling for invalid cargo/budget input**
+
+- `analysis_service.run_analysis()` called `float(cargo_m3_raw)` and
+  `parse_isk(budget_isk_raw)` without guards. A non-numeric user input would
+  propagate as a 500.
+- Fix: Both calls are now wrapped in `try/except (ValueError, TypeError)` that
+  return a clean error dict instead of crashing.
 
 ## Tests
 
-- Targeted regression:
-  - `python -m pytest -q tests/test_journal.py tests/test_webapp.py`
-  - Result: **18 passed**
-- Manual route reproduction check:
-  - `TestClient(create_app()).get("/")`
-  - Result: **200 OK**
-- Full suite after the patch:
-  - `python -m pytest -q`
-  - Result: **325 passed**
+- Targeted: `python -m pytest -q tests/test_webapp.py` -> **7 passed**
+- Full suite: `python -m pytest -q` -> **325 passed**
+- Real HTTP check (no monkeypatch, real service layer): all 15 routes/methods
+  -> **200 OK**
 
 ## Current Assessment
 
-- Existing local journal caches are now safer across schema growth
-- The web dashboard no longer crashes on an older pre-reconciliation journal DB
-- CLI and journal behavior stayed unchanged apart from more robust startup
-  migration
+- All webapp routes are now reachable without errors under real service data.
+- Dashboard journal stats are now correct.
+- Analysis form loads without crashing.
+- Input validation now returns a visible error message instead of 500.
+- Test fixtures now reflect real service contracts (no more hidden
+  `config.risk_profile` stub masking a crash).
 
-## Known Limits
+## Known Limits (unchanged from session 12)
 
 - Full analysis in the web UI still depends on the runtime bridge parsing
-  stdout and artifact files from `runtime_runner.run_cli()`
-- There is no background job queue or persistent run history for browser runs
-- Journal pages currently render the existing formatted text reports inside the
-  UI rather than a richer field-by-field browser table
+  stdout and artifact files from `runtime_runner.run_cli()`.
+- There is no background job queue or persistent run history for browser runs.
+- Journal pages still render formatted text reports rather than per-field
+  browser tables.
+- Character auth login action (`/character/auth/login`) attempts to open a
+  browser for EVE SSO; this is expected local-tool behavior and not a bug.
 
 ## Next Recommended Task
 
-Choose one of these, in this order:
+Choose one of these, in priority order:
 
-- reduce `webapp/services/runtime_bridge.py` dependence on stdout/artifact
-  parsing by carving out a smaller structured runtime API for analysis runs
-- improve the journal web pages from formatted-text views toward richer tables
-  only if that can be done without duplicating journal business logic
-- keep browser output aligned with CLI/runtime warnings as new trading features
+- Task 7b: Reduce `runtime_bridge.py` dependence on stdout/artifact parsing
+  (structured runtime API for analysis runs)
+- Improve journal web pages from text-dump toward per-field tables where that
+  can be done without duplicating journal reporting logic
+- Keep browser output aligned with CLI/runtime warnings as new trading features
   land
 
 ## Relevant Files For The Next Session
 
-- `journal_store.py`
-- `tests/test_journal.py`
-- `webapp/services/dashboard_service.py`
-- `webapp/routes/pages.py`
+- `webapp/services/analysis_service.py`
 - `webapp/services/runtime_bridge.py`
+- `webapp/templates/analysis.html`
+- `webapp/templates/results.html`
+- `webapp/templates/dashboard.html`
 - `tests/test_webapp.py`

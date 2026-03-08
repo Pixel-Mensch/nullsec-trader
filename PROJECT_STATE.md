@@ -127,6 +127,8 @@ Not fully re-audited this session:
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
+- all webapp routes are confirmed reachable (200 OK) under real service data
+  after session 13 bug fixes; `GET /analysis` was previously returning 500
 - local journal initialization now migrates older `trade_journal.sqlite3`
   schemas before creating reconciliation-related indexes, so existing caches do
   not break dashboard or journal pages after schema expansion
@@ -256,8 +258,10 @@ Files that indicate this focus:
   `decision_overall_confidence` value they were designed to consume.
 - The personal decision layer currently scopes only by `exit_type`,
   `target_market`, and `route_id`. It is not a general personal market model.
-- The local web UI is now usable, but its full-run analysis page still depends
-  on CLI-style stdout and artifact contracts exposed by `runtime_runner.py`.
+- The local web UI is now fully reachable on all routes (session 13 fixed
+  `GET /analysis` 500, dashboard stat mismatches, and input parse robustness).
+  Full-run analysis still depends on CLI-style stdout and artifact contracts
+  exposed by `runtime_runner.py`.
 - Legacy local journal databases with missing reconciliation columns are now
   upgraded in place on startup instead of failing during index creation.
 - Matching remains intentionally honest rather than magical: ambiguous

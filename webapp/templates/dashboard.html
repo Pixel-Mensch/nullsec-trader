@@ -28,8 +28,8 @@
   </article>
   <article class="info-card">
     <p class="card-label">Journal</p>
-    <h3>{{ data.journal_summary.total_entries or 0 }} entries</h3>
-    <p class="stat-line">Open {{ data.journal_summary.open_entries or 0 }} / Closed {{ data.journal_summary.closed_entries or 0 }}</p>
+    <h3>{{ data.journal_summary.entries_total or 0 }} entries</h3>
+    <p class="stat-line">Open {{ data.journal_summary.open_count or 0 }} / Closed {{ data.journal_summary.closed_count or 0 }}</p>
     <p class="muted">DB: {{ data.journal_db_path }}</p>
   </article>
   <article class="info-card">

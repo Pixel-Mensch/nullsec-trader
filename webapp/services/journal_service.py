@@ -92,7 +92,11 @@ def run_reconciliation(*, limit: int = 20) -> dict:
     db_path = resolve_journal_db_path(None)
     initialize_journal_db(db_path)
     replay_enabled = bool((cfg.get("replay", {}) if isinstance(cfg.get("replay", {}), dict) else {}).get("enabled", False))
-    context = resolve_character_context(cfg, replay_enabled=replay_enabled)
+    cfg_for_context = dict(cfg)
+    raw_cc = dict(cfg.get("character_context", {}) or {})
+    raw_cc["enabled"] = True
+    cfg_for_context["character_context"] = raw_cc
+    context = resolve_character_context(cfg_for_context, replay_enabled=replay_enabled)
     result = reconcile_journal_with_character_context(db_path, context)
     _LAST_RECONCILIATION_RESULT = dict(result)
     page = get_journal_page("reconcile", limit=limit)

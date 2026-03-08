@@ -1,6 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Analyze | Nullsec Trader Tool{% endblock %}
 {% block content %}
+
+{# ── Loading overlay ── #}
+<div class="run-overlay" id="runOverlay">
+  <div class="run-spinner"></div>
+  <p class="run-overlay-text">Analyse läuft&hellip;</p>
+  <div class="run-progress-bar"><div class="run-progress-fill" id="runProgressFill"></div></div>
+  <p class="run-overlay-sub" id="runOverlaySub">Marktdaten werden abgerufen &mdash; bitte warten</p>
+</div>
+
 <section class="hero-card">
   <div>
     <p class="eyebrow">Route search and execution planning</p>
@@ -22,12 +31,16 @@
 </section>
 {% endif %}
 
+{% if data.market_auth and data.market_auth.has_token and data.market_auth.character_name %}
+  {# check for mismatch with character context #}
+{% endif %}
+
 <section class="split-grid">
   <article class="panel">
     <div class="panel-header">
       <h3>Inputs</h3>
     </div>
-    <form method="post" action="/analysis/run" class="analysis-form">
+    <form method="post" action="/analysis/run" class="analysis-form" id="analysisForm">
       <label>
         <span>Budget (ISK)</span>
         <input type="text" name="budget_isk" value="{{ data.defaults.budget_isk or '' }}" placeholder="e.g. 500m">
@@ -53,7 +66,7 @@
         <input type="checkbox" name="use_replay" value="true" {% if data.replay_enabled %}checked{% endif %}>
         <span>Use replay cache</span>
       </label>
-      <button class="button primary" type="submit">Run analysis</button>
+      <button class="button primary" type="submit" id="runBtn">Run analysis</button>
     </form>
   </article>
 
@@ -66,8 +79,68 @@
       <li>Replay default: {% if data.replay_enabled %}enabled{% else %}disabled{% endif %}</li>
       <li>Configured budget: {{ data.defaults.budget_isk or "-" }}</li>
       <li>Configured cargo: {{ data.defaults.cargo_m3 or "-" }}</li>
-      <li>Default profile: {{ data.config.risk_profile.name or "balanced" }}</li>
+      <li>Default profile: {{ data.default_profile_name or "balanced" }}</li>
+      {% if data.market_auth and data.market_auth.has_token %}
+      <li>Market auth character: <strong>{{ data.market_auth.character_name or "unknown" }}</strong></li>
+      {% else %}
+      <li class="warning-item">Market auth: kein Token &mdash; <code>python main.py auth login</code> im Terminal ausführen</li>
+      {% endif %}
     </ul>
+    {% if data.market_auth and data.market_auth.has_token and data.market_auth.character_name %}
+    <p class="muted" style="margin-top:10px;font-size:0.85rem;">
+      Falsche Person? Im Terminal: <code>python main.py auth login</code> &rarr; mit dem Character einloggen der Docking-Rechte hat.
+    </p>
+    {% endif %}
   </article>
 </section>
+
+<script>
+(function () {
+  var form = document.getElementById('analysisForm');
+  var overlay = document.getElementById('runOverlay');
+  var fill = document.getElementById('runProgressFill');
+  var sub = document.getElementById('runOverlaySub');
+  var btn = document.getElementById('runBtn');
+  if (!form || !overlay) return;
+
+  var messages = [
+    [5,  'Marktdaten werden abgerufen\u2026'],
+    [20, 'Strukturdaten laden\u2026'],
+    [40, 'Routen werden berechnet\u2026'],
+    [60, 'Picks werden bewertet\u2026'],
+    [80, 'Execution Plan wird erstellt\u2026'],
+    [95, 'Ergebnisse werden aufbereitet\u2026'],
+  ];
+  var msgIdx = 0;
+  var pct = 0;
+
+  form.addEventListener('submit', function () {
+    overlay.classList.add('active');
+    btn.disabled = true;
+    fill.style.width = '0%';
+    msgIdx = 0;
+    pct = 0;
+
+    function tick() {
+      if (msgIdx < messages.length) {
+        var target = messages[msgIdx][0];
+        var text   = messages[msgIdx][1];
+        if (pct < target) {
+          pct = Math.min(pct + 1, target);
+          fill.style.width = pct + '%';
+          setTimeout(tick, 120);
+        } else {
+          sub.textContent = text;
+          msgIdx++;
+          setTimeout(tick, 1800);
+        }
+      } else {
+        // keep pulsing at 95% until page replaces
+        setTimeout(tick, 2000);
+      }
+    }
+    tick();
+  });
+})();
+</script>
 {% endblock %}

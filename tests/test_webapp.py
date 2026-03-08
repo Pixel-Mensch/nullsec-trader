@@ -46,7 +46,9 @@ def _analysis_form() -> dict:
         "risk_profiles": [{"name": "balanced", "description": "Default"}],
         "replay_enabled": False,
         "route_mode": "roundtrip",
-        "config": {"risk_profile": {"name": "balanced"}},
+        "default_profile_name": "balanced",
+        "config": {},
+        "market_auth": {"character_name": "Navi Selerith", "has_token": True, "token_path": "cache/token.json"},
     }
 
 

@@ -11,11 +11,22 @@ from journal_reporting import build_journal_report, build_personal_trade_analyti
 from journal_store import fetch_journal_entries, initialize_journal_db, resolve_journal_db_path
 
 
+def _cfg_with_cache_enabled(cfg: dict) -> dict:
+    """Force character_context.enabled=True so the dashboard can read cached data
+    even when the user has disabled live character sync in config."""
+    out = dict(cfg or {})
+    raw = dict(out.get("character_context", {}) or {})
+    raw["enabled"] = True
+    out["character_context"] = raw
+    return out
+
+
 def get_dashboard_data() -> dict:
     cfg = load_config()
     validation = validate_config(cfg)
     replay_enabled = bool((cfg.get("replay", {}) if isinstance(cfg.get("replay", {}), dict) else {}).get("enabled", False))
-    context = resolve_character_context(cfg, replay_enabled=replay_enabled, allow_live=False)
+    cfg_for_context = _cfg_with_cache_enabled(cfg)
+    context = resolve_character_context(cfg_for_context, replay_enabled=replay_enabled, allow_live=False)
     character_summary = build_character_context_summary(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0)))
     db_path = resolve_journal_db_path(None)
     initialize_journal_db(db_path)
