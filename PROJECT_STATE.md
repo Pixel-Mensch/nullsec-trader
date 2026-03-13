@@ -183,6 +183,11 @@ Not fully re-audited this session:
   market-plausibility seam: fragile book structure, weak profit retention after
   repricing, and manipulation-heavy setups can now hard-reject a candidate even
   when paper profit still looks attractive
+- replay-guided calibration on 2026-03-13 softened only the generic
+  `DEPTH_COLLAPSE` / `ORDERBOOK_CONCENTRATION` quality penalties and the
+  candidate-stage confidence haircut, so robust survivors with decent
+  retention can remain actionable without re-admitting fake-spread /
+  unusable-depth bait
 - `instant` candidates no longer recover artificially high overall confidence
   after the market-quality haircut; route-level confidence now also caps itself
   by the average pick market quality instead of only fill/transport confidence
@@ -270,6 +275,7 @@ centered on:
 
 - hard pick-level profile enforcement and explainable prune reasons
 - route-ranking adjustments by profile
+- replay-based calibration of market-quality and anti-bait thresholds
 - execution-plan and summary-output restructuring with honest
   aggregate-vs-actionable / sequential-leg semantics
 - CLI/runtime integration for profile-aware output
@@ -319,6 +325,17 @@ Files that indicate this focus:
 - Route-profile, chain, roundtrip, leaderboard, and no-trade text outputs now
   share the same honest aggregate semantics and preserve internal-route floor
   messaging, but browser/UI surfaces were not re-audited in this session.
+- replay calibration used the focused O4T/Jita fixture plus a narrow
+  `replay_snapshot.json` route search. Those checks confirmed that prior bait
+  picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage
+  Control`, `Heavy Gremlin Compact Energy Neutralizer`, and `Drone
+  Mutaplasmid Residue` stayed out, while robust survivors like
+  `Polarized Heavy Neutron Blaster` and `Noise-25 'Needlejack' Filament`
+  regained stronger actionable labeling.
+- route confidence can still be pulled down by a weak optional pick because
+  `route_search.py` intentionally caps by average pick market quality across
+  the whole selected route mix. That behavior was left unchanged in this
+  session.
 - `route_search.py` speculative penalty was re-reviewed on 2026-03-07. The
   small planned-share term still looks like a separate route-composition risk
   heuristic, not a confirmed double-counting defect, so no change was made.

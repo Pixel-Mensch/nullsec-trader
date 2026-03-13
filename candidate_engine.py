@@ -1390,7 +1390,10 @@ def compute_candidates(
                 float(expected_realized_profit_90d) / max(1.0, float(max_units) * float(unit_vol))
             ) if unit_vol > 0 else 0.0
             expected_profit_per_m3_90d = float(expected_realized_profit_per_m3_90d)
-            quality_conf_penalty = max(0.25, float(market_quality_score))
+            # market_quality_score already caps final candidate confidence; keep a softer
+            # haircut here so robust books with only generic structural warnings do not
+            # get double-penalized into non-actionable territory.
+            quality_conf_penalty = max(0.50, 0.50 + (0.50 * float(market_quality_score)))
             liquidity_confidence = min(
                 float(liquidity_confidence),
                 float(liquidity_confidence) * quality_conf_penalty if liquidity_confidence > 0.0 else quality_conf_penalty,

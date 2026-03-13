@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-13 (session 22 market-quality tightening)
+Last updated: 2026-03-13 (session 23 replay quality calibration)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -56,6 +56,34 @@ full backlog scrape.
   - focused regression:
     `pytest -q tests/test_core.py tests/test_portfolio.py tests/test_execution_plan.py tests/test_route_search.py tests/test_explainability.py tests/test_no_trade.py tests/test_runtime_reports.py`
     -> **163 passed**
+
+### Task 0d: Calibrate market-quality thresholds against replay artifacts
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `market_plausibility.py`, `candidate_engine.py`,
+  `tests/test_core.py`, `tests/test_execution_plan.py`,
+  `tests/test_route_search.py`, `tests/test_integration.py`
+- What was done:
+  - audited the tightened quality logic against the focused
+    `replay_live_focused_o4t_jita_20260308.json` fixture and a narrow
+    `replay_snapshot.json` route-search run instead of adding new heuristics
+  - replay evidence showed robust survivors with only generic structural flags
+    were being double-penalized: once inside `market_quality_score`, then again
+    when candidate liquidity/exit confidence was multiplied by that score
+  - softened only the generic `DEPTH_COLLAPSE` and
+    `ORDERBOOK_CONCENTRATION` multipliers and replaced the direct
+    `quality_conf_penalty = market_quality_score` coupling with a softer blend
+  - kept thin-top, unusable-depth, and fake-spread penalties unchanged so the
+    fragile bait cases stayed rejected
+  - updated the focused replay regression fixture expectation to the new stable
+    pick set (`Noise-25 'Needlejack' Filament`,
+    `Polarized Heavy Neutron Blaster`) and added coverage for robust
+    depth-collapse books plus healthy route-confidence capping
+  - focused regression:
+    `pytest -q tests/test_core.py tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py`
+    -> **132 passed**
 
 ### Task 1: Verify and stabilize risk-profile integration
 

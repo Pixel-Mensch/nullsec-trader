@@ -129,9 +129,9 @@ def market_quality_score_from_metrics(metrics: object) -> float:
     if "UNUSABLE_DEPTH" in flags:
         quality_score *= 0.88
     if "DEPTH_COLLAPSE" in flags:
-        quality_score *= 0.90
+        quality_score *= 0.95
     if "ORDERBOOK_CONCENTRATION" in flags:
-        quality_score *= 0.92
+        quality_score *= 0.96
     if "FAKE_SPREAD_RISK" in flags:
         quality_score *= 0.85
     return _clamp01(quality_score)

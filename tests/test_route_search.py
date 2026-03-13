@@ -205,6 +205,27 @@ def test_route_summary_confidence_is_capped_by_pick_market_quality() -> None:
     assert abs(float(summary["market_quality_factor"]) - 0.46) < 1e-9
     assert abs(float(summary["route_confidence"]) - 0.46) < 1e-9
 
+
+def test_route_summary_keeps_healthy_market_quality_routes_actionable() -> None:
+    route = {
+        "route_label": "A->B",
+        "picks": [
+            {
+                "expected_realized_profit_90d": 12_000_000.0,
+                "decision_overall_confidence": 0.86,
+                "overall_confidence": 0.86,
+                "expected_days_to_sell": 1.5,
+                "market_quality_score": 0.77,
+            }
+        ],
+        "cost_model_confidence": "high",
+    }
+
+    summary = summarize_route_for_ranking(route)
+    assert abs(float(summary["market_quality_factor"]) - 0.77) < 1e-9
+    assert abs(float(summary["route_confidence"]) - 0.77) < 1e-9
+    assert bool(summary["actionable"]) is True
+
 def test_route_leaderboard_top_n_sorted() -> None:
     routes = [
         {"route_label": "A->B", "source_label": "A", "dest_label": "B", "shipping_provider": "ITL", "profit_total": 10_000_000.0, "isk_used": 50_000_000.0, "m3_used": 1000.0, "net_revenue_total": 60_000_000.0, "total_fees_taxes": 1_000_000.0, "total_route_cost": 500_000.0, "shipping_cost_total": 200_000.0, "items_count": 3, "budget_util_pct": 50.0, "cargo_util_pct": 20.0, "picks": [{"profit": 6_500_000.0}, {"profit": 2_000_000.0}, {"profit": 1_500_000.0}]},

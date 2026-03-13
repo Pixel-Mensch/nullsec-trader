@@ -186,6 +186,10 @@ Trade quality now has one central seam instead of separate ad-hoc penalties:
   labeling
 - `route_search.py` caps displayed `route_confidence` by average pick market
   quality so downstream leaderboard / no-trade artifacts stay aligned
+- replay-guided calibration on 2026-03-13 kept that seam intact but softened
+  only two generic structural penalties (`DEPTH_COLLAPSE`,
+  `ORDERBOOK_CONCENTRATION`) and the candidate-stage quality confidence
+  haircut; fake-spread / thin-top / unusable-depth gates were left unchanged
 
 Volume validity is now intentionally conservative across the runtime path:
 
@@ -257,9 +261,11 @@ the repository dynamically.
 
 ## Current Hotspots
 
-Most recent focused work on 2026-03-07 touched:
+Most recent focused work on 2026-03-13 touched:
 
 - risk profiles and profile-aware ranking/output
+- replay-based market-quality calibration against focused execution-plan and
+  top-candidate artifacts
 - execution-plan presentation
 - optional private character context via EVE SSO / ESI
 - wallet-to-journal reconciliation and personal trade-history reporting

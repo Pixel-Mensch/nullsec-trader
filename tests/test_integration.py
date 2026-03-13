@@ -338,7 +338,7 @@ def test_replay_live_focused_fixture_keeps_real_pick_set() -> None:
     assert "Replay-Mode aktiv." in proc.stdout
     assert manifest["runtime_mode"] == "route_profiles"
     assert int(manifest["route_count"]) == 2
-    assert int(manifest["pick_count"]) == 3
+    assert int(manifest["pick_count"]) == 2
     route_labels = [str(route.get("route_label", "")) for route in manifest["routes"]]
     assert route_labels == ["jita_44 -> o4t", "o4t -> jita_44"]
     actionable = [route for route in manifest["routes"] if bool(route.get("actionable", False))]
@@ -346,7 +346,6 @@ def test_replay_live_focused_fixture_keeps_real_pick_set() -> None:
     pick_names = [str(pick.get("item_name", "")) for pick in actionable[0].get("picks", [])]
     assert pick_names == [
         "Noise-25 'Needlejack' Filament",
-        "Large Warhead Calefaction Catalyst II",
         "Polarized Heavy Neutron Blaster",
     ]
     assert all(float(pick.get("proposed_sell_price", 0.0) or 0.0) > 0.0 for pick in actionable[0].get("picks", []))

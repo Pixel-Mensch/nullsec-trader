@@ -233,6 +233,20 @@ class TestCategorizePick:
         )
         assert _categorize_pick(p) == _CAT_SPECULATIVE
 
+    def test_robust_instant_pick_with_generic_structure_warnings_stays_mandatory(self):
+        p = _instant_pick(
+            overall_confidence=0.76,
+            liquidity_confidence=0.80,
+            exit_confidence=0.80,
+            market_plausibility_score=0.85,
+            market_quality_score=0.77,
+            manipulation_risk_score=0.14,
+            profit_at_top_of_book=1_000_000.0,
+            profit_at_conservative_executable_price=820_000.0,
+            profit_retention_ratio=0.82,
+        )
+        assert _categorize_pick(p) == _CAT_MANDATORY
+
 
 # ---------------------------------------------------------------------------
 # Test _is_price_sensitive
