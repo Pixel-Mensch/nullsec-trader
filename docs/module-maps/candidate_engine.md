@@ -9,6 +9,8 @@ and route-wide candidate scoring. This map is based on a targeted audit.
 
 - owns candidate creation and filtering
 - owns planned-sell price and liquidity heuristics
+- owns candidate-stage anti-bait market-quality enforcement via
+  `market_plausibility.py`
 - applies strategy/profile-aware filter tightening at candidate time
 - computes route-wide candidate score adjustments
 
@@ -38,6 +40,8 @@ and route-wide candidate scoring. This map is based on a targeted audit.
 - `compute_route_wide_candidates_for_source()`
 - `apply_strategy_filters()`
 - `_route_adjusted_candidate_score()`
+- market-quality fields carried forward on `TradeCandidate`:
+  `market_quality_score`, `profit_retention_ratio`
 
 ## Depends On
 
@@ -67,7 +71,8 @@ and route-wide candidate scoring. This map is based on a targeted audit.
 
 - threshold changes can materially change trade output
 - planned-sell logic mixes pricing, liquidity, and confidence assumptions
-- easy to break explainability when adding new gates
+- easy to break explainability or downstream mandatory/optional semantics when
+  adding new gates
 - shipping and reference-price assumptions affect viability
 
 ## Tests

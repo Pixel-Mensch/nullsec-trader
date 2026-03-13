@@ -179,6 +179,20 @@ Not fully re-audited this session:
   `run_route_wide_leg()`: pick-level expected profit, profit density,
   confidence, and max-budget-share rules are enforced after final transport and
   calibration data exist
+- candidate quality is now gated more conservatively through the existing
+  market-plausibility seam: fragile book structure, weak profit retention after
+  repricing, and manipulation-heavy setups can now hard-reject a candidate even
+  when paper profit still looks attractive
+- `instant` candidates no longer recover artificially high overall confidence
+  after the market-quality haircut; route-level confidence now also caps itself
+  by the average pick market quality instead of only fill/transport confidence
+- final pick selection now uses the same quality-aware scoring seam in
+  portfolio ranking, local search, and cargo fill, so thin-book or
+  price-sensitive candidates are less likely to re-enter as final picks after
+  surviving initial generation
+- `mandatory` pick labeling is now stricter for instant exits: price-sensitive
+  or low market-quality picks are downgraded to optional/speculative instead of
+  being presented as first-buy convictions
 - cargo-fill picks can no longer bypass the visible profile
   `Max Budget/Item`; profile application now clamps cargo-fill share caps to
   the same effective item-share limit shown in the output

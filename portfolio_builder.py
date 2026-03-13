@@ -3,6 +3,7 @@ from __future__ import annotations
 from confidence_calibration import apply_calibration_to_record, apply_personal_history_to_record
 from explainability import build_pick_score_breakdown, ensure_record_explainability
 from fee_engine import FeeEngine
+from market_plausibility import market_quality_gate_from_metrics, market_quality_score_from_metrics
 from models import TradeCandidate
 from candidate_engine import compute_candidates
 from scoring import apply_strategy_mode
@@ -301,9 +302,28 @@ def _portfolio_objective(picks: list[dict], budget_isk: float, portfolio_cfg: di
     return float(total_expected) - float(concentration_penalty * 0.25) - float(liquidity_penalty)
 
 
+def _portfolio_selection_objective(picks: list[dict], budget_isk: float, portfolio_cfg: dict) -> float:
+    base_score = _portfolio_objective(picks, budget_isk, portfolio_cfg)
+    if not picks:
+        return base_score
+    max_liq_days = float(portfolio_cfg.get("max_liquidation_days_per_position", 99999.0))
+    raw_expected = _portfolio_expected_realized_profit(picks)
+    quality_adjusted_total = sum(_candidate_selection_score(p, max_liq_days) for p in picks)
+    return float(base_score - raw_expected + quality_adjusted_total)
+
+
 def _candidate_selection_score(c, max_liq_days: float) -> float:
     score, _ = build_pick_score_breakdown(c, max_liq_days=float(max_liq_days))
     return float(score)
+
+
+def _candidate_market_quality(c) -> float:
+    return float(market_quality_score_from_metrics(c))
+
+
+def _candidate_fails_market_quality(c) -> bool:
+    reject, _ = market_quality_gate_from_metrics(c)
+    return bool(reject)
 
 
 def portfolio_stats(picks: list[dict]) -> tuple[float, float, float, dict]:
@@ -360,12 +380,14 @@ def local_search_optimize(
     if not initial or not candidates:
         return initial
     best = list(initial)
-    best_score = _portfolio_objective(best, budget_isk, portfolio_cfg)
+    best_score = _portfolio_selection_objective(best, budget_isk, portfolio_cfg)
     top_k = 50
+    max_liq_days = float(portfolio_cfg.get("max_liquidation_days_per_position", 99999.0))
     sorted_cands = sorted(
-        candidates,
+        [c for c in candidates if not _candidate_fails_market_quality(c)],
         key=lambda c: (
-            float(c.get("expected_realized_profit_90d", c.get("expected_profit_90d", c.get("profit", 0.0))) or 0.0),
+            _candidate_selection_score(c, max_liq_days),
+            _candidate_market_quality(c),
             _candidate_confidence(c),
         ),
         reverse=True,
@@ -381,7 +403,7 @@ def local_search_optimize(
                 trial = best[:i] + [new_cand] + best[i + 1:]
                 if not validate_portfolio(trial, budget_isk, cargo_m3, portfolio_cfg):
                     continue
-                trial_score = _portfolio_objective(trial, budget_isk, portfolio_cfg)
+                trial_score = _portfolio_selection_objective(trial, budget_isk, portfolio_cfg)
                 if trial_score > best_score + 1e-6:
                     best = trial
                     picked_type_ids = {p["type_id"] for p in best}
@@ -423,6 +445,7 @@ def _sort_candidates_for_cargo_fill(candidates: list[TradeCandidate], ranking_me
             candidates,
             key=lambda c: (
                 hybrid_score(c),
+                _candidate_market_quality(c),
                 float(getattr(c, "profit_per_m3_per_day", 0.0)),
                 float(getattr(c, "profit_pct", 0.0))
             ),
@@ -434,6 +457,7 @@ def _sort_candidates_for_cargo_fill(candidates: list[TradeCandidate], ranking_me
             key=lambda c: (
                 float(getattr(c, "expected_realized_profit_per_m3_90d", getattr(c, "expected_profit_per_m3_90d", 0.0))),
                 float(getattr(c, "expected_realized_profit_90d", getattr(c, "expected_profit_90d", 0.0))),
+                _candidate_market_quality(c),
                 _candidate_confidence(c),
                 -float(getattr(c, "expected_days_to_sell", 0.0)),
                 -float(getattr(c, "risk_score", 0.0))
@@ -443,16 +467,27 @@ def _sort_candidates_for_cargo_fill(candidates: list[TradeCandidate], ranking_me
     if metric == "profit":
         return sorted(
             candidates,
-            key=lambda c: float(getattr(c, "profit_per_unit", 0.0)) * float(getattr(c, "max_units", 0)),
+            key=lambda c: (
+                float(getattr(c, "profit_per_unit", 0.0)) * float(getattr(c, "max_units", 0)),
+                _candidate_market_quality(c),
+            ),
             reverse=True
         )
     if metric == "profit_per_m3":
-        return sorted(candidates, key=lambda c: float(getattr(c, "profit_per_m3", 0.0)), reverse=True)
+        return sorted(
+            candidates,
+            key=lambda c: (
+                float(getattr(c, "profit_per_m3", 0.0)),
+                _candidate_market_quality(c),
+            ),
+            reverse=True,
+        )
     # Cargo fill default: prioritize dense and liquid picks.
     return sorted(
         candidates,
         key=lambda c: (
             float(getattr(c, "profit_per_m3_per_day", 0.0)),
+            _candidate_market_quality(c),
             float(getattr(c, "profit_per_m3", 0.0)),
             float(getattr(c, "sell_through_ratio_90d", 0.0)),
             -float(getattr(c, "risk_score", 0.0)),
@@ -528,6 +563,8 @@ def try_cargo_fill(
     for c in sorted_fill_pool:
         if remaining_budget <= 1e-6 or remaining_cargo <= 1e-6:
             break
+        if _candidate_fails_market_quality(c):
+            continue
         projected_util = (total_m3 / max(1e-9, float(cargo_m3))) if float(cargo_m3) > 0 else 1.0
         if projected_util >= max(0.0, min(1.0, cargo_fill_stop_util)):
             break
@@ -704,8 +741,14 @@ def try_cargo_fill(
             existing_pick["market_plausibility_score"] = float(
                 min(float(existing_pick.get("market_plausibility_score", 1.0)), float(getattr(c, "market_plausibility_score", 1.0)))
             )
+            existing_pick["market_quality_score"] = float(
+                min(float(existing_pick.get("market_quality_score", 1.0)), float(getattr(c, "market_quality_score", _candidate_market_quality(c))))
+            )
             existing_pick["manipulation_risk_score"] = float(
                 max(float(existing_pick.get("manipulation_risk_score", 0.0)), float(getattr(c, "manipulation_risk_score", 0.0)))
+            )
+            existing_pick["profit_retention_ratio"] = float(
+                min(float(existing_pick.get("profit_retention_ratio", 1.0)), float(getattr(c, "profit_retention_ratio", 1.0)))
             )
             existing_pick["profit_at_top_of_book"] = float(existing_pick.get("profit_at_top_of_book", 0.0)) + (
                 float(getattr(c, "profit_at_top_of_book", float(profit))) * float(scale_ratio or 1.0)
@@ -803,7 +846,9 @@ def try_cargo_fill(
                 "overall_confidence": float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability_after))),
                 "market_plausibility": dict(getattr(c, "market_plausibility", {})),
                 "market_plausibility_score": float(getattr(c, "market_plausibility_score", 1.0)),
+                "market_quality_score": float(getattr(c, "market_quality_score", _candidate_market_quality(c))),
                 "manipulation_risk_score": float(getattr(c, "manipulation_risk_score", 0.0)),
+                "profit_retention_ratio": float(getattr(c, "profit_retention_ratio", 1.0)),
                 "profit_at_top_of_book": float(getattr(c, "profit_at_top_of_book", float(profit))) * float(scale_ratio or 1.0),
                 "profit_at_usable_depth": float(getattr(c, "profit_at_usable_depth", float(profit))) * float(scale_ratio or 1.0),
                 "profit_at_conservative_executable_price": float(
@@ -914,6 +959,8 @@ def build_portfolio(
         for c in ordered_candidates:
             if remaining_budget <= 0 or remaining_cargo <= 0:
                 break
+            if _candidate_fails_market_quality(c):
+                continue
             if _candidate_expected_days(c) > max_liq_days:
                 continue
 
@@ -1034,7 +1081,9 @@ def build_portfolio(
                 "overall_confidence": float(getattr(c, "overall_confidence", getattr(c, "strict_confidence_score", fill_probability))),
                 "market_plausibility": dict(getattr(c, "market_plausibility", {})),
                 "market_plausibility_score": float(getattr(c, "market_plausibility_score", 1.0)),
+                "market_quality_score": float(getattr(c, "market_quality_score", _candidate_market_quality(c))),
                 "manipulation_risk_score": float(getattr(c, "manipulation_risk_score", 0.0)),
+                "profit_retention_ratio": float(getattr(c, "profit_retention_ratio", 1.0)),
                 "profit_at_top_of_book": float(getattr(c, "profit_at_top_of_book", float(profit))) * float(scale_ratio or 1.0),
                 "profit_at_usable_depth": float(getattr(c, "profit_at_usable_depth", float(profit))) * float(scale_ratio or 1.0),
                 "profit_at_conservative_executable_price": float(
@@ -1180,7 +1229,9 @@ def build_portfolio(
             'overall_confidence': getattr(c, 'overall_confidence', c.get('overall_confidence', 0.0) if isinstance(c, dict) else 0.0),
             'market_plausibility': dict(getattr(c, 'market_plausibility', c.get('market_plausibility', {}) if isinstance(c, dict) else {})),
             'market_plausibility_score': getattr(c, 'market_plausibility_score', c.get('market_plausibility_score', 1.0) if isinstance(c, dict) else 1.0),
+            'market_quality_score': getattr(c, 'market_quality_score', c.get('market_quality_score', _candidate_market_quality(c)) if isinstance(c, dict) else _candidate_market_quality(c)),
             'manipulation_risk_score': getattr(c, 'manipulation_risk_score', c.get('manipulation_risk_score', 0.0) if isinstance(c, dict) else 0.0),
+            'profit_retention_ratio': getattr(c, 'profit_retention_ratio', c.get('profit_retention_ratio', 1.0) if isinstance(c, dict) else 1.0),
             'profit_at_top_of_book': getattr(c, 'profit_at_top_of_book', c.get('profit_at_top_of_book', profit) if isinstance(c, dict) else profit),
             'profit_at_usable_depth': getattr(c, 'profit_at_usable_depth', c.get('profit_at_usable_depth', profit) if isinstance(c, dict) else profit),
             'profit_at_conservative_executable_price': getattr(c, 'profit_at_conservative_executable_price', c.get('profit_at_conservative_executable_price', profit) if isinstance(c, dict) else profit),
@@ -1218,7 +1269,7 @@ def build_portfolio(
     optimized = local_search_optimize(picks, candidate_dicts, budget_isk, cargo_m3, portfolio_cfg)
     if optimized is not picks:
         opt_cost, opt_profit, opt_m3, _ = portfolio_stats(optimized)
-        if _portfolio_objective(optimized, budget_isk, portfolio_cfg) > _portfolio_objective(picks, budget_isk, portfolio_cfg) + 1e-6:
+        if _portfolio_selection_objective(optimized, budget_isk, portfolio_cfg) > _portfolio_selection_objective(picks, budget_isk, portfolio_cfg) + 1e-6:
             picks = optimized
             total_cost = opt_cost
             total_profit = opt_profit
@@ -1252,7 +1303,7 @@ def choose_portfolio_for_route(
         p, c, pr, m, md = all_p, all_c, all_pr, all_m, ("mixed" if len(inst) != len(cands) else "fallback")
         if inst and len(inst) != len(cands):
             inst_p, inst_c, inst_pr, inst_m = build_portfolio(inst, budget_isk, cargo_m3, fees, f_used, port_cfg, cfg)
-            if _portfolio_objective(inst_p, budget_isk, port_cfg) >= _portfolio_objective(all_p, budget_isk, port_cfg):
+            if _portfolio_selection_objective(inst_p, budget_isk, port_cfg) >= _portfolio_selection_objective(all_p, budget_isk, port_cfg):
                 p, c, pr, m, md = inst_p, inst_c, inst_pr, inst_m, "instant"
         p.sort(
             key=lambda x: (

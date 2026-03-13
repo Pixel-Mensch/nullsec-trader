@@ -1,6 +1,7 @@
 """Route Search tests."""
 
 from tests.shared import *  # noqa: F401,F403
+from route_search import summarize_route_for_ranking
 
 def test_build_adjacent_pairs_forward() -> None:
     chain_nodes = [
@@ -183,6 +184,26 @@ def test_route_search_prefers_allowed_pair_alias_for_deduped_node() -> None:
     profiles = nst.build_route_search_profiles(node_catalog, cfg)
     pairs = {(p["from"], p["to"]) for p in profiles}
     assert pairs == {("A Alias", "B")}
+
+
+def test_route_summary_confidence_is_capped_by_pick_market_quality() -> None:
+    route = {
+        "route_label": "A->B",
+        "picks": [
+            {
+                "expected_realized_profit_90d": 10_000_000.0,
+                "decision_overall_confidence": 0.88,
+                "overall_confidence": 0.88,
+                "expected_days_to_sell": 2.0,
+                "market_quality_score": 0.46,
+            }
+        ],
+        "cost_model_confidence": "normal",
+    }
+
+    summary = summarize_route_for_ranking(route)
+    assert abs(float(summary["market_quality_factor"]) - 0.46) < 1e-9
+    assert abs(float(summary["route_confidence"]) - 0.46) < 1e-9
 
 def test_route_leaderboard_top_n_sorted() -> None:
     routes = [

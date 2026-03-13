@@ -54,11 +54,13 @@ def _instant_pick(**kwargs) -> dict:
         "overall_confidence": 0.88,
         "expected_days_to_sell": 0.3,
         "market_plausibility_score": 0.95,
+        "market_quality_score": 0.93,
         "manipulation_risk_score": 0.02,
         "unit_volume": 0.01,
         "order_duration_days": 0,
         "profit_at_top_of_book": 600.0,
         "profit_at_conservative_executable_price": 580.0,
+        "profit_retention_ratio": 0.97,
     }
     base.update(kwargs)
     return base
@@ -82,11 +84,13 @@ def _planned_pick(**kwargs) -> dict:
         "overall_confidence": 0.55,
         "expected_days_to_sell": 20.0,
         "market_plausibility_score": 0.80,
+        "market_quality_score": 0.78,
         "manipulation_risk_score": 0.05,
         "unit_volume": 1.0,
         "order_duration_days": 30,
         "profit_at_top_of_book": 30_000.0,
         "profit_at_conservative_executable_price": 20_000.0,
+        "profit_retention_ratio": 0.67,
     }
     base.update(kwargs)
     return base
@@ -206,6 +210,27 @@ class TestCategorizePick:
 
     def test_planned_sell_just_over_60d_speculative(self):
         p = _planned_pick(overall_confidence=0.55, expected_days_to_sell=60.1)
+        assert _categorize_pick(p) == _CAT_SPECULATIVE
+
+    def test_price_sensitive_instant_pick_is_not_mandatory(self):
+        p = _instant_pick(
+            overall_confidence=0.82,
+            liquidity_confidence=0.82,
+            market_quality_score=0.80,
+            profit_at_top_of_book=1_000_000.0,
+            profit_at_conservative_executable_price=600_000.0,
+            profit_retention_ratio=0.60,
+        )
+        assert _categorize_pick(p) == _CAT_OPTIONAL
+
+    def test_fragile_market_quality_is_speculative_even_if_plausibility_looks_ok(self):
+        p = _instant_pick(
+            overall_confidence=0.82,
+            liquidity_confidence=0.82,
+            market_plausibility_score=0.78,
+            market_quality_score=0.48,
+            manipulation_risk_score=0.42,
+        )
         assert _categorize_pick(p) == _CAT_SPECULATIVE
 
 

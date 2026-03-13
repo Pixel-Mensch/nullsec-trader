@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from market_plausibility import market_quality_score_from_metrics, profit_retention_ratio_from_values
+
 
 REASON_CATALOG: dict[str, str] = {
     "STRONG_EXPECTED_PROFIT": "Konservativer erwarteter Profit ist stark.",
@@ -158,6 +160,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value or 0)
     except Exception:
         return int(default)
+
+
+def _profit_retention_ratio_for_record(record: Any, default_profit: float = 0.0) -> float:
+    computed = profit_retention_ratio_from_values(
+        _safe_float(_record_get(record, "profit_at_top_of_book", default_profit)),
+        _safe_float(_record_get(record, "profit_at_usable_depth", default_profit)),
+        _safe_float(_record_get(record, "profit_at_conservative_executable_price", default_profit)),
+    )
+    raw_value = _record_get(record, "profit_retention_ratio", None)
+    try:
+        parsed = _clamp01(float(raw_value))
+    except Exception:
+        return computed
+    if parsed < 0.999:
+        return parsed
+    if _safe_float(_record_get(record, "profit_at_top_of_book", 0.0)) <= 0.0:
+        return parsed
+    return computed
 
 
 def _fmt_isk_short(value: Any) -> str:
@@ -417,22 +437,25 @@ def build_pick_score_breakdown(record: Any, *, max_liq_days: float) -> tuple[flo
     transport_conf = _clamp01(_safe_float(_record_get(record, "raw_transport_confidence", _record_get(record, "transport_confidence", 1.0))))
     exit_type = str(_record_get(record, "exit_type", "instant") or "instant").strip().lower()
     used_fallback = bool(_record_get(record, "used_volume_fallback", False))
+    market_quality_score = _clamp01(_safe_float(market_quality_score_from_metrics(record)))
     market_plausibility_score = _clamp01(_safe_float(_record_get(record, "market_plausibility_score", 1.0)))
+    manipulation_risk_score = _clamp01(_safe_float(_record_get(record, "manipulation_risk_score", max(0.0, 1.0 - market_plausibility_score))))
+    profit_retention_ratio = _profit_retention_ratio_for_record(record, default_profit=expected_profit)
 
     base_profit_score = expected_profit
     confidence_factor = 0.70 + (0.30 * confidence)
     days_penalty = 1.0 + (expected_days / max(1.0, float(max_liq_days or 1.0))) if max_liq_days > 0 else 1.0
     liquidity_factor = 1.0 / max(1.0, days_penalty)
     transport_factor = 0.90 + (0.10 * transport_conf)
-    market_plausibility_factor = 0.50 + (0.50 * market_plausibility_score)
+    market_quality_factor = 0.25 + (0.75 * market_quality_score)
     stale_market_factor = 0.90 if used_fallback else 1.0
     speculative_factor = 1.0 if exit_type == "instant" else (0.96 if exit_type == "planned" else 0.90)
 
     after_conf = base_profit_score * confidence_factor
     after_liq = after_conf * liquidity_factor
     after_transport = after_liq * transport_factor
-    after_plaus = after_transport * market_plausibility_factor
-    after_stale = after_plaus * stale_market_factor
+    after_quality = after_transport * market_quality_factor
+    after_stale = after_quality * stale_market_factor
     after_spec = after_stale * speculative_factor
     density_bonus = per_m3 * 0.05
     final_score = after_spec + density_bonus
@@ -458,15 +481,18 @@ def build_pick_score_breakdown(record: Any, *, max_liq_days: float) -> tuple[flo
             text=f"Transport-Faktor {transport_factor:.3f} bei Transport-Confidence {transport_conf:.2f}.",
         ),
         build_contributor(
-            "market_plausibility_adjustment",
-            value=market_plausibility_factor,
-            effect=after_plaus - after_transport,
-            text=f"Orderbuch-Plausibilitaetsfaktor {market_plausibility_factor:.3f} bei Score {market_plausibility_score:.2f}.",
+            "market_quality_adjustment",
+            value=market_quality_factor,
+            effect=after_quality - after_transport,
+            text=(
+                f"Market-Quality-Faktor {market_quality_factor:.3f} "
+                f"(quality {market_quality_score:.2f}, retention {profit_retention_ratio:.0%}, manip {manipulation_risk_score:.2f})."
+            ),
         ),
         build_contributor(
             "stale_market_penalty",
             value=stale_market_factor,
-            effect=after_stale - after_plaus,
+            effect=after_stale - after_quality,
             text="Fallback-/History-only-Signal reduziert den Score." if used_fallback else "Kein zusaetzlicher Stale-Market-Abzug.",
         ),
         build_contributor(
@@ -511,6 +537,8 @@ def build_candidate_explainability(record: Any, *, max_liq_days: float | None = 
         market_plausibility = {}
     market_plausibility_score = _clamp01(_safe_float(_record_get(record, "market_plausibility_score", market_plausibility.get("market_plausibility_score", 1.0))))
     manipulation_risk_score = _clamp01(_safe_float(_record_get(record, "manipulation_risk_score", market_plausibility.get("manipulation_risk_score", 0.0))))
+    market_quality_score = _clamp01(_safe_float(market_quality_score_from_metrics(record)))
+    profit_retention_ratio = _profit_retention_ratio_for_record(record, default_profit=expected_profit)
 
     positive_reasons: list[dict] = []
     negative_reasons: list[dict] = []
@@ -566,12 +594,20 @@ def build_candidate_explainability(record: Any, *, max_liq_days: float | None = 
         warnings.append(build_reason_entry("CALIBRATION_WEAK_DATA", text=calibration_warning, severity="warning"))
     if raw_conf - calibrated_conf >= 0.10:
         warnings.append(build_reason_entry("CONFIDENCE_DOWNGRADED", text=f"Kalibrierung senkt Confidence von {raw_conf:.2f} auf {calibrated_conf:.2f}.", severity="warning"))
-    if manipulation_risk_score >= 0.45 or market_plausibility_score <= 0.65:
+    if (
+        manipulation_risk_score >= 0.45
+        or market_plausibility_score <= 0.65
+        or market_quality_score <= 0.60
+        or profit_retention_ratio < 0.70
+    ):
         warnings.append(
             build_reason_entry(
                 "FAKE_SPREAD_RISK" if "FAKE_SPREAD_RISK" in set(market_plausibility.get("flags", []) or []) else "THIN_TOP_OF_BOOK",
                 text=(
-                    f"Market-Plausibility {market_plausibility_score:.2f}, Manipulation-Risk {manipulation_risk_score:.2f}."
+                    f"Market-Plausibility {market_plausibility_score:.2f}, "
+                    f"Market-Quality {market_quality_score:.2f}, "
+                    f"Profit-Retention {profit_retention_ratio:.0%}, "
+                    f"Manipulation-Risk {manipulation_risk_score:.2f}."
                 ),
                 severity="warning",
                 metrics=market_plausibility,

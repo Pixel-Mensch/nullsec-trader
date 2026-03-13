@@ -107,6 +107,10 @@ def _pick_manipulation_risk(p: dict) -> float:
     return float(p.get("manipulation_risk_score", 0.0) or 0.0)
 
 
+def _pick_market_quality(p: dict) -> float:
+    return float(p.get("market_quality_score", p.get("market_plausibility_score", 1.0)) or 1.0)
+
+
 def _categorize_pick(p: dict) -> str:
     """Return _CAT_MANDATORY, _CAT_OPTIONAL, or _CAT_SPECULATIVE for a pick."""
     is_instant = _pick_is_instant(p)
@@ -114,7 +118,9 @@ def _categorize_pick(p: dict) -> str:
     liq_conf = _pick_liquidity_confidence(p)
     exp_days = _pick_expected_days(p)
     plausibility = _pick_plausibility(p)
+    market_quality = _pick_market_quality(p)
     manip_risk = _pick_manipulation_risk(p)
+    price_sensitive = _is_price_sensitive(p)
 
     # SPECULATIVE: low confidence, thin/suspicious market, or very long wait
     if overall_conf < 0.40:
@@ -123,11 +129,22 @@ def _categorize_pick(p: dict) -> str:
         return _CAT_SPECULATIVE
     if plausibility < 0.55:
         return _CAT_SPECULATIVE
+    if market_quality < 0.50:
+        return _CAT_SPECULATIVE
     if manip_risk > 0.50:
+        return _CAT_SPECULATIVE
+    if price_sensitive and (market_quality < 0.65 or manip_risk >= 0.35 or overall_conf < 0.55):
         return _CAT_SPECULATIVE
 
     # MANDATORY: instant exit with solid confidence and liquidity
-    if is_instant and overall_conf >= 0.60 and liq_conf >= 0.60:
+    if (
+        is_instant
+        and overall_conf >= 0.60
+        and liq_conf >= 0.60
+        and market_quality >= 0.72
+        and manip_risk < 0.35
+        and not price_sensitive
+    ):
         return _CAT_MANDATORY
 
     return _CAT_OPTIONAL
@@ -152,6 +169,7 @@ def _pick_action_warnings(p: dict) -> list[str]:
     liq_conf = _pick_liquidity_confidence(p)
     manip = _pick_manipulation_risk(p)
     plaus = _pick_plausibility(p)
+    market_quality = _pick_market_quality(p)
     exp_days = _pick_expected_days(p)
     is_instant = _pick_is_instant(p)
 
@@ -161,6 +179,8 @@ def _pick_action_warnings(p: dict) -> list[str]:
         warnings.append(f"Manipulation risk {manip:.0%} - verify order book")
     if plaus < 0.65:
         warnings.append(f"Low market plausibility {plaus:.2f} - check price history")
+    if market_quality < 0.60:
+        warnings.append(f"Fragile market quality {market_quality:.2f} - edge may depend on thin book conditions")
     if not is_instant and exp_days > 45.0:
         warnings.append(f"Long capital lock - expected {exp_days:.0f}d to sell")
     if _is_price_sensitive(p):
@@ -439,7 +459,9 @@ def _write_pick_block(
         lines.append(f"     Expected Units Sold: {float(p.get('expected_units_sold_90d', 0.0) or 0.0):.2f}")
         lines.append(f"     Expected Units Unsold: {float(p.get('expected_units_unsold_90d', 0.0) or 0.0):.2f}")
         lines.append(f"     market_plausibility_score: {float(p.get('market_plausibility_score', 1.0) or 1.0):.2f}")
+        lines.append(f"     market_quality_score: {float(p.get('market_quality_score', p.get('market_plausibility_score', 1.0)) or 1.0):.2f}")
         lines.append(f"     manipulation_risk_score: {float(p.get('manipulation_risk_score', 0.0) or 0.0):.2f}")
+        lines.append(f"     profit_retention_ratio: {float(p.get('profit_retention_ratio', 1.0) or 1.0):.2f}")
         lines.append(f"     profit_at_top_of_book: {fmt_isk_de(float(p.get('profit_at_top_of_book', p.get('profit', 0.0)) or 0.0))}")
         lines.append(
             f"     profit_at_conservative_executable_price: "

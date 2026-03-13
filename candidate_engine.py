@@ -3,7 +3,11 @@ import math
 from typing import Any
 
 from explainability import ensure_record_explainability, normalize_reason_entry
-from market_plausibility import assess_market_plausibility, resolve_market_plausibility_cfg
+from market_plausibility import (
+    assess_market_plausibility,
+    market_quality_score_from_metrics,
+    resolve_market_plausibility_cfg,
+)
 from models import OrderLevel, TradeCandidate
 from fees import compute_trade_financials
 from location_utils import normalize_location_label
@@ -1339,7 +1343,9 @@ def compute_candidates(
                 continue
         market_plausibility = {}
         market_plausibility_score = 1.0
+        market_quality_score = 1.0
         manipulation_risk_score = 0.0
+        profit_retention_ratio = 1.0
         profit_at_top_of_book = float(gross_profit_if_full_sell)
         profit_at_usable_depth = float(expected_realized_profit_90d)
         profit_at_conservative_executable_price = float(expected_realized_profit_90d)
@@ -1369,6 +1375,10 @@ def compute_candidates(
             ) - float(estimated_transport_cost)
             manipulation_risk_score = float(market_plausibility.get("manipulation_risk_score", 0.0) or 0.0)
             market_plausibility_score = float(market_plausibility.get("market_plausibility_score", 1.0) or 1.0)
+            profit_retention_ratio = float(market_plausibility.get("profit_retention_ratio", 1.0) or 1.0)
+            market_quality_score = float(
+                market_plausibility.get("market_quality_score", market_quality_score_from_metrics(market_plausibility)) or 0.0
+            )
             conservative_expected_profit = min(
                 float(expected_realized_profit_90d),
                 float(profit_at_usable_depth),
@@ -1380,13 +1390,29 @@ def compute_candidates(
                 float(expected_realized_profit_90d) / max(1.0, float(max_units) * float(unit_vol))
             ) if unit_vol > 0 else 0.0
             expected_profit_per_m3_90d = float(expected_realized_profit_per_m3_90d)
-            plaus_conf_penalty = max(0.35, float(market_plausibility_score))
-            liquidity_confidence = min(float(liquidity_confidence), float(liquidity_confidence) * plaus_conf_penalty if liquidity_confidence > 0.0 else plaus_conf_penalty)
-            exit_confidence = min(float(exit_confidence), float(exit_confidence) * plaus_conf_penalty if exit_confidence > 0.0 else plaus_conf_penalty)
-            overall_confidence = min(float(overall_confidence), float(market_plausibility_score), float(liquidity_confidence), float(exit_confidence))
+            quality_conf_penalty = max(0.25, float(market_quality_score))
+            liquidity_confidence = min(
+                float(liquidity_confidence),
+                float(liquidity_confidence) * quality_conf_penalty if liquidity_confidence > 0.0 else quality_conf_penalty,
+            )
+            exit_confidence = min(
+                float(exit_confidence),
+                float(exit_confidence) * quality_conf_penalty if exit_confidence > 0.0 else quality_conf_penalty,
+            )
+            overall_confidence = min(
+                float(overall_confidence),
+                float(market_plausibility_score),
+                float(market_quality_score),
+                float(liquidity_confidence),
+                float(exit_confidence),
+            )
             risk_score = max(float(risk_score), float(manipulation_risk_score))
-            if bool(market_plausibility.get("hard_reject", False)):
-                primary_reason = str(market_plausibility.get("primary_reason", "") or "fake_spread_risk").strip().lower()
+            if bool(market_plausibility.get("hard_reject", False)) or bool(market_plausibility.get("quality_gate_reject", False)):
+                primary_reason = str(
+                    market_plausibility.get("quality_gate_reason", "")
+                    or market_plausibility.get("primary_reason", "")
+                    or "fake_spread_risk"
+                ).strip().lower()
                 reject_metrics = dict(market_plausibility)
                 reject_metrics["estimated_transport_cost"] = float(estimated_transport_cost)
                 reject_metrics["expected_realized_profit_90d"] = float(expected_realized_profit_90d)
@@ -1434,7 +1460,7 @@ def compute_candidates(
             # Use min() to stay conservative - max() would inflate confidence above fill_probability.
             liquidity_confidence = min(liquidity_confidence, _clamp01(float(fill_probability))) if liquidity_confidence > 0.0 else _clamp01(float(fill_probability))
             exit_confidence = min(exit_confidence, liquidity_confidence) if exit_confidence > 0.0 else liquidity_confidence
-            overall_confidence = min(exit_confidence, liquidity_confidence)
+            overall_confidence = min(exit_confidence, liquidity_confidence, float(market_quality_score))
             strict_confidence_score = _clamp01(float(overall_confidence if overall_confidence > 0.0 else fill_probability))
 
         if mode in ("fast_sell", "planned_sell"):
@@ -1490,7 +1516,9 @@ def compute_candidates(
                 overall_confidence=float(overall_confidence if overall_confidence > 0.0 else strict_confidence_score),
                 market_plausibility=dict(market_plausibility),
                 market_plausibility_score=float(market_plausibility_score),
+                market_quality_score=float(market_quality_score),
                 manipulation_risk_score=float(manipulation_risk_score),
+                profit_retention_ratio=float(profit_retention_ratio),
                 profit_at_top_of_book=float(profit_at_top_of_book),
                 profit_at_usable_depth=float(profit_at_usable_depth),
                 profit_at_conservative_executable_price=float(profit_at_conservative_executable_price),
@@ -1661,13 +1689,13 @@ def _route_adjusted_candidate_score(c: "TradeCandidate", hop_count: int, scan_cf
     liquidity_conf = max(0.0, min(1.0, float(getattr(c, "liquidity_confidence", fill_prob))))
     exit_conf = max(0.0, min(1.0, float(getattr(c, "exit_confidence", fill_prob))))
     liquidity = max(0.0, min(1.0, 0.35 * fill_prob + 0.25 * instant_ratio + 0.20 * liquidity_conf + 0.20 * exit_conf))
-    plaus = max(
+    market_quality = max(
         0.0,
         min(
             1.0,
             float(
                 min(
-                    getattr(c, "market_plausibility_score", 1.0),
+                    market_quality_score_from_metrics(c),
                     1.0 - float(getattr(c, "reference_price_penalty", 0.0)),
                 )
             ),
@@ -1689,7 +1717,7 @@ def _route_adjusted_candidate_score(c: "TradeCandidate", hop_count: int, scan_cf
         + (w_margin / w_sum) * margin_sig
         + (w_abs / w_sum) * abs_sig
         + (w_liq / w_sum) * liquidity
-        + (w_plaus / w_sum) * plaus
+        + (w_plaus / w_sum) * market_quality
     )
     return max(0.0, score01 * penalty_factor)
 

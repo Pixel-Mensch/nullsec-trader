@@ -65,9 +65,12 @@ Use this section to avoid loading large unrelated modules.
   `journal_store.py`
 - Candidate generation, planned-sell math, route-wide candidate scoring:
   `candidate_engine.py`
-- Market plausibility heuristics: `market_plausibility.py`
-- Route ranking and route summary scoring: `route_search.py`
-- Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
+- Market plausibility heuristics plus anti-bait market-quality gate:
+  `market_plausibility.py`
+- Route ranking and route summary scoring, including market-quality confidence
+  cap: `route_search.py`
+- Portfolio construction, liquidation gating, cargo fill, and local-search
+  selection objective: `portfolio_builder.py`
 - Shipping costs, route blocking, and transport context: `shipping.py`
 - Fee calculations: `fees.py`, `fee_engine.py`
 - Human-readable output, route plan rendering, route leaderboard, and no-trade
@@ -170,6 +173,19 @@ transport and confidence calibration:
 - the same post-build seam also derives clearer `route_prune_reason` buckets
   and applies the internal-self-haul operational route floor before artifacts
   are emitted
+
+Trade quality now has one central seam instead of separate ad-hoc penalties:
+
+- `market_plausibility.py` computes book-structure signals, profit retention
+  after conservative repricing, a derived `market_quality_score`, and a small
+  combined gate for fragile thin-book setups
+- `candidate_engine.py` applies that seam during candidate generation and
+  carries `market_quality_score` / `profit_retention_ratio` forward on records
+- `portfolio_builder.py` and `execution_plan.py` reuse those fields instead of
+  inventing second-pass heuristics for local search, cargo fill, or mandatory
+  labeling
+- `route_search.py` caps displayed `route_confidence` by average pick market
+  quality so downstream leaderboard / no-trade artifacts stay aligned
 
 Volume validity is now intentionally conservative across the runtime path:
 

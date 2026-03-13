@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-13 (session 20 execution-plan consistency cleanup)
+Last updated: 2026-03-13 (session 22 market-quality tightening)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -31,6 +31,31 @@ full backlog scrape.
   - focused regression:
     `pytest -q tests/test_risk_profiles.py tests/test_portfolio.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_config.py tests/test_shipping.py tests/test_explainability.py tests/test_route_search.py tests/test_no_trade.py tests/test_webapp.py`
     -> **272 passed**
+
+### Task 0c: Tighten market-quality gating and anti-bait pick selection
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `market_plausibility.py`, `candidate_engine.py`,
+  `portfolio_builder.py`, `explainability.py`, `execution_plan.py`,
+  `route_search.py`, `models.py`, `tests/`
+- What was done:
+  - added a central market-quality seam on top of existing plausibility data:
+    profit-retention ratio, market-quality score, and a combined fragile-book
+    gate for thin top-of-book / concentrated / repricing-sensitive candidates
+  - candidate generation now preserves that quality haircut in `instant`
+    confidence instead of letting fill-proxy logic restore a too-friendly
+    `overall_confidence`
+  - route-wide candidate ranking now uses market quality instead of raw
+    plausibility only
+  - pick scoring, local search, cargo fill, and final mandatory/optional
+    labeling now react more strongly to market fragility
+  - route summaries now cap `route_confidence` by average pick market quality,
+    so leaderboard / no-trade cannot stay overly optimistic on weak route mixes
+  - focused regression:
+    `pytest -q tests/test_core.py tests/test_portfolio.py tests/test_execution_plan.py tests/test_route_search.py tests/test_explainability.py tests/test_no_trade.py tests/test_runtime_reports.py`
+    -> **163 passed**
 
 ### Task 1: Verify and stabilize risk-profile integration
 

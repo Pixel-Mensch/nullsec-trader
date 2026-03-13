@@ -81,7 +81,9 @@ class TradeCandidate:
     calibration_warning: str = ""
     market_plausibility: dict = field(default_factory=dict)
     market_plausibility_score: float = 1.0
+    market_quality_score: float = 1.0
     manipulation_risk_score: float = 0.0
+    profit_retention_ratio: float = 1.0
     profit_at_top_of_book: float = 0.0
     profit_at_usable_depth: float = 0.0
     profit_at_conservative_executable_price: float = 0.0
