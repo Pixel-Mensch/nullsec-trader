@@ -30,6 +30,7 @@ import market_normalization as _market_normalization
 import market_plausibility as _market_plausibility
 import models as _models
 import portfolio_builder as _portfolio_builder
+import risk_profiles as _risk_profiles
 import route_search as _route_search
 import runtime_clients as _runtime_clients
 import runtime_common as _runtime_common
@@ -191,6 +192,15 @@ _EXPORTS = {
     "sort_picks_for_output": _portfolio_builder.sort_picks_for_output,
     "try_cargo_fill": _portfolio_builder.try_cargo_fill,
     "validate_portfolio": _portfolio_builder.validate_portfolio,
+    "BUILTIN_PROFILES": _risk_profiles.BUILTIN_PROFILES,
+    "apply_profile_to_filters": _risk_profiles.apply_profile_to_filters,
+    "apply_profile_to_portfolio_cfg": _risk_profiles.apply_profile_to_portfolio_cfg,
+    "apply_profile_to_route_result": _risk_profiles.apply_profile_to_route_result,
+    "compute_profile_route_score_multiplier": _risk_profiles.compute_profile_route_score_multiplier,
+    "filter_picks_by_profile": _risk_profiles.filter_picks_by_profile,
+    "profile_header_lines": _risk_profiles.profile_header_lines,
+    "profile_restrictions_summary": _risk_profiles.profile_restrictions_summary,
+    "resolve_active_profile": _risk_profiles.resolve_active_profile,
     "_parse_route_pair_token": _route_search._parse_route_pair_token,
     "_resolve_allowed_route_pair_lane_overrides": _route_search._resolve_allowed_route_pair_lane_overrides,
     "_resolve_allowed_route_pairs": _route_search._resolve_allowed_route_pairs,
@@ -225,7 +235,13 @@ _EXPORTS = {
     "write_execution_plan_chain": _runtime_reports.write_execution_plan_chain,
     "write_top_candidate_dump": _runtime_reports.write_top_candidate_dump,
     "_apply_capital_flow_to_leg": _runtime_runner._apply_capital_flow_to_leg,
+    "_apply_internal_self_haul_operational_filter": _runtime_runner._apply_internal_self_haul_operational_filter,
     "_compute_chain_leg_budget": _runtime_runner._compute_chain_leg_budget,
+    "_derive_route_prune_reason": _runtime_runner._derive_route_prune_reason,
+    "_finalize_route_result_runtime_state": _runtime_runner._finalize_route_result_runtime_state,
+    "_prune_reason_bucket": _runtime_runner._prune_reason_bucket,
+    "_refresh_route_result_from_current_picks": _runtime_runner._refresh_route_result_from_current_picks,
+    "_resolve_internal_route_operational_profit_floor": _runtime_runner._resolve_internal_route_operational_profit_floor,
     "_resolve_budget_split_cfg": _runtime_runner._resolve_budget_split_cfg,
     "_resolve_capital_flow_cfg": _runtime_runner._resolve_capital_flow_cfg,
     "_resolve_route_profiles_cfg": _runtime_runner._resolve_route_profiles_cfg,

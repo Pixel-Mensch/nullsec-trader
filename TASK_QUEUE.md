@@ -1,12 +1,36 @@
 # Task Queue
 
-Last updated: 2026-03-08 (session 19 journal web current-data visibility)
+Last updated: 2026-03-13 (session 20 execution-plan consistency cleanup)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0: Restore execution-plan consistency for route profiles
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- What was done:
+  - hard pick-level post-build profile enforcement now runs in both
+    `run_route()` and `run_route_wide_leg()` for expected profit, profit
+    density, confidence, and max budget/item
+  - cargo-fill share limits are now clamped to the visible profile
+    `Max Budget/Item`, so fill picks cannot bypass the profile cap
+  - route prune reasons are now bucketed into clearer business causes
+    (profit floor, confidence, budget rule, fill/depth, sell time, invalid
+    volume, no candidates, post-portfolio constraints, internal route floor)
+  - execution-plan footer no longer implies one combined executable portfolio;
+    it now separates best actionable route from aggregate-alternative totals
+  - internal `internal_self_haul` routes now use a configurable operational
+    expected-profit floor (`route_search.internal_self_haul_min_expected_profit_isk`)
+  - invalid or missing item volume is now treated conservatively and surfaced
+    as `invalid_volume` instead of silently falling back
+  - focused regression:
+    `pytest -q tests/test_risk_profiles.py tests/test_portfolio.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_config.py tests/test_shipping.py tests/test_explainability.py tests/test_route_search.py tests/test_no_trade.py tests/test_webapp.py`
+    -> **272 passed**
 
 ### Task 1: Verify and stabilize risk-profile integration
 
@@ -25,6 +49,17 @@ full backlog scrape.
   - Full suite: 239 passed.
 
 ## P1
+
+### Task 0b: Mirror route-profile plan semantics in chain and roundtrip artifacts
+
+- Priority: P1
+- Status: ready
+- Relevant files: `execution_plan.py`, `runtime_reports.py`,
+  `runtime_runner.py`, `tests/`
+- Expected result: chain/roundtrip summaries should not imply one simultaneous
+  executable plan when they still show alternative legs or suppressed internal
+  routes; internal-route operational floor notes should stay visible outside
+  the route-profile text plan as well.
 
 ### Task 2: Practical output + Do Not Trade + full audit (this session)
 

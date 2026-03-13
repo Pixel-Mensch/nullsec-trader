@@ -109,6 +109,13 @@ def test_validate_config_rejects_invalid_mode() -> None:
     vr = nst.validate_config(cfg)
     assert any("filters_forward.mode must be one of" in str(e) for e in vr.get("errors", []))
 
+
+def test_validate_config_rejects_negative_internal_self_haul_profit_floor() -> None:
+    cfg = _minimal_valid_config()
+    cfg["route_search"] = {"internal_self_haul_min_expected_profit_isk": -1}
+    vr = nst.validate_config(cfg)
+    assert any("route_search.internal_self_haul_min_expected_profit_isk" in str(e) for e in vr.get("errors", []))
+
 def test_validate_config_rejects_invalid_structure_regions() -> None:
     cfg = _minimal_valid_config()
     cfg["structure_regions"] = {"bad": 10000059, "1040804972352": -1}

@@ -206,6 +206,7 @@ def _resolve_route_search_cfg(cfg: dict) -> dict:
         "ranking_metric": str(raw.get("ranking_metric", "risk_adjusted_expected_profit") or "risk_adjusted_expected_profit").strip().lower(),
         "allow_all_structures_internal": bool(raw.get("allow_all_structures_internal", True)),
         "allow_shipping_lanes": bool(raw.get("allow_shipping_lanes", True)),
+        "internal_self_haul_min_expected_profit_isk": max(0.0, float(raw.get("internal_self_haul_min_expected_profit_isk", 0.0) or 0.0)),
         "allowed_pairs": list(raw.get("allowed_pairs", [])) if isinstance(raw.get("allowed_pairs", []), list) else [],
     }
 

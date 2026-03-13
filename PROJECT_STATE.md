@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-08
+Last updated: 2026-03-13
 
 ## Snapshot
 
@@ -172,6 +172,27 @@ Not fully re-audited this session:
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
+- route-profile pick filtering is now shared across `run_route()` and
+  `run_route_wide_leg()`: pick-level expected profit, profit density,
+  confidence, and max-budget-share rules are enforced after final transport and
+  calibration data exist
+- cargo-fill picks can no longer bypass the visible profile
+  `Max Budget/Item`; profile application now clamps cargo-fill share caps to
+  the same effective item-share limit shown in the output
+- internal `internal_self_haul` routes now also pass through an explicit
+  operational expected-profit floor
+  (`route_search.internal_self_haul_min_expected_profit_isk`, default
+  `2,000,000 ISK`) so low-signal internal routes are suppressed instead of
+  shown as actionable
+- execution-plan totals now distinguish between the single best actionable
+  route and aggregate totals across alternative routes, with explicit wording
+  that the aggregate is not one combined executable plan
+- route prune reasons are now more specific for common failure families:
+  no candidates, profit floor, confidence, budget rule, fill/depth, sell time,
+  invalid volume, post-portfolio constraints, and internal route floor
+- missing or invalid type volume is no longer silently normalized into a cheap
+  executable pick path; invalid volume now stays invalid and is surfaced via
+  `invalid_volume` / `candidates_invalid_volume`
 - Do Not Trade decision engine (`no_trade.py`): 11 structured reason codes,
   profile-aware thresholds, near-miss display, cross-profile comparison;
   writes `no_trade_<timestamp>.txt` and prints `[DO NOT TRADE]` on console
@@ -227,14 +248,14 @@ Not fully re-audited this session:
 
 ## Current Focus
 
-Observed worktree activity on 2026-03-07 suggests current feature work is
+Observed worktree activity on 2026-03-13 suggests current feature work is
 centered on:
 
-- risk-profile selection and enforcement
+- hard pick-level profile enforcement and explainable prune reasons
 - route-ranking adjustments by profile
-- execution-plan output restructuring
+- execution-plan output restructuring and aggregate-vs-actionable semantics
 - CLI/runtime integration for profile-aware output
-- targeted core-logic cleanup in portfolio construction
+- targeted core-logic cleanup in portfolio construction and volume handling
 - optional private character-context integration and cacheable ESI sync
 - wallet-to-journal reconciliation and personal trade-history reporting
 - wallet paging, freshness visibility, and conservative fee/ref matching for
@@ -255,6 +276,7 @@ Files that indicate this focus:
 - `route_search.py`
 - `portfolio_builder.py`
 - `execution_plan.py`
+- `runtime_clients.py`
 - `character_profile.py`
 - `journal_reconciliation.py`
 - `journal_store.py`
@@ -276,11 +298,16 @@ Files that indicate this focus:
 
 ## Known Issues And Uncertainties
 
-- Risk-profile integration is confirmed end-to-end (see Confirmed Implemented
-  Capabilities below and TASK_QUEUE Task 1). No known open gaps remain.
+- Route-profile execution-plan behavior is materially cleaner than on
+  2026-03-08, but chain/roundtrip summary artifacts outside
+  `write_execution_plan_profiles()` still deserve a follow-up review for the
+  same aggregate-total semantics and internal-route floor messaging.
 - `route_search.py` speculative penalty was re-reviewed on 2026-03-07. The
   small planned-share term still looks like a separate route-composition risk
   heuristic, not a confirmed double-counting defect, so no change was made.
+- Invalid type volume is now conservatively rejected instead of silently
+  coerced to a fallback value. A future follow-up may still want an active
+  cache/backfill repair path for missing volumes before candidate rejection.
 - Character context is optional by design. Live sync now falls back to cache or
   generic defaults, but order exposure is currently surfaced as a diagnostic
   signal only, not a route-ranking penalty.

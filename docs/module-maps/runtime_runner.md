@@ -13,6 +13,8 @@ not a full line-by-line review.
 - wires profiles, calibration, reporting, and plan artifacts together
 - applies the opt-in personal-history layer after generic calibration
 - attaches character/personal-history metadata and explainability to runtime results
+- owns the shared post-build pick-gating seam after transport and calibration
+- owns the internal-self-haul operational route floor before artifact emission
 
 ## Inputs
 
@@ -40,6 +42,9 @@ not a full line-by-line review.
 - `run_route()`
 - `run_route_wide_leg()`
 - `run_snapshot_only()`
+- `_apply_post_build_profile_filters()`
+- `_derive_route_prune_reason()`
+- `_apply_internal_self_haul_operational_filter()`
 - `_build_personal_calibration_runtime()`
 - `_apply_confidence_calibration_to_candidates()`
 - `_apply_confidence_calibration_to_picks()`

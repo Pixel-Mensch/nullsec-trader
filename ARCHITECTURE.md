@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-08
+Last updated: 2026-03-13
 
 ## Evidence And Limits
 
@@ -158,6 +158,25 @@ their own panels instead of widening the full page.
 - route blocking for missing transport models still applies to non-internal,
   non-modeled routes
 
+`runtime_runner.py` now owns a second shared post-build gating seam after
+transport and confidence calibration:
+
+- `risk_profiles.filter_picks_by_profile()` is applied to final picks in both
+  `run_route()` and `run_route_wide_leg()`
+- that shared seam is responsible for hard pick-level profile enforcement
+  (expected profit, profit density, confidence, and max budget share)
+- the same post-build seam also derives clearer `route_prune_reason` buckets
+  and applies the internal-self-haul operational route floor before artifacts
+  are emitted
+
+Volume validity is now intentionally conservative across the runtime path:
+
+- `runtime_clients.py` returns `0.0` for missing/invalid type volume instead of
+  silently coercing to a positive fallback
+- `candidate_engine.py` rejects such candidates via `invalid_volume`
+- execution plans and prune reasons can now surface invalid-volume failures
+  explicitly
+
 Personal history flow is separate on purpose and only becomes decision-relevant
 through an explicit policy gate:
 
@@ -252,7 +271,8 @@ confirm the current branch state.
 - Wallet-based personal trade reconciliation: `journal_reconciliation.py`
 - Route ranking: `route_search.py`
 - Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
-- Execution plan rendering: `execution_plan.py`
+- Execution plan rendering and aggregate-vs-actionable text semantics:
+  `execution_plan.py`
 - Runtime orchestration: `runtime_runner.py`
 - Local browser delivery and service glue: `webapp/`
 

@@ -43,8 +43,22 @@ REASON_CATALOG: dict[str, str] = {
     "NO_ACTIONABLE_CANDIDATES": "Es gibt keine brauchbaren Kandidaten fuer diese Route.",
     "NO_ORDERBOOK": "Es fehlt ein brauchbares Orderbuch.",
     "LOW_PROFIT_AFTER_COSTS": "Nach Gebuehren und Kosten bleibt zu wenig Profit.",
+    "INVALID_VOLUME_DATA": "Volumendaten fehlen oder sind ungueltig.",
     "EXCLUDED_TYPE": "Typ ist konfigurationsseitig ausgeschlossen.",
     "EXCLUDED_NAME_KEYWORD": "Name-Matching hat den Typ ausgeschlossen.",
+    "NO_CANDIDATES": "Es wurden keine Kandidaten fuer diese Route erzeugt.",
+    "CANDIDATES_BELOW_PROFIT_FLOOR": "Kandidaten wurden am Profit-Floor verworfen.",
+    "CANDIDATES_FAILED_CONFIDENCE": "Kandidaten oder Picks scheiterten an Confidence-Grenzen.",
+    "CANDIDATES_FAILED_BUDGET_RULE": "Kandidaten oder Picks scheiterten an Budgetregeln.",
+    "CANDIDATES_FAILED_FILL_PROBABILITY": "Kandidaten scheiterten an Fill- oder Depth-Anforderungen.",
+    "CANDIDATES_FAILED_SELL_TIME": "Kandidaten scheiterten an Sell-Time- oder Liquidity-Limits.",
+    "CANDIDATES_INVALID_VOLUME": "Kandidaten wurden wegen ungueltiger Volumendaten verworfen.",
+    "NO_PICKS_AFTER_PORTFOLIO_CONSTRAINTS": "Nach Portfolio-Regeln blieb kein Pick uebrig.",
+    "INTERNAL_ROUTE_PROFIT_BELOW_OPERATIONAL_FLOOR": "Interne Route liegt unter dem operativen Mindestprofit.",
+    "PROFILE_MIN_PROFIT": "Der Pick unterschreitet den sichtbaren Profil-Mindestprofit.",
+    "PROFILE_MIN_PROFIT_DENSITY": "Der Pick unterschreitet das Profil-Limit fuer Profit pro m3.",
+    "PROFILE_MIN_CONFIDENCE": "Der Pick unterschreitet die Profil-Confidence-Grenze.",
+    "PROFILE_BUDGET_CAP": "Der Pick verletzt das Profil-Limit fuer Budget pro Item.",
 }
 
 INTERNAL_REASON_CODES: dict[str, str] = {
@@ -89,6 +103,7 @@ INTERNAL_REASON_CODES: dict[str, str] = {
     "shipping_cost_non_positive_profit": "HIGH_TRANSPORT_COST",
     "min_profit_pct_after_shipping": "HIGH_TRANSPORT_COST",
     "expected_profit_too_low_after_shipping": "HIGH_TRANSPORT_COST",
+    "invalid_volume": "INVALID_VOLUME_DATA",
     "thin_top_of_book": "THIN_TOP_OF_BOOK",
     "unusable_depth": "UNUSABLE_DEPTH",
     "fake_spread_risk": "FAKE_SPREAD_RISK",
@@ -98,6 +113,19 @@ INTERNAL_REASON_CODES: dict[str, str] = {
     "fill_probability": "WEAK_INSTANT_EXIT",
     "missing_transport_cost_model": "NO_SHIPPING_MODEL",
     "no_picks": "NO_ACTIONABLE_CANDIDATES",
+    "no_candidates": "NO_CANDIDATES",
+    "candidates_below_profit_floor": "CANDIDATES_BELOW_PROFIT_FLOOR",
+    "candidates_failed_confidence": "CANDIDATES_FAILED_CONFIDENCE",
+    "candidates_failed_budget_rule": "CANDIDATES_FAILED_BUDGET_RULE",
+    "candidates_failed_fill_probability": "CANDIDATES_FAILED_FILL_PROBABILITY",
+    "candidates_failed_sell_time": "CANDIDATES_FAILED_SELL_TIME",
+    "candidates_invalid_volume": "CANDIDATES_INVALID_VOLUME",
+    "no_picks_after_portfolio_constraints": "NO_PICKS_AFTER_PORTFOLIO_CONSTRAINTS",
+    "internal_route_profit_below_operational_floor": "INTERNAL_ROUTE_PROFIT_BELOW_OPERATIONAL_FLOOR",
+    "profile_min_expected_profit_isk": "PROFILE_MIN_PROFIT",
+    "profile_min_profit_per_m3": "PROFILE_MIN_PROFIT_DENSITY",
+    "profile_min_confidence": "PROFILE_MIN_CONFIDENCE",
+    "profile_max_item_share_of_budget": "PROFILE_BUDGET_CAP",
 }
 
 
@@ -256,12 +284,54 @@ def normalize_reason_entry(reason: str, metrics: dict | None = None) -> dict:
     elif code == "LOW_PROFIT_AFTER_COSTS":
         profit = _safe_float(metrics.get("expected_realized_profit_90d", metrics.get("max_profit_total", metrics.get("profit_per_unit", 0.0))))
         text = f"Nach Kosten bleibt nur {_fmt_isk_short(profit)} konservativer Profit."
+    elif code == "INVALID_VOLUME_DATA":
+        volume = _safe_float(metrics.get("resolved_unit_volume", 0.0))
+        text = f"Typvolumen ist ungueltig oder fehlt ({volume:.2f} m3)."
     elif code == "HISTORY_ONLY_SIGNAL":
         text = text or "Die Aussage stuetzt sich zu stark auf schwache History-/Fallback-Signale."
     elif code == "NO_SHIPPING_MODEL":
         text = text or "Ohne Shipping-Modell wird die Route blockiert."
     elif code == "NO_ACTIONABLE_CANDIDATES":
         text = text or "Nach allen Filtern bleiben keine brauchbaren Kandidaten uebrig."
+    elif code == "NO_CANDIDATES":
+        text = text or "Es konnten fuer diese Route keine Kandidaten gebildet werden."
+    elif code == "CANDIDATES_BELOW_PROFIT_FLOOR":
+        text = text or "Die besten Kandidaten scheitern am Profit-Floor."
+    elif code == "CANDIDATES_FAILED_CONFIDENCE":
+        text = text or "Die besten Kandidaten scheitern an Confidence-Grenzen."
+    elif code == "CANDIDATES_FAILED_BUDGET_RULE":
+        text = text or "Die besten Kandidaten scheitern an Budgetregeln."
+    elif code == "CANDIDATES_FAILED_FILL_PROBABILITY":
+        text = text or "Die besten Kandidaten scheitern an Fill- oder Depth-Anforderungen."
+    elif code == "CANDIDATES_FAILED_SELL_TIME":
+        text = text or "Die besten Kandidaten scheitern an Sell-Time- oder Liquidity-Limits."
+    elif code == "CANDIDATES_INVALID_VOLUME":
+        text = text or "Kandidaten wurden wegen ungueltiger Volumendaten verworfen."
+    elif code == "NO_PICKS_AFTER_PORTFOLIO_CONSTRAINTS":
+        text = text or "Nach Portfolio- und Pick-Regeln blieb kein Pick uebrig."
+    elif code == "INTERNAL_ROUTE_PROFIT_BELOW_OPERATIONAL_FLOOR":
+        profit = _safe_float(metrics.get("expected_realized_profit_total", 0.0))
+        floor = _safe_float(metrics.get("operational_profit_floor_isk", 0.0))
+        text = (
+            f"Interne Route liegt mit {_fmt_isk_short(profit)} unter dem operativen Mindestprofit "
+            f"von {_fmt_isk_short(floor)}."
+        )
+    elif code == "PROFILE_MIN_PROFIT":
+        profit = _safe_float(metrics.get("expected_realized_profit_90d", 0.0))
+        floor = _safe_float(metrics.get("profile_min_expected_profit_isk", 0.0))
+        text = f"Pick liefert nur {_fmt_isk_short(profit)} Erwartungsprofit bei Profil-Limit {_fmt_isk_short(floor)}."
+    elif code == "PROFILE_MIN_PROFIT_DENSITY":
+        profit_per_m3 = _safe_float(metrics.get("expected_realized_profit_per_m3_90d", 0.0))
+        floor = _safe_float(metrics.get("profile_min_profit_per_m3", 0.0))
+        text = f"Pick liefert nur {_fmt_isk_short(profit_per_m3)} pro m3 bei Profil-Limit {_fmt_isk_short(floor)} pro m3."
+    elif code == "PROFILE_MIN_CONFIDENCE":
+        conf = _safe_float(metrics.get("decision_overall_confidence", 0.0))
+        floor = _safe_float(metrics.get("profile_min_confidence", 0.0))
+        text = f"Pick-Confidence {conf:.2f} liegt unter dem Profil-Limit {floor:.2f}."
+    elif code == "PROFILE_BUDGET_CAP":
+        share = _safe_float(metrics.get("budget_share", 0.0))
+        cap = _safe_float(metrics.get("profile_max_item_share_of_budget", 0.0))
+        text = f"Pick bindet {share:.1%} des Budgets bei Profil-Limit {cap:.1%}."
     elif code == "WEAK_PRICE_BASIS":
         text = text or "Der geplante Zielpreis ist nicht belastbar genug abgeleitet."
     elif code == "NO_ORDERBOOK":
@@ -270,7 +340,12 @@ def normalize_reason_entry(reason: str, metrics: dict | None = None) -> dict:
         text = text or "Dieser Typ wurde per Konfiguration ausgeschlossen."
     elif code == "EXCLUDED_NAME_KEYWORD":
         text = text or "Der Typ wurde ueber Name-Filter ausgeschlossen."
-    return build_reason_entry(code, text=text, metrics=metrics, severity="error" if code in {"NO_SHIPPING_MODEL", "NO_ACTIONABLE_CANDIDATES"} else "info")
+    return build_reason_entry(
+        code,
+        text=text,
+        metrics=metrics,
+        severity="error" if code in {"NO_SHIPPING_MODEL", "NO_ACTIONABLE_CANDIDATES"} else "info",
+    )
 
 
 def _dedupe_reasons(entries: list[dict]) -> list[dict]:

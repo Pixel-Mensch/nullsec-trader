@@ -8,39 +8,40 @@ Each profile defines concrete parameter overrides that affect:
 Profile selection priority:
   1. Environment variable NULLSEC_RISK_PROFILE
   2. CLI argument --profile (stored as cfg["_cli_risk_profile"])
-  3. config.json / config.local.json key  "risk_profile": {"name": "..."}
+  3. config.json / config.local.json key "risk_profile": {"name": "..."}
   4. Default: "balanced"
 """
 from __future__ import annotations
+
 
 # ---------------------------------------------------------------------------
 # Built-in profile definitions
 # ---------------------------------------------------------------------------
 
-# Parameter reference (all keys optional – None / 0 means "use config default"):
+# Parameter reference (all keys optional - None / 0 means "use config default"):
 #
 #  Candidate filter overrides
 #  --------------------------
-#  min_confidence                  float  0-1    decision_overall_confidence gate
-#  min_fill_probability            float  0-1    fill_probability gate (instant proxy)
-#  max_expected_days_to_sell       float  days   hard ceiling on sell duration
-#  allow_planned_sell              bool          whether planned_sell mode is permitted
-#  planned_min_liquidity_confidence float 0-1   planned-sell liquidity gate
-#  min_expected_profit_isk         float  ISK    minimum expected realized profit
-#  min_profit_per_m3               float  ISK/m3 minimum profit density (post-build filter)
+#  min_confidence                   float  0-1    decision_overall_confidence gate
+#  min_fill_probability             float  0-1    fill_probability gate (instant proxy)
+#  max_expected_days_to_sell        float  days   hard ceiling on sell duration
+#  allow_planned_sell               bool          whether planned_sell mode is permitted
+#  planned_min_liquidity_confidence float  0-1    planned-sell liquidity gate
+#  min_expected_profit_isk          float  ISK    minimum expected realized profit
+#  min_profit_per_m3                float  ISK/m3 minimum profit density
 #
 #  Portfolio config overrides
 #  --------------------------
-#  max_item_share_of_budget        float  0-1    single-item budget cap
-#  max_items                       int           portfolio item count cap
-#  max_liquidation_days_per_position float days  per-pick liquidation ceiling
+#  max_item_share_of_budget         float  0-1    single-item budget cap
+#  max_items                        int           portfolio item count cap
+#  max_liquidation_days_per_position float days   per-pick liquidation ceiling
 #
-#  Route ranking modifiers  (multipliers > 1 = harder penalty on that dimension)
-#  -----------------------
-#  route_stale_penalty_weight      float         stale market penalty weight
-#  route_speculative_penalty_weight float        speculative exit penalty weight
-#  route_concentration_penalty_weight float      concentration penalty weight
-#  route_capital_lock_weight       float         capital lock risk weight
+#  Route ranking modifiers (multipliers > 1 = harder penalty on that dimension)
+#  ---------------------------------------------------------------------------
+#  route_stale_penalty_weight       float         stale market penalty weight
+#  route_speculative_penalty_weight float         speculative exit penalty weight
+#  route_concentration_penalty_weight float       concentration penalty weight
+#  route_capital_lock_weight        float         capital lock risk weight
 
 BUILTIN_PROFILES: dict[str, dict] = {
     "conservative": {
@@ -48,7 +49,6 @@ BUILTIN_PROFILES: dict[str, dict] = {
             "Konservativ: Nur hochliquide Instant-Exits, enge Confidence-Schwellen, "
             "kurze Kapitalbindung und kleines Einzelpositions-Limit."
         ),
-        # Candidate filters
         "min_confidence": 0.70,
         "min_fill_probability": 0.70,
         "max_expected_days_to_sell": 14.0,
@@ -56,11 +56,9 @@ BUILTIN_PROFILES: dict[str, dict] = {
         "planned_min_liquidity_confidence": 0.80,
         "min_expected_profit_isk": 5_000_000.0,
         "min_profit_per_m3": 2_000.0,
-        # Portfolio
         "max_item_share_of_budget": 0.20,
         "max_items": 20,
         "max_liquidation_days_per_position": 14.0,
-        # Route ranking: harder penalties on all risk dimensions
         "route_stale_penalty_weight": 2.0,
         "route_speculative_penalty_weight": 2.5,
         "route_concentration_penalty_weight": 1.5,
@@ -68,7 +66,7 @@ BUILTIN_PROFILES: dict[str, dict] = {
     },
     "balanced": {
         "description": (
-            "Ausgewogen: Standardverhalten – gemischte Exits, moderate Diversifikation, "
+            "Ausgewogen: Standardverhalten - gemischte Exits, moderate Diversifikation, "
             "normale Confidence-Schwellen."
         ),
         "min_confidence": 0.50,
@@ -101,7 +99,6 @@ BUILTIN_PROFILES: dict[str, dict] = {
         "max_item_share_of_budget": 0.70,
         "max_items": 100,
         "max_liquidation_days_per_position": 90.0,
-        # Soft penalties only – aggressive tolerates all route risk
         "route_stale_penalty_weight": 0.30,
         "route_speculative_penalty_weight": 0.30,
         "route_concentration_penalty_weight": 0.50,
@@ -109,7 +106,7 @@ BUILTIN_PROFILES: dict[str, dict] = {
     },
     "instant_only": {
         "description": (
-            "Instant Only: planned_sell vollstaendig blockiert – nur direkt realisierbare "
+            "Instant Only: planned_sell vollstaendig blockiert - nur direkt realisierbare "
             "Buy-Order-Exits. Kurze Kapitalbindung, klarer Plan."
         ),
         "min_confidence": 0.40,
@@ -122,7 +119,6 @@ BUILTIN_PROFILES: dict[str, dict] = {
         "max_item_share_of_budget": 0.50,
         "max_items": 50,
         "max_liquidation_days_per_position": 1.0,
-        # Hard penalty on speculative and slow routes
         "route_stale_penalty_weight": 1.5,
         "route_speculative_penalty_weight": 3.0,
         "route_concentration_penalty_weight": 1.0,
@@ -130,7 +126,7 @@ BUILTIN_PROFILES: dict[str, dict] = {
     },
     "high_liquidity": {
         "description": (
-            "High Liquidity: Exit-Qualitaet vor Marge – duenne Maerkte werden hart "
+            "High Liquidity: Exit-Qualitaet vor Marge - duenne Maerkte werden hart "
             "bestraft, nur Positionen mit starker Nachfrage."
         ),
         "min_confidence": 0.60,
@@ -143,7 +139,6 @@ BUILTIN_PROFILES: dict[str, dict] = {
         "max_item_share_of_budget": 0.30,
         "max_items": 30,
         "max_liquidation_days_per_position": 21.0,
-        # Very hard stale-market penalty
         "route_stale_penalty_weight": 2.5,
         "route_speculative_penalty_weight": 2.0,
         "route_concentration_penalty_weight": 1.5,
@@ -151,7 +146,7 @@ BUILTIN_PROFILES: dict[str, dict] = {
     },
     "low_maintenance": {
         "description": (
-            "Low Maintenance: Stressarme Trades – weniger Items, klare Instant-Exits, "
+            "Low Maintenance: Stressarme Trades - weniger Items, klare Instant-Exits, "
             "minimales Repricing-Risiko und schnell abarbeitbare Plaene."
         ),
         "min_confidence": 0.55,
@@ -161,11 +156,9 @@ BUILTIN_PROFILES: dict[str, dict] = {
         "planned_min_liquidity_confidence": 0.70,
         "min_expected_profit_isk": 2_000_000.0,
         "min_profit_per_m3": 500.0,
-        # KEY: strict item cap reduces open positions and repricing work
         "max_item_share_of_budget": 0.35,
         "max_items": 12,
         "max_liquidation_days_per_position": 21.0,
-        # Hard penalty on speculative routes, moderate stale penalty
         "route_stale_penalty_weight": 1.5,
         "route_speculative_penalty_weight": 2.5,
         "route_concentration_penalty_weight": 0.80,
@@ -182,12 +175,7 @@ ENV_PROFILE_VAR = "NULLSEC_RISK_PROFILE"
 # ---------------------------------------------------------------------------
 
 def resolve_active_profile(cfg: dict) -> tuple[str, dict]:
-    """Return (profile_name, profile_params) for the current run.
-
-    Priority: env var > CLI (cfg['_cli_risk_profile']) > config section > default.
-    Config's 'risk_profile' section can also contain per-key overrides applied on
-    top of the selected built-in profile.
-    """
+    """Return (profile_name, profile_params) for the current run."""
     import os
 
     env_val = str(os.environ.get(ENV_PROFILE_VAR, "") or "").strip().lower()
@@ -209,13 +197,11 @@ def resolve_active_profile(cfg: dict) -> tuple[str, dict]:
                 name = DEFAULT_PROFILE
 
     profile = dict(BUILTIN_PROFILES[name])
-
-    # Allow per-key overrides from config's risk_profile section
     cfg_section = cfg.get("risk_profile", {})
     if isinstance(cfg_section, dict):
-        for k, v in cfg_section.items():
-            if k != "name" and v is not None:
-                profile[k] = v
+        for key, value in cfg_section.items():
+            if key != "name" and value is not None:
+                profile[key] = value
 
     return name, profile
 
@@ -225,19 +211,13 @@ def resolve_active_profile(cfg: dict) -> tuple[str, dict]:
 # ---------------------------------------------------------------------------
 
 def apply_profile_to_filters(profile_name: str, profile: dict, filters: dict) -> dict:
-    """Merge profile constraints into the candidate filter dict.
-
-    Only tightens filters (never relaxes a stricter config value).
-    Stores _profile_* keys so downstream code can show profile context.
-    """
+    """Merge profile constraints into the candidate filter dict."""
     out = dict(filters)
 
-    # min_fill_probability (instant proxy for confidence)
     min_fill = float(profile.get("min_fill_probability", 0.0) or 0.0)
     if min_fill > 0.0:
         out["min_fill_probability"] = max(float(out.get("min_fill_probability", 0.0) or 0.0), min_fill)
 
-    # max_expected_days_to_sell
     max_days = float(profile.get("max_expected_days_to_sell", 0.0) or 0.0)
     if max_days > 0.0:
         out["max_expected_days_to_sell"] = min(
@@ -245,7 +225,6 @@ def apply_profile_to_filters(profile_name: str, profile: dict, filters: dict) ->
             max_days,
         )
 
-    # planned_min_liquidity_confidence
     min_liq_conf = float(profile.get("planned_min_liquidity_confidence", 0.0) or 0.0)
     if min_liq_conf > 0.0:
         out["planned_min_liquidity_confidence"] = max(
@@ -253,36 +232,32 @@ def apply_profile_to_filters(profile_name: str, profile: dict, filters: dict) ->
             min_liq_conf,
         )
 
-    # min_expected_profit_isk
     min_profit = float(profile.get("min_expected_profit_isk", 0.0) or 0.0)
     if min_profit > 0.0:
         out["min_expected_profit_isk"] = max(
             float(out.get("min_expected_profit_isk", 0.0) or 0.0),
             min_profit,
         )
+        out["_profile_min_expected_profit_isk"] = float(min_profit)
 
-    # min_profit_per_m3 – stored as profile gate, applied as post-build filter
     min_p_m3 = float(profile.get("min_profit_per_m3", 0.0) or 0.0)
     if min_p_m3 > 0.0:
         out["_profile_min_profit_per_m3"] = float(min_p_m3)
+        out["_profile_min_profit_density_isk_per_m3"] = float(min_p_m3)
 
-    # allow_planned_sell flag
+    max_share = float(profile.get("max_item_share_of_budget", 0.0) or 0.0)
+    if max_share > 0.0:
+        out["_profile_max_item_share_of_budget"] = float(max_share)
+
     out["_profile_allow_planned_sell"] = bool(profile.get("allow_planned_sell", True))
-
-    # min_confidence – stored for post-compute explainability
     out["_profile_min_confidence"] = float(profile.get("min_confidence", 0.0) or 0.0)
-
-    # Metadata
     out["_profile_name"] = str(profile_name)
 
     return out
 
 
 def apply_profile_to_portfolio_cfg(profile: dict, port_cfg: dict) -> dict:
-    """Merge profile portfolio constraints into the portfolio config dict.
-
-    Only tightens existing limits (never relaxes a stricter config value).
-    """
+    """Merge profile portfolio constraints into the portfolio config dict."""
     out = dict(port_cfg)
 
     max_share = float(profile.get("max_item_share_of_budget", 0.0) or 0.0)
@@ -291,6 +266,10 @@ def apply_profile_to_portfolio_cfg(profile: dict, port_cfg: dict) -> dict:
             float(out.get("max_item_share_of_budget", 1.0) or 1.0),
             max_share,
         )
+
+    effective_max_share = float(out.get("max_item_share_of_budget", 1.0) or 1.0)
+    cargo_fill_max_share = float(out.get("cargo_fill_max_item_share_of_budget", effective_max_share) or effective_max_share)
+    out["cargo_fill_max_item_share_of_budget"] = min(cargo_fill_max_share, effective_max_share)
 
     max_items = int(profile.get("max_items", 0) or 0)
     if max_items > 0:
@@ -311,36 +290,28 @@ def apply_profile_to_portfolio_cfg(profile: dict, port_cfg: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 def compute_profile_route_score_multiplier(profile: dict, route_summary: dict) -> float:
-    """Return a score multiplier (0-1) reflecting the profile's penalty preferences.
-
-    Profile weights > 1.0 amplify the existing penalty; < 1.0 soften it.
-    """
+    """Return a score multiplier (0-1) reflecting the profile's penalty preferences."""
     stale_w = float(profile.get("route_stale_penalty_weight", 1.0) or 1.0)
-    spec_w  = float(profile.get("route_speculative_penalty_weight", 1.0) or 1.0)
-    conc_w  = float(profile.get("route_concentration_penalty_weight", 1.0) or 1.0)
-    lock_w  = float(profile.get("route_capital_lock_weight", 1.0) or 1.0)
+    spec_w = float(profile.get("route_speculative_penalty_weight", 1.0) or 1.0)
+    conc_w = float(profile.get("route_concentration_penalty_weight", 1.0) or 1.0)
+    lock_w = float(profile.get("route_capital_lock_weight", 1.0) or 1.0)
 
-    stale   = float(route_summary.get("stale_market_penalty", 0.0) or 0.0)
-    spec    = float(route_summary.get("speculative_penalty", 0.0) or 0.0)
-    conc    = float(route_summary.get("concentration_penalty", 0.0) or 0.0)
-    lock    = float(route_summary.get("capital_lock_risk", 0.0) or 0.0)
+    stale = float(route_summary.get("stale_market_penalty", 0.0) or 0.0)
+    spec = float(route_summary.get("speculative_penalty", 0.0) or 0.0)
+    conc = float(route_summary.get("concentration_penalty", 0.0) or 0.0)
+    lock = float(route_summary.get("capital_lock_risk", 0.0) or 0.0)
 
-    # Extra penalty = original * (weight - 1), so weight=1 → no change
     extra = (
         stale * (stale_w - 1.0)
-        + spec  * (spec_w  - 1.0)
-        + conc  * (conc_w  - 1.0)
-        + lock  * (lock_w  - 1.0) * 0.20   # capital lock is 0-1 range; partial contribution
+        + spec * (spec_w - 1.0)
+        + conc * (conc_w - 1.0)
+        + lock * (lock_w - 1.0) * 0.20
     )
     return float(max(0.0, min(1.0, 1.0 - extra)))
 
 
 def apply_profile_to_route_result(profile_name: str, profile: dict, route_result: dict) -> None:
-    """Compute and store a profile-adjusted risk score in the route result dict (in-place).
-
-    Stores '_profile_risk_adjusted_score' so route_ranking_value can pick it up
-    without re-running summarize_route_for_ranking.
-    """
+    """Compute and store a profile-adjusted risk score in the route result dict."""
     from route_search import summarize_route_for_ranking
 
     summary = summarize_route_for_ranking(route_result)
@@ -359,32 +330,110 @@ def apply_profile_to_route_result(profile_name: str, profile: dict, route_result
 
 
 # ---------------------------------------------------------------------------
-# Post-build candidate filter (min_profit_per_m3)
+# Post-build candidate filter (profile pick gates)
 # ---------------------------------------------------------------------------
 
-def filter_picks_by_profile(picks: list[dict], filters_used: dict) -> tuple[list[dict], list[dict]]:
-    """Apply profile gates that can only be checked after portfolio build.
+def _pick_expected_profit(pick: dict) -> float:
+    return float(
+        pick.get(
+            "expected_realized_profit_90d",
+            pick.get("expected_profit_90d", pick.get("profit", 0.0)),
+        )
+        or 0.0
+    )
 
-    Returns (kept, rejected) where rejected items have a '_profile_rejection_reason'.
-    """
-    min_p_m3 = float(filters_used.get("_profile_min_profit_per_m3", 0.0) or 0.0)
+
+def _pick_profit_per_m3(pick: dict) -> float:
+    return float(
+        pick.get(
+            "expected_realized_profit_per_m3_90d",
+            pick.get("expected_profit_per_m3_90d", pick.get("profit_per_m3", 0.0)),
+        )
+        or 0.0
+    )
+
+
+def _pick_confidence(pick: dict) -> float:
+    return float(
+        pick.get(
+            "decision_overall_confidence",
+            pick.get(
+                "calibrated_overall_confidence",
+                pick.get("overall_confidence", pick.get("strict_confidence_score", 0.0)),
+            ),
+        )
+        or 0.0
+    )
+
+
+def filter_picks_by_profile(
+    picks: list[dict],
+    filters_used: dict,
+    *,
+    budget_isk: float | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Apply profile gates that can only be checked after portfolio build."""
+    min_profit_isk = float(filters_used.get("_profile_min_expected_profit_isk", 0.0) or 0.0)
+    min_p_m3 = float(
+        filters_used.get(
+            "_profile_min_profit_density_isk_per_m3",
+            filters_used.get("_profile_min_profit_per_m3", 0.0),
+        )
+        or 0.0
+    )
+    min_conf = float(filters_used.get("_profile_min_confidence", 0.0) or 0.0)
+    max_share = float(filters_used.get("_profile_max_item_share_of_budget", 0.0) or 0.0)
     profile_name = str(filters_used.get("_profile_name", "") or "")
 
-    if min_p_m3 <= 0.0:
+    if min_profit_isk <= 0.0 and min_p_m3 <= 0.0 and min_conf <= 0.0 and max_share <= 0.0:
         return list(picks), []
 
     kept: list[dict] = []
     rejected: list[dict] = []
-    for p in picks:
-        p_m3 = float(p.get("expected_realized_profit_per_m3_90d", p.get("profit_per_m3", 0.0)) or 0.0)
-        if p_m3 >= min_p_m3:
-            kept.append(p)
-        else:
-            p = dict(p)
-            p["_profile_rejection_reason"] = (
-                f"[profile:{profile_name}] profit/m3 {p_m3:.0f} < {min_p_m3:.0f}"
+    for pick in picks:
+        reasons: list[str] = []
+        reason_codes: list[str] = []
+        expected_profit = _pick_expected_profit(pick)
+        profit_per_m3 = _pick_profit_per_m3(pick)
+        confidence = _pick_confidence(pick)
+        cost = float(pick.get("cost", 0.0) or 0.0)
+
+        if min_profit_isk > 0.0 and expected_profit + 1e-6 < min_profit_isk:
+            reason_codes.append("profile_min_expected_profit_isk")
+            reasons.append(
+                f"[profile:{profile_name}] expected profit {expected_profit:.0f} < {min_profit_isk:.0f}"
             )
-            rejected.append(p)
+        if min_p_m3 > 0.0 and profit_per_m3 + 1e-6 < min_p_m3:
+            reason_codes.append("profile_min_profit_per_m3")
+            reasons.append(
+                f"[profile:{profile_name}] profit/m3 {profit_per_m3:.0f} < {min_p_m3:.0f}"
+            )
+        if min_conf > 0.0 and confidence + 1e-6 < min_conf:
+            reason_codes.append("profile_min_confidence")
+            reasons.append(
+                f"[profile:{profile_name}] confidence {confidence:.2f} < {min_conf:.2f}"
+            )
+        if (
+            max_share > 0.0
+            and budget_isk is not None
+            and float(budget_isk) > 0.0
+            and cost > (float(budget_isk) * max_share) + 1e-6
+        ):
+            share = cost / max(1e-9, float(budget_isk))
+            reason_codes.append("profile_max_item_share_of_budget")
+            reasons.append(
+                f"[profile:{profile_name}] budget share {share:.1%} > {max_share:.1%}"
+            )
+
+        if not reasons:
+            kept.append(pick)
+            continue
+
+        rejected_pick = dict(pick)
+        rejected_pick["_profile_rejection_reason"] = "; ".join(reasons)
+        rejected_pick["_profile_rejection_codes"] = list(reason_codes)
+        rejected.append(rejected_pick)
+
     return kept, rejected
 
 

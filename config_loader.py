@@ -964,6 +964,12 @@ def validate_config(cfg: dict) -> dict:
                     err("route_search.max_routes must be a positive integer")
             except Exception:
                 err("route_search.max_routes must be a positive integer")
+        if "internal_self_haul_min_expected_profit_isk" in route_search_cfg:
+            try:
+                if float(route_search_cfg.get("internal_self_haul_min_expected_profit_isk", 0.0) or 0.0) < 0.0:
+                    err("route_search.internal_self_haul_min_expected_profit_isk must be a non-negative number")
+            except Exception:
+                err("route_search.internal_self_haul_min_expected_profit_isk must be a non-negative number")
         if "allowed_pairs" in route_search_cfg and not isinstance(route_search_cfg.get("allowed_pairs"), list):
             err("route_search.allowed_pairs must be a list")
         if (

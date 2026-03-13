@@ -327,7 +327,7 @@ class TestRouteLevelWarnings:
         picks = [_instant_pick()]
         summary = _route_summary(capital_lock_risk=0.70)
         warns = _route_level_warnings(picks, summary)
-        assert any("capital lock" in w.lower() for w in warns)
+        assert any("concentration" in w.lower() for w in warns)
 
     def test_speculative_picks_warning(self):
         picks = [_speculative_pick()]
@@ -481,7 +481,7 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result], compact_mode=True)
         # In compact mode: shopping list present, detailed pick blocks absent
         assert "SHOPPING LIST" in content
-        assert "MANDATORY — instant exits" not in content
+        assert "MANDATORY - instant exits" not in content
 
     def test_compact_mode_header_note(self):
         result = _make_route_result()
@@ -500,13 +500,26 @@ class TestWriteExecutionPlanProfiles:
 
     def test_totals_block_present(self):
         content = self._write_and_read([_make_route_result()])
-        assert "TOTAL COST:" in content or "TOTAL COST" in content
+        assert "BEST ACTIONABLE ROUTE" in content
+        assert "AGGREGATE ACROSS DISPLAYED ROUTE ALTERNATIVES" in content
+        assert "NOT a combined executable plan" in content
 
     def test_profile_shown_in_header(self):
         result = _make_route_result()
         result["_active_risk_profile"] = "conservative"
         content = self._write_and_read([result])
         assert "CONSERVATIVE" in content
+
+    def test_profile_header_uses_resolved_profile_params(self):
+        result = _make_route_result()
+        result["_active_risk_profile"] = "balanced"
+        result["_active_risk_profile_params"] = {
+            "description": "Resolved runtime override",
+            "min_expected_profit_isk": 2_500_000.0,
+            "max_item_share_of_budget": 0.30,
+        }
+        content = self._write_and_read([result])
+        assert "Resolved runtime override" in content
 
     def test_character_summary_shown_in_header(self):
         result = _make_route_result()
@@ -525,6 +538,16 @@ class TestWriteExecutionPlanProfiles:
         assert "Character: CACHE" in content
         assert "Trader One" in content
         assert "Open Orders 4" in content
+
+    def test_internal_route_operational_floor_is_visible(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["transport_mode"] = "internal_self_haul"
+        result["operational_profit_floor_isk"] = 2_000_000.0
+        result["suppressed_expected_realized_profit_total"] = 1_300_000.0
+        result["operational_filter_note"] = "Internal nullsec routes require at least 2.0m ISK expected realized profit."
+        content = self._write_and_read([result])
+        assert "Internal Route Floor" in content
+        assert "Suppressed Profit" in content
 
     def test_personal_history_warning_shown_in_header(self):
         result = _make_route_result()

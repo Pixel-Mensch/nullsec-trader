@@ -13,6 +13,8 @@ This map is based on focused output and test inspection, not a full audit.
 - handles compact/detail output differences
 - renders compact character/history metadata in the plan header
 - renders applied personal-layer scope/effect lines when a route actually used them
+- distinguishes per-route actionable summaries from aggregate-alternative totals
+- surfaces internal-route operational floor notes and suppressed low-profit routes
 
 ## Inputs
 
@@ -62,6 +64,7 @@ This map is based on focused output and test inspection, not a full audit.
 - change compact/detail behavior
 - surface new route or profile metadata
 - surface personal-layer state and explainability without inventing business logic
+- keep "best actionable route" vs "aggregate alternatives" semantics honest
 
 ## Risk Areas
 

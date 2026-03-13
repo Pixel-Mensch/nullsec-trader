@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 import time
@@ -15,6 +16,16 @@ import requests
 
 from config_loader import load_json, save_json
 from runtime_common import CACHE_DIR, HTTP_CACHE_PATH, TOKEN_PATH, TYPE_CACHE_PATH, die, make_basic_auth
+
+
+def _normalize_type_volume(value) -> float:
+    try:
+        volume = float(value or 0.0)
+    except Exception:
+        return 0.0
+    if not math.isfinite(volume) or volume <= 0.0:
+        return 0.0
+    return float(volume)
 
 
 class CallbackState:
@@ -687,10 +698,9 @@ class ESIClient:
                     entry = self.type_cache.setdefault(str(tid), {})
                     entry["name"] = data.get("name", f"type_{tid}")
                     if "volume" not in entry:
-                        try:
-                            entry["volume"] = float(data.get("packaged_volume") or data.get("volume") or 1.0)
-                        except Exception:
-                            entry["volume"] = 1.0
+                        entry["volume"] = _normalize_type_volume(
+                            data.get("packaged_volume", data.get("volume", 0.0))
+                        )
                     self._perf_stats["type_name_network_fetches"] += 1
                 else:
                     self.type_cache.setdefault(str(tid), {})["name"] = f"type_{tid}"
@@ -706,23 +716,24 @@ class ESIClient:
 
     def resolve_type_volume(self, type_id: int) -> float:
         entry = self.type_cache.get(str(type_id), {})
-        if "volume" in entry:
+        cached_volume = _normalize_type_volume(entry.get("volume", 0.0))
+        if cached_volume > 0.0:
             self._perf_stats["type_volume_cache_hits"] += 1
-            return float(entry["volume"])
+            return float(cached_volume)
 
         try:
             r = self.esi_get(f"/universe/types/{type_id}/", auth=False)
             if r.status_code != 200:
-                vol = 1.0
+                vol = 0.0
             else:
                 obj = r.json()
-                vol = float(obj.get("packaged_volume") or obj.get("volume") or 1.0)
+                vol = _normalize_type_volume(obj.get("packaged_volume", obj.get("volume", 0.0)))
                 if self.type_cache.get(str(type_id), {}).get("name") is None:
                     self.type_cache.setdefault(str(type_id), {})["name"] = obj.get("name", f"type_{type_id}")
                 self._perf_stats["type_volume_network_fetches"] += 1
         except Exception as e:
-            print(f"Fehler beim Aufloesen von Volumen fuer Typ {type_id}: {e}. Verwende Default.")
-            vol = 1.0
+            print(f"Fehler beim Aufloesen von Volumen fuer Typ {type_id}: {e}. Markiere Volumen als unbekannt.")
+            vol = 0.0
 
         self.type_cache.setdefault(str(type_id), {})["volume"] = vol
         self._mark_type_cache_dirty()
@@ -943,9 +954,9 @@ class ReplayESIClient:
     def resolve_type_volume(self, type_id: int) -> float:
         entry = self.type_cache.get(str(type_id), {})
         try:
-            return float(entry.get("volume", 1.0))
+            return _normalize_type_volume(entry.get("volume", 0.0))
         except Exception:
-            return 1.0
+            return 0.0
 
     def get_region_history_stats(self, region_id: int, type_id: int, days: int = 30) -> dict:
         key = f"hist_stats_region_{region_id}_{type_id}_{days}"

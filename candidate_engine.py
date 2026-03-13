@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 from typing import Any
 
 from explainability import ensure_record_explainability, normalize_reason_entry
@@ -772,9 +773,16 @@ def compute_candidates(
             )
             continue
 
-        unit_vol = esi.resolve_type_volume(tid)
-        if unit_vol <= 0:
-            unit_vol = 1.0
+        unit_vol = float(esi.resolve_type_volume(tid) or 0.0)
+        if not math.isfinite(unit_vol) or unit_vol <= 0.0:
+            record_explain(
+                "rejected",
+                tid,
+                names.get(tid, f"type_{tid}"),
+                "invalid_volume",
+                {"resolved_unit_volume": float(unit_vol)},
+            )
+            continue
 
         cost_net, revenue_net, profit_per_unit, _ = compute_trade_financials(
             buy_avg,
@@ -1423,7 +1431,7 @@ def compute_candidates(
         if mode == "planned_sell":
             strict_confidence_score = _clamp01(float(overall_confidence))
         else:
-            # Use min() to stay conservative — max() would inflate confidence above fill_probability.
+            # Use min() to stay conservative - max() would inflate confidence above fill_probability.
             liquidity_confidence = min(liquidity_confidence, _clamp01(float(fill_probability))) if liquidity_confidence > 0.0 else _clamp01(float(fill_probability))
             exit_confidence = min(exit_confidence, liquidity_confidence) if exit_confidence > 0.0 else liquidity_confidence
             overall_confidence = min(exit_confidence, liquidity_confidence)
