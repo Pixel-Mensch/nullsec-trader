@@ -236,6 +236,7 @@ _EXPORTS = {
     "write_top_candidate_dump": _runtime_reports.write_top_candidate_dump,
     "_apply_capital_flow_to_leg": _runtime_runner._apply_capital_flow_to_leg,
     "_apply_internal_self_haul_operational_filter": _runtime_runner._apply_internal_self_haul_operational_filter,
+    "_apply_post_selection_route_mix_cleanup": _runtime_runner._apply_post_selection_route_mix_cleanup,
     "_compute_chain_leg_budget": _runtime_runner._compute_chain_leg_budget,
     "_derive_route_prune_reason": _runtime_runner._derive_route_prune_reason,
     "_finalize_route_result_runtime_state": _runtime_runner._finalize_route_result_runtime_state,

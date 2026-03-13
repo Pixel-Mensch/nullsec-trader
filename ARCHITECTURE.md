@@ -170,6 +170,10 @@ transport and confidence calibration:
   `run_route()` and `run_route_wide_leg()`
 - that shared seam is responsible for hard pick-level profile enforcement
   (expected profit, profit density, confidence, and max budget share)
+- after that, `runtime_runner.py` can apply a narrow post-selection route-mix
+  cleanup that removes clearly weak optional/speculative add-ons when route
+  confidence / market quality recover materially and the route score stays
+  effectively intact
 - the same post-build seam also derives clearer `route_prune_reason` buckets
   and applies the internal-self-haul operational route floor before artifacts
   are emitted
@@ -266,6 +270,7 @@ Most recent focused work on 2026-03-13 touched:
 - risk profiles and profile-aware ranking/output
 - replay-based market-quality calibration against focused execution-plan and
   top-candidate artifacts
+- post-selection route-mix cleanup for weak optional/speculative add-ons
 - execution-plan presentation
 - optional private character context via EVE SSO / ESI
 - wallet-to-journal reconciliation and personal trade-history reporting

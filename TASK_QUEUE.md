@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-13 (session 23 replay quality calibration)
+Last updated: 2026-03-13 (session 24 route-mix cleanup)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -84,6 +84,28 @@ full backlog scrape.
   - focused regression:
     `pytest -q tests/test_core.py tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py`
     -> **132 passed**
+
+### Task 0e: Clean weak post-selection route add-ons from the final mix
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `runtime_runner.py`, `execution_plan.py`,
+  `nullsectrader.py`, `tests/test_runtime_runner.py`,
+  `tests/test_execution_plan.py`, `tests/test_route_search.py`
+- What was done:
+  - added a small post-selection route-mix cleanup seam in
+    `runtime_runner.py` after final picks exist and before final route output
+  - cleanup only evaluates non-mandatory picks and only removes them when they
+    have a small profit share, materially improve route confidence or market
+    quality, and do not materially worsen the route score
+  - cleanup refuses to break current-profile strong-pick minimums or push an
+    internal self-haul route below its operational profit floor
+  - execution plan and leaderboard now show explicit route-mix-cleanup notes
+    when such a removal happens
+  - focused regression:
+    `pytest -q tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_route_search.py tests/test_no_trade.py tests/test_integration.py -k "runtime_runner or execution_plan or route_search or no_trade or replay_live_focused_fixture_keeps_real_pick_set or same_snapshot_keeps_stable_plan_and_pick_ids"`
+    -> **125 passed**
 
 ### Task 1: Verify and stabilize risk-profile integration
 

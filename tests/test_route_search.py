@@ -244,6 +244,42 @@ def test_route_leaderboard_top_n_sorted() -> None:
     assert "Top3 Profit Share" in content
     assert "Dominance Flag (>60%): YES" in content
 
+
+def test_route_leaderboard_shows_route_mix_cleanup_note() -> None:
+    routes = [
+        {
+            "route_label": "A->B",
+            "source_label": "A",
+            "dest_label": "B",
+            "shipping_provider": "ITL",
+            "profit_total": 10_000_000.0,
+            "isk_used": 50_000_000.0,
+            "m3_used": 1000.0,
+            "net_revenue_total": 60_000_000.0,
+            "total_fees_taxes": 1_000_000.0,
+            "total_route_cost": 500_000.0,
+            "shipping_cost_total": 200_000.0,
+            "items_count": 2,
+            "budget_util_pct": 50.0,
+            "cargo_util_pct": 20.0,
+            "route_mix_cleanup_notes": [
+                "Removed weak optional add-on pick Noise-5 'Needlejack' Filament: +0.06 route confidence, +0.07 market quality, -3.7% expected profit share."
+            ],
+            "picks": [
+                {"profit": 6_500_000.0, "expected_realized_profit_90d": 6_500_000.0, "decision_overall_confidence": 0.80, "overall_confidence": 0.80, "market_quality_score": 0.80},
+                {"profit": 3_500_000.0, "expected_realized_profit_90d": 3_500_000.0, "decision_overall_confidence": 0.78, "overall_confidence": 0.78, "market_quality_score": 0.78},
+            ],
+            "cost_model_confidence": "normal",
+        }
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-05_00-00-00", routes, ranking_metric="profit_total", max_routes=1)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "route_mix_cleanup:" in content
+    assert "Noise-5 'Needlejack' Filament" in content
+
 def test_route_leaderboard_prunes_blocked_route_from_ranked_section() -> None:
     routes = [
         {

@@ -1,105 +1,97 @@
 # Session Handoff
 
-Date: 2026-03-13 (session 23 replay quality calibration)
+Date: 2026-03-13 (session 24 route-mix cleanup)
 Branch: `dev`
 
 ## Completed This Session
 
-Calibrated the already-tightened market-quality / anti-bait logic against real
-replay and execution-plan artifacts so robust trades stop being penalized
-twice, while the earlier thin-book / fake-spread removals stay intact.
+Added a narrow post-selection route-mix cleanup so weak optional/speculative
+add-on picks can be removed from the final route only when they clearly hurt
+route confidence / route quality more than they help.
 
 ## Root Cause
 
-- replay evidence showed the remaining over-calibration was narrow:
-  `DEPTH_COLLAPSE` and `ORDERBOOK_CONCENTRATION` were common on still-robust
-  survivors, but `market_quality_score` multiplied both penalties before
-  `candidate_engine.py` multiplied liquidity/exit confidence by that same score
-  again
-- that double hit made decent instant survivors look weaker than the artifact
-  evidence justified
-- the clearly bad historical cases were driven by stricter signals
-  (`THIN_TOP_OF_BOOK`, `UNUSABLE_DEPTH`, `FAKE_SPREAD_RISK`), not by those
-  generic structural flags alone
+- `portfolio_builder.py` optimizes pick-level selection, cargo fill, and local
+  search before the final route summary exists
+- `route_search.py` then evaluates the whole selected mix via average pick
+  confidence / market quality, so a weak low-impact add-on can still depress a
+  good route after final selection
+- this is a final-mix problem, not a candidate-generation problem, so a small
+  post-selection pass is the right seam
 
 ## What Changed
 
-- `market_plausibility.py`
-  - softened only the generic quality multipliers:
-    `DEPTH_COLLAPSE 0.90 -> 0.95`
-    `ORDERBOOK_CONCENTRATION 0.92 -> 0.96`
-- `candidate_engine.py`
-  - replaced the direct
-    `quality_conf_penalty = market_quality_score` coupling with a softer blend
-    so candidate confidence is no longer effectively double-capped before the
-    final market-quality cap applies
-- `tests/test_core.py`
-  - added coverage proving a robust book with only
-    `DEPTH_COLLAPSE` + `ORDERBOOK_CONCENTRATION` stays actionable and keeps a
-    healthy `market_quality_score`
-- `tests/test_execution_plan.py`
-  - added coverage showing a robust instant pick in that calibrated quality
-    band still lands as `MANDATORY`
-- `tests/test_route_search.py`
-  - added a healthy-route confidence regression so the market-quality cap stays
-    realistic instead of collapsing good single-pick routes
-- `tests/test_integration.py`
-  - updated the focused replay fixture expectation to the new stable real pick
-    set of
-    `Noise-25 'Needlejack' Filament` and
-    `Polarized Heavy Neutron Blaster`
+- `runtime_runner.py`
+  - added `_apply_post_selection_route_mix_cleanup()` and called it from
+    `_finalize_route_result_runtime_state()`
+  - cleanup only evaluates non-mandatory picks
+  - removal requires:
+    - small removed profit share
+    - material recovery in route confidence or market quality
+    - route score improvement, or near-identical route score for very small
+      add-ons with clear quality drag
+  - cleanup will not:
+    - remove robust mandatory picks
+    - drop below the current profile's minimum strong-pick count
+    - push an internal self-haul route below its operational route floor
+  - removed picks are recorded in `route_mix_cleanup_removed_picks` and
+    `route_mix_cleanup_notes`
+- `execution_plan.py`
+  - execution plans now surface route-mix cleanup notes in the route summary /
+    warnings block
+  - route leaderboard now prints `route_mix_cleanup:` lines when cleanup ran
+- `nullsectrader.py`
+  - exported the cleanup helper for focused tests
 
 ## Replay / Artifact Verification
 
-- focused replay fixture:
-  `tests/fixtures/replay_live_focused_o4t_jita_20260308.json`
-  - actionable route stayed `o4t -> jita_44`
-  - stable pick set stayed at 2 picks:
-    `Noise-25 'Needlejack' Filament`,
-    `Polarized Heavy Neutron Blaster`
-  - execution plan now shows `Route Confidence: 0.83`
-    with `2 MANDATORY, 0 OPTIONAL, 0 SPECULATIVE`
-  - `Large Warhead Calefaction Catalyst II` stayed out
-- narrow `replay_snapshot.json` audit on `o4t -> jita_44` and `jita_44 -> cj6`
-  - bad historical names such as
-    `IFFA Compact Damage Control`,
-    `Large Warhead Calefaction Catalyst II`,
-    `Heavy Gremlin Compact Energy Neutralizer`,
-    `Drone Mutaplasmid Residue`
-    did not return
-  - robust survivors such as
-    `Noise-25 'Needlejack' Filament`,
-    `Medium Hybrid Locus Coordinator II`,
-    `AV-Composite Molecular Condenser`
-    remained actionable / mandatory where the artifacts supported it
+- motivating artifact before this change:
+  - narrow `replay_snapshot.json` O4T->Jita artifact showed
+    `Noise-5 'Needlejack' Filament` as an optional add-on with only ~5.8m
+    expected profit and much weaker confidence than the two core picks, while
+    the route sat at `Route Confidence: 0.66`
+- current narrow rerun after this change:
+  - `o4t -> jita_44` now came in at `Route Confidence: 0.72`
+  - cleanup did not fire on that rerun because the route no longer crossed the
+    new removal threshold; this is intentional because the pass is meant for
+    clear trade-off cases, not for cosmetic beautification
+- focused replay fixture stayed stable:
+  - `o4t -> jita_44`
+  - `Noise-25 'Needlejack' Filament`
+  - `Polarized Heavy Neutron Blaster`
 
 ## Tests And Verification
 
 - focused regression:
-  - `pytest -q tests/test_core.py tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py`
-    -> **132 passed**
-- manual replay audit:
-  - focused fixture run on `replay_live_focused_o4t_jita_20260308.json`
-  - narrow route-search run on local `replay_snapshot.json`
+  - `pytest -q tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_route_search.py`
+    -> **86 passed**
+  - `pytest -q tests/test_no_trade.py tests/test_integration.py -k "replay_live_focused_fixture_keeps_real_pick_set or same_snapshot_keeps_stable_plan_and_pick_ids or no_trade"`
+    -> **39 passed**
+- new coverage proves:
+  - a weak optional add-on is removed when route quality gains outweigh its
+    small profit contribution
+  - cleanup does not remove an optional pick if the active profile would lose a
+    required second strong pick
+  - execution plan and leaderboard surface cleanup notes
 
 ## Remaining Limits
 
-- this session did not add new market data or new scoring families; it only
-  calibrated existing thresholds and the existing confidence seam
-- route confidence can still drop when a selected route keeps a weak optional
-  pick, because `route_search.py` intentionally caps by average pick market
-  quality across the full selected route mix
+- the cleanup is intentionally narrow and may not fire on every low-confidence
+  optional pick; it only acts on clear small-share / quality-drag trade-offs
+- current replay evidence did not produce a live cleanup removal after the
+  latest market-quality calibration; the removal case is covered by targeted
+  runtime tests built from the observed artifact pattern
 - an unrelated pre-existing local modification in `location_utils.py` remains
   intentionally untouched
 
 ## Files Touched
 
-- `market_plausibility.py`
-- `candidate_engine.py`
-- `tests/test_core.py`
+- `runtime_runner.py`
+- `execution_plan.py`
+- `nullsectrader.py`
+- `tests/test_runtime_runner.py`
 - `tests/test_execution_plan.py`
 - `tests/test_route_search.py`
-- `tests/test_integration.py`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
 - `ARCHITECTURE.md`

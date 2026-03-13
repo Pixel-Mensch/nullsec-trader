@@ -15,6 +15,8 @@ This map is based on focused output and test inspection, not a full audit.
 - renders applied personal-layer scope/effect lines when a route actually used them
 - distinguishes per-route actionable summaries from aggregate-alternative totals
 - surfaces internal-route operational floor notes and suppressed low-profit routes
+- surfaces route-mix cleanup notes when weak add-on picks were removed after
+  final route selection
 
 ## Inputs
 

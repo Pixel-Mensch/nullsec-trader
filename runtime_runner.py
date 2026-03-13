@@ -917,6 +917,10 @@ def _refresh_route_result_from_current_picks(result: dict) -> dict:
     return result
 
 
+def _pick_expected_realized_profit(pick: dict) -> float:
+    return float(pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0)
+
+
 def _resolve_internal_route_operational_profit_floor(cfg: dict, filters_used: dict) -> float:
     route_search_cfg = cfg.get("route_search", {}) if isinstance(cfg, dict) else {}
     if not isinstance(route_search_cfg, dict):
@@ -927,6 +931,169 @@ def _resolve_internal_route_operational_profit_floor(cfg: dict, filters_used: di
     strict_floor = float(_resolve_strict_mode_cfg(cfg).get("planned_profit_floor_isk", 0.0) or 0.0)
     profile_floor = float(filters_used.get("_profile_min_expected_profit_isk", 0.0) or 0.0)
     return float(max(strict_floor, profile_floor, 0.0))
+
+
+def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
+    picks = list(result.get("picks", []) or [])
+    result["route_mix_cleanup_applied"] = False
+    result["route_mix_cleanup_removed_count"] = 0
+    result["route_mix_cleanup_removed_picks"] = []
+    result["route_mix_cleanup_notes"] = []
+    if len(picks) < 2:
+        return result
+
+    from execution_plan import _CAT_MANDATORY, _CAT_SPECULATIVE, _categorize_pick
+    from no_trade import _profile_min_strong_picks
+    from route_search import summarize_route_for_ranking
+
+    filters_used = result.get("filters_used", {})
+    if not isinstance(filters_used, dict):
+        filters_used = {}
+    profile_name = str(filters_used.get("_profile_name", "") or "")
+    min_strong_picks = int(_profile_min_strong_picks(profile_name)) if profile_name else 1
+    transport_mode = str(result.get("transport_mode", "") or "").strip().lower()
+    internal_floor = _resolve_internal_route_operational_profit_floor(cfg, filters_used)
+
+    # Replay on 2026-03-13 showed weak optional add-on picks contributing only
+    # a few percent of expected profit while dragging route confidence down by
+    # ~0.06. Keep this pass narrow: only remove non-mandatory add-ons when the
+    # route score improves, confidence or market quality recover materially,
+    # and the lost profit share stays small.
+    max_profit_share_by_category = {
+        _CAT_SPECULATIVE: 0.15,
+        "optional": 0.10,
+    }
+    min_gain_by_category = {
+        _CAT_SPECULATIVE: 0.03,
+        "optional": 0.04,
+    }
+
+    removed_entries: list[dict] = []
+    notes: list[str] = []
+    while True:
+        current_picks = list(result.get("picks", []) or [])
+        if len(current_picks) < 2:
+            break
+        current_summary = summarize_route_for_ranking(result)
+        current_total_profit = max(1.0, float(current_summary.get("total_expected_realized_profit", 0.0) or 0.0))
+        current_score = float(current_summary.get("risk_adjusted_score", 0.0) or 0.0)
+        current_conf = float(current_summary.get("route_confidence", 0.0) or 0.0)
+        current_quality = float(current_summary.get("market_quality_factor", 0.0) or 0.0)
+        current_strong_picks = sum(1 for p in current_picks if _categorize_pick(p) != _CAT_SPECULATIVE)
+
+        best_candidate: dict | None = None
+        for idx, pick in enumerate(current_picks):
+            category = str(_categorize_pick(pick))
+            if category == _CAT_MANDATORY:
+                continue
+
+            trial_picks = current_picks[:idx] + current_picks[idx + 1 :]
+            if not trial_picks:
+                continue
+
+            trial_strong_picks = sum(1 for p in trial_picks if _categorize_pick(p) != _CAT_SPECULATIVE)
+            if current_strong_picks >= min_strong_picks and trial_strong_picks < min_strong_picks:
+                continue
+
+            trial_result = dict(result)
+            trial_result["picks"] = list(trial_picks)
+            _refresh_route_result_from_current_picks(trial_result)
+            if (
+                transport_mode == "internal_self_haul"
+                and internal_floor > 0.0
+                and float(trial_result.get("expected_realized_profit_total", 0.0) or 0.0) + 1e-6 < internal_floor
+            ):
+                continue
+
+            trial_summary = summarize_route_for_ranking(trial_result)
+            if not bool(trial_summary.get("actionable", False)):
+                continue
+
+            removed_profit = _pick_expected_realized_profit(pick)
+            profit_share = removed_profit / current_total_profit
+            conf_gain = float(trial_summary.get("route_confidence", 0.0) or 0.0) - current_conf
+            quality_gain = float(trial_summary.get("market_quality_factor", 0.0) or 0.0) - current_quality
+            trial_score = float(trial_summary.get("risk_adjusted_score", 0.0) or 0.0)
+            score_gain_ratio = (trial_score - current_score) / max(abs(current_score), 1.0)
+
+            max_profit_share = float(max_profit_share_by_category.get(category, 0.10))
+            min_gain = float(min_gain_by_category.get(category, 0.04))
+            score_retained = trial_score / max(abs(current_score), 1.0)
+            if profit_share > max_profit_share + 1e-9:
+                continue
+            if conf_gain + 1e-9 < min_gain and quality_gain + 1e-9 < min_gain:
+                continue
+            clearly_better_route = score_gain_ratio > 0.01
+            near_same_score_but_cleaner = (
+                profit_share <= 0.05 + 1e-9
+                and score_retained >= 0.98
+                and (conf_gain >= (min_gain + 0.01) or quality_gain >= (min_gain + 0.01))
+            )
+            if not clearly_better_route and not near_same_score_but_cleaner:
+                continue
+
+            candidate = {
+                "idx": idx,
+                "pick": dict(pick),
+                "category": category,
+                "profit_share": float(profit_share),
+                "conf_gain": float(conf_gain),
+                "quality_gain": float(quality_gain),
+                "score_gain_ratio": float(score_gain_ratio),
+            }
+            if best_candidate is None or (
+                candidate["score_gain_ratio"],
+                candidate["conf_gain"] + candidate["quality_gain"],
+                -candidate["profit_share"],
+            ) > (
+                best_candidate["score_gain_ratio"],
+                best_candidate["conf_gain"] + best_candidate["quality_gain"],
+                -best_candidate["profit_share"],
+            ):
+                best_candidate = candidate
+
+        if best_candidate is None:
+            break
+
+        removed_pick = dict(best_candidate["pick"])
+        current_picks.pop(int(best_candidate["idx"]))
+        result["picks"] = list(current_picks)
+        note = (
+            f"Removed weak {best_candidate['category']} add-on pick {removed_pick.get('name', '?')}: "
+            f"+{best_candidate['conf_gain']:.2f} route confidence, "
+            f"+{best_candidate['quality_gain']:.2f} market quality, "
+            f"-{best_candidate['profit_share']:.1%} expected profit share."
+        )
+        removed_entries.append(
+            {
+                "type_id": int(removed_pick.get("type_id", 0) or 0),
+                "name": str(removed_pick.get("name", "") or ""),
+                "category": str(best_candidate["category"]),
+                "expected_profit_removed": float(_pick_expected_realized_profit(removed_pick)),
+                "profit_share_removed": float(best_candidate["profit_share"]),
+                "route_confidence_gain": float(best_candidate["conf_gain"]),
+                "market_quality_gain": float(best_candidate["quality_gain"]),
+                "risk_adjusted_score_gain_ratio": float(best_candidate["score_gain_ratio"]),
+                "reason": "route_mix_cleanup_tradeoff",
+                "note": note,
+            }
+        )
+        notes.append(note)
+        _refresh_route_result_from_current_picks(result)
+
+    if not removed_entries:
+        return result
+
+    explain = result.get("explain", {})
+    if not isinstance(explain, dict):
+        explain = {}
+    explain["route_mix_cleanup_removed"] = list(removed_entries)
+    result["explain"] = explain
+    result["route_mix_cleanup_applied"] = True
+    result["route_mix_cleanup_removed_count"] = int(len(removed_entries))
+    result["route_mix_cleanup_removed_picks"] = list(removed_entries)
+    result["route_mix_cleanup_notes"] = list(notes)
+    return _refresh_route_result_from_current_picks(result)
 
 
 def _apply_internal_self_haul_operational_filter(result: dict, cfg: dict) -> dict:
@@ -963,6 +1130,7 @@ def _apply_internal_self_haul_operational_filter(result: dict, cfg: dict) -> dic
 
 def _finalize_route_result_runtime_state(result: dict, cfg: dict) -> dict:
     _refresh_route_result_from_current_picks(result)
+    _apply_post_selection_route_mix_cleanup(result, cfg)
     return _apply_internal_self_haul_operational_filter(result, cfg)
 
 

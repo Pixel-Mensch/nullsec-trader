@@ -350,6 +350,9 @@ def _write_route_trip_summary(
             lines.append(f"  Internal Route Note: {operational_note}")
     if active_profile:
         lines.append(f"  Profile:   {active_profile.upper()}")
+    removed_count = int(leg.get("route_mix_cleanup_removed_count", 0) or 0)
+    if removed_count > 0:
+        lines.append(f"  Route Mix Cleanup: removed {removed_count} weak add-on pick(s)")
     lines.append("")
 
 
@@ -770,6 +773,10 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
 
         # ── Route-level warnings block ────────────────────────────────────────
         route_warns = _route_level_warnings(picks, route_summary)
+        for note in list(leg.get("route_mix_cleanup_notes", []) or []):
+            text = str(note or "").strip()
+            if text:
+                route_warns.append(text)
         if route_warns:
             lines.append("WARNINGS")
             for w in route_warns:
@@ -922,6 +929,10 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         _append_reason_lines(lines, "   ", list(summary.get("positive_reasons", []) or []), "positive_reasons", detail_mode=detail_mode)
         _append_reason_lines(lines, "   ", list(summary.get("negative_reasons", []) or []), "negative_reasons", detail_mode=detail_mode)
         _append_reason_lines(lines, "   ", list(summary.get("warnings", []) or []), "warnings", detail_mode=detail_mode)
+        for note in list(r.get("route_mix_cleanup_notes", []) or []):
+            text = str(note or "").strip()
+            if text:
+                lines.append(f"   route_mix_cleanup: {text}")
         cost_model_confidence = str(r.get("cost_model_confidence", "normal") or "normal")
         if cost_model_confidence != "normal":
             lines.append(f"   transport_cost_confidence: {cost_model_confidence}")

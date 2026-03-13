@@ -209,6 +209,11 @@ Not fully re-audited this session:
 - execution-plan totals now distinguish between the single best actionable
   route and aggregate totals across alternative routes, with explicit wording
   that the aggregate is not one combined executable plan
+- final route results now pass through a small post-selection route-mix cleanup
+  in `runtime_runner.py`: clearly weak optional/speculative add-on picks can be
+  removed after selection when they only contribute a small profit share but
+  materially improve route confidence / market-quality and do not materially
+  worsen the route score
 - route prune reasons are now more specific for common failure families:
   no candidates, profit floor, confidence, budget rule, fill/depth, sell time,
   invalid volume, post-portfolio constraints, and internal route floor
@@ -276,6 +281,7 @@ centered on:
 - hard pick-level profile enforcement and explainable prune reasons
 - route-ranking adjustments by profile
 - replay-based calibration of market-quality and anti-bait thresholds
+- post-selection route-mix cleanup for weak optional/speculative add-ons
 - execution-plan and summary-output restructuring with honest
   aggregate-vs-actionable / sequential-leg semantics
 - CLI/runtime integration for profile-aware output
@@ -336,6 +342,11 @@ Files that indicate this focus:
   `route_search.py` intentionally caps by average pick market quality across
   the whole selected route mix. That behavior was left unchanged in this
   session.
+- a narrow post-selection route-mix cleanup seam now exists, but the current
+  narrow `replay_snapshot.json` rerun did not produce a live removal after the
+  latest market-quality calibration; the new cleanup is covered by targeted
+  runtime/output tests and is designed for clear trade-off cases rather than
+  cosmetic route beautification.
 - `route_search.py` speculative penalty was re-reviewed on 2026-03-07. The
   small planned-share term still looks like a separate route-composition risk
   heuristic, not a confirmed double-counting defect, so no change was made.

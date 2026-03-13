@@ -510,6 +510,16 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result])
         assert "MANDATORY" in content
 
+    def test_route_mix_cleanup_note_is_rendered_in_execution_plan(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["route_mix_cleanup_removed_count"] = 1
+        result["route_mix_cleanup_notes"] = [
+            "Removed weak optional add-on pick Noise-5 'Needlejack' Filament: +0.06 route confidence, +0.07 market quality, -3.7% expected profit share."
+        ]
+        content = self._write_and_read([result])
+        assert "Route Mix Cleanup: removed 1 weak add-on pick(s)" in content
+        assert "Noise-5 'Needlejack' Filament" in content
+
     def test_speculative_section_present(self):
         result = _make_route_result(picks=[_speculative_pick()])
         content = self._write_and_read([result])
