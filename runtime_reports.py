@@ -24,6 +24,43 @@ def _fmt_isk_de(x: float) -> str:
     return f"{s} ISK"
 
 
+def _is_route_actionable(route: dict, summary: dict | None = None) -> bool:
+    route_summary = summary if isinstance(summary, dict) else summarize_route_for_ranking(route)
+    return bool(route_summary.get("actionable", False))
+
+
+def _append_operational_route_lines(lines: list[str], route: dict, prefix: str = "") -> None:
+    prune_reason = str(route.get("route_prune_reason", "") or "")
+    if prune_reason:
+        lines.append(f"{prefix}route_prune_reason: {prune_reason}")
+    operational_floor = float(route.get("operational_profit_floor_isk", 0.0) or 0.0)
+    if operational_floor > 0.0:
+        lines.append(f"{prefix}Internal Route Floor: {_fmt_isk_de(operational_floor)}")
+    suppressed_profit = float(route.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+    if suppressed_profit > 0.0:
+        lines.append(f"{prefix}Suppressed Expected Profit: {_fmt_isk_de(suppressed_profit)}")
+    operational_note = str(route.get("operational_filter_note", "") or "")
+    if operational_note:
+        lines.append(f"{prefix}Internal Route Note: {operational_note}")
+
+
+def _best_actionable_route_entry(route_results: list[dict]) -> tuple[dict, dict] | None:
+    actionable_entries: list[tuple[dict, dict]] = []
+    for route in list(route_results or []):
+        summary = summarize_route_for_ranking(route)
+        if _is_route_actionable(route, summary):
+            actionable_entries.append((route, summary))
+    if not actionable_entries:
+        return None
+    return max(
+        actionable_entries,
+        key=lambda entry: (
+            float(entry[1].get("total_expected_realized_profit", 0.0) or 0.0),
+            float(entry[1].get("route_confidence", 0.0) or 0.0),
+        ),
+    )
+
+
 def _pick_fee_components(pick: dict) -> dict[str, float]:
     sales_tax_isk = float(pick.get("sales_tax_isk", pick.get("sales_tax_total", 0.0)) or 0.0)
     broker_fee_isk = float(pick.get("broker_fee_isk", pick.get("sell_broker_fee_total", 0.0)) or 0.0)
@@ -335,6 +372,8 @@ def write_enhanced_summary(
     forward_funnel: FilterFunnel = None,
     return_funnel: FilterFunnel = None,
     run_uuid: str = "",
+    forward_result: dict | None = None,
+    return_result: dict | None = None,
 ) -> None:
     from datetime import datetime
 
@@ -351,6 +390,11 @@ def write_enhanced_summary(
     lines.append(f"  Trading budget: {fmt_isk(budget_isk)}")
     lines.append("")
     lines.append("FORWARD ROUTE (O4T -> CJ6):")
+    if isinstance(forward_result, dict) and forward_result:
+        forward_summary = summarize_route_for_ranking(forward_result)
+        forward_status = "ACTIONABLE" if _is_route_actionable(forward_result, forward_summary) else "NOT ACTIONABLE"
+        lines.append(f"  Status: {forward_status}")
+        _append_operational_route_lines(lines, forward_result, prefix="  ")
     lines.append(f"  Selected items: {len(forward_picks)}")
     lines.append(f"  Total cost: {fmt_isk(forward_cost)}")
     lines.append(f"  Total profit: {fmt_isk(forward_profit)}")
@@ -362,6 +406,11 @@ def write_enhanced_summary(
     if forward_funnel:
         lines.extend(forward_funnel.get_summary_lines())
     lines.append("RETURN ROUTE (CJ6 -> O4T):")
+    if isinstance(return_result, dict) and return_result:
+        return_summary = summarize_route_for_ranking(return_result)
+        return_status = "ACTIONABLE" if _is_route_actionable(return_result, return_summary) else "NOT ACTIONABLE"
+        lines.append(f"  Status: {return_status}")
+        _append_operational_route_lines(lines, return_result, prefix="  ")
     lines.append(f"  Selected items: {len(return_picks)}")
     lines.append(f"  Total cost: {fmt_isk(return_cost)}")
     lines.append(f"  Total profit: {fmt_isk(return_profit)}")
@@ -373,10 +422,31 @@ def write_enhanced_summary(
     if return_funnel:
         lines.extend(return_funnel.get_summary_lines())
     lines.append("=" * 70)
-    lines.append(f"TOTAL PROFIT: {fmt_isk(forward_profit + return_profit)}")
+    best_leg_entry = _best_actionable_route_entry([r for r in [forward_result, return_result] if isinstance(r, dict) and r])
+    lines.append("BEST ACTIONABLE LEG")
+    if best_leg_entry is None:
+        lines.append("  No actionable leg available.")
+    else:
+        best_leg, best_summary = best_leg_entry
+        lines.append(f"  Route: {best_leg.get('route_label', '')}")
+        lines.append(f"  Expected Profit: {fmt_isk(float(best_summary.get('total_expected_realized_profit', 0.0) or 0.0))}")
+        lines.append(f"  Route Confidence: {float(best_summary.get('route_confidence', 0.0) or 0.0):.2f}")
+    lines.append("")
+    lines.append("AGGREGATE ACROSS SEQUENTIAL ROUNDTRIP LEGS")
     lines.append(
-        f"Total margin: {((forward_profit + return_profit) / (forward_cost + return_cost) * 100) if (forward_cost + return_cost) > 0 else 0:.2f}%"
+        "These totals sum forward and return legs. They are NOT a simultaneous capital requirement "
+        "and can exceed the starting budget because capital may be reused between legs."
     )
+    lines.append(f"Aggregate Expected Profit Across Legs: {fmt_isk(forward_profit + return_profit)}")
+    lines.append(
+        f"Aggregate Margin Across Sequential Legs: "
+        f"{((forward_profit + return_profit) / (forward_cost + return_cost) * 100) if (forward_cost + return_cost) > 0 else 0:.2f}%"
+    )
+    peak_capital = max(
+        float(forward_result.get("capital_committed", forward_cost) if isinstance(forward_result, dict) else forward_cost),
+        float(return_result.get("capital_committed", return_cost) if isinstance(return_result, dict) else return_cost),
+    )
+    lines.append(f"Peak Single-Leg Capital: {fmt_isk(peak_capital)}")
     lines.append("=" * 70)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -429,14 +499,18 @@ def write_chain_summary(path: str, chain_label: str, timestamp: str, leg_results
         lines.append("Keine Legs ausgefuehrt.")
         lines.append("")
     for leg in leg_results:
+        route_summary = summarize_route_for_ranking(leg)
+        route_status = "ACTIONABLE" if _is_route_actionable(leg, route_summary) else "NOT ACTIONABLE"
         lines.append(f"Route: {leg['route_label']}")
         lines.append(f"leg_disabled: {bool(leg.get('leg_disabled', False))} ({leg.get('leg_disabled_reason', '')})")
+        lines.append(f"route_status: {route_status}")
         lines.append(f"Mode: {leg['mode']} (selected: {leg['selected_mode']})")
         lines.append(f"strict_mode_enabled: {bool(leg['filters_used'].get('strict_mode_enabled', False))}")
         lines.append(f"Ranking Metric: {str(leg['filters_used'].get('ranking_metric', 'profit_per_m3_per_day'))}")
         lines.append(f"Filters: {json.dumps(leg['filters_used'], ensure_ascii=False, sort_keys=True)}")
         lines.append(f"Total candidates: {leg['total_candidates']}")
         lines.append(f"passed_all_filters: {leg['passed_all_filters']}")
+        _append_operational_route_lines(lines, leg)
         lines.append("WHY_OUT Summary (top 10):")
         reason_counts = leg.get("why_out_summary", {})
         for reason, count in sorted(reason_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
@@ -506,6 +580,7 @@ def write_execution_plan_chain(
     total_fees_taxes = 0.0
     total_shipping_cost = 0.0
     total_route_costs = 0.0
+    rendered_leg_entries: list[tuple[dict, dict]] = []
 
     def append_section(title: str, leg_results: list[dict]) -> tuple[float, float, float, float, float]:
         section_cost = 0.0
@@ -518,15 +593,23 @@ def write_execution_plan_chain(
         lines.append("-" * len(title))
         lines.append("")
         for leg in leg_results:
-            if bool(leg.get("leg_disabled", False)):
-                continue
             picks = leg.get("picks", []) or []
-            if not picks:
-                continue
             route_summary = summarize_route_for_ranking(leg)
+            should_surface_non_actionable = (
+                bool(str(leg.get("route_prune_reason", "") or ""))
+                or float(leg.get("operational_profit_floor_isk", 0.0) or 0.0) > 0.0
+                or bool(leg.get("route_blocked_due_to_transport", False))
+            )
+            if bool(leg.get("leg_disabled", False)) and not should_surface_non_actionable:
+                continue
+            if not picks and not should_surface_non_actionable:
+                continue
+            rendered_leg_entries.append((leg, route_summary))
             section_leg_num += 1
             lines.append(f"LEG: LEG {section_leg_num}")
             lines.append(f"Route: {leg.get('route_label', '')}")
+            status = "ACTIONABLE" if _is_route_actionable(leg, route_summary) else "NOT ACTIONABLE"
+            lines.append(f"Status: {status}")
             route_id = str(leg.get("route_id", leg.get("route_tag", "")) or "")
             if route_id:
                 lines.append(f"Route ID: {route_id}")
@@ -541,6 +624,7 @@ def write_execution_plan_chain(
             route_pos = format_reason_digest(list(route_summary.get("positive_reasons", []) or []), limit=3)
             route_neg = format_reason_digest(list(route_summary.get("negative_reasons", []) or []), limit=3)
             route_warn = format_reason_digest(list(route_summary.get("warnings", []) or []), limit=2)
+            _append_operational_route_lines(lines, leg)
             if route_pos:
                 lines.append(f"Route Reasons+: {route_pos}")
             if route_neg:
@@ -555,6 +639,10 @@ def write_execution_plan_chain(
                         f"value={float(contributor.get('value', 0.0)):.4f} | {contributor.get('text', '')}"
                     )
             lines.append("")
+            if not picks:
+                lines.append("No actionable picks for this leg.")
+                lines.append("")
+                continue
             ordered = sorted(picks, key=lambda x: float(x.get("profit", 0.0)), reverse=True)
             for idx, p in enumerate(ordered, start=1):
                 ensure_record_explainability(p, max_liq_days=float(leg.get("filters_used", {}).get("max_expected_days_to_sell", 90.0) if isinstance(leg.get("filters_used", {}), dict) else 90.0))
@@ -650,14 +738,37 @@ def write_execution_plan_chain(
         total_route_costs += r_route_costs
 
     lines.append("=" * 70)
-    lines.append(f"TOTAL COST: {_fmt_isk_de(total_cost)}")
-    lines.append(f"TOTAL NET REVENUE: {_fmt_isk_de(total_revenue)}")
-    lines.append(f"TOTAL EXPECTED PROFIT: {_fmt_isk_de(total_profit)}")
-    lines.append(f"TOTAL FEES AND TAXES: {_fmt_isk_de(total_fees_taxes)}")
+    lines.append("BEST ACTIONABLE LEG")
+    best_leg_entry = _best_actionable_route_entry([leg for leg, _summary in rendered_leg_entries])
+    if best_leg_entry is None:
+        lines.append("No actionable leg available.")
+    else:
+        best_leg, best_summary = best_leg_entry
+        lines.append(f"Route: {best_leg.get('route_label', '')}")
+        lines.append(f"Expected Profit: {_fmt_isk_de(float(best_summary.get('total_expected_realized_profit', 0.0) or 0.0))}")
+        lines.append(f"Route Confidence: {float(best_summary.get('route_confidence', 0.0) or 0.0):.2f}")
+        lines.append(f"Capital Lock Risk: {float(best_summary.get('capital_lock_risk', 0.0) or 0.0):.2f}")
+    lines.append("")
+    lines.append("AGGREGATE ACROSS SEQUENTIAL CHAIN LEGS")
+    lines.append(
+        "These totals sum sequential chain legs. They are NOT a simultaneous capital requirement "
+        "and can exceed the starting budget because capital may be reused between legs."
+    )
+    lines.append(f"Aggregate Leg Cost Turnover: {_fmt_isk_de(total_cost)}")
+    lines.append(f"Aggregate Net Revenue Across Legs: {_fmt_isk_de(total_revenue)}")
+    lines.append(f"Aggregate Expected Profit Across Legs: {_fmt_isk_de(total_profit)}")
+    lines.append(f"Aggregate Fees and Taxes Across Legs: {_fmt_isk_de(total_fees_taxes)}")
     if total_shipping_cost > 0.0:
-        lines.append(f"TOTAL SHIPPING COST: {_fmt_isk_de(total_shipping_cost)}")
+        lines.append(f"Aggregate Shipping Cost Across Legs: {_fmt_isk_de(total_shipping_cost)}")
         lines.append(f"shipping_cost_total: {_fmt_isk_de(total_shipping_cost)}")
-    lines.append(f"TOTAL ROUTE COSTS: {_fmt_isk_de(total_route_costs)}")
+    lines.append(f"Aggregate Route Costs Across Legs: {_fmt_isk_de(total_route_costs)}")
+    peak_capital = 0.0
+    if rendered_leg_entries:
+        peak_capital = max(
+            float(leg.get("capital_committed", leg.get("isk_used", 0.0)) or 0.0)
+            for leg, _summary in rendered_leg_entries
+        )
+    lines.append(f"Peak Capital Committed In One Leg: {_fmt_isk_de(peak_capital)}")
     lines.append("=" * 70)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))

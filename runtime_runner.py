@@ -2435,6 +2435,8 @@ def run_cli() -> None:
             forward_funnel=forward_result.get("funnel"),
             return_funnel=return_result.get("funnel"),
             run_uuid=plan_id,
+            forward_result=forward_result,
+            return_result=return_result,
         )
         plan_path = _write_trade_plan_artifact(
             [forward_result, return_result],

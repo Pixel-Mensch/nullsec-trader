@@ -235,3 +235,39 @@ def test_route_leaderboard_prunes_blocked_route_from_ranked_section() -> None:
     assert "PRUNED / NOT ACTIONABLE" in content
     assert "- BLOCKED: missing_transport_cost_model" in content
 
+
+def test_route_leaderboard_shows_internal_route_floor_for_suppressed_route() -> None:
+    routes = [
+        {
+            "route_label": "GOOD",
+            "source_label": "A",
+            "dest_label": "B",
+            "shipping_provider": "ITL",
+            "expected_realized_profit_total": 10_000_000.0,
+            "full_sell_profit_total": 12_000_000.0,
+            "isk_used": 50_000_000.0,
+            "m3_used": 1000.0,
+            "picks": [{"expected_realized_profit_90d": 10_000_000.0, "overall_confidence": 0.8, "expected_days_to_sell": 10.0}],
+            "cost_model_confidence": "normal",
+        },
+        {
+            "route_label": "WEAK INTERNAL",
+            "source_label": "UALX-3",
+            "dest_label": "C-J6MT",
+            "transport_mode": "internal_self_haul",
+            "route_prune_reason": "internal_route_profit_below_operational_floor",
+            "operational_profit_floor_isk": 2_000_000.0,
+            "suppressed_expected_realized_profit_total": 1_300_000.0,
+            "operational_filter_note": "Internal nullsec routes require at least 2.0m ISK expected realized profit.",
+            "picks": [],
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-13_00-00-00", routes, ranking_metric="risk_adjusted_expected_profit", max_routes=5)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "WEAK INTERNAL" in content
+    assert "internal_route_floor" in content
+    assert "suppressed_expected_profit" in content
+

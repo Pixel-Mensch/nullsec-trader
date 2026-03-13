@@ -951,6 +951,15 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
                 reason_code = str(pruned_reason.get("code", "") or "")
             suffix = f" [{reason_code}]" if reason_code else ""
             lines.append(f"- {r.get('route_label', '')}: {reason}{suffix}")
+            operational_floor = float(r.get("operational_profit_floor_isk", 0.0) or 0.0)
+            if operational_floor > 0.0:
+                lines.append(f"  internal_route_floor: {fmt_isk_de(operational_floor)}")
+            suppressed_profit = float(r.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+            if suppressed_profit > 0.0:
+                lines.append(f"  suppressed_expected_profit: {fmt_isk_de(suppressed_profit)}")
+            operational_note = str(r.get("operational_filter_note", "") or "")
+            if operational_note:
+                lines.append(f"  internal_route_note: {operational_note}")
         lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -986,7 +995,7 @@ def write_no_trade_report(
     # Reason codes
     reason_codes = list(no_trade_result.get("reason_codes", []) or [])
     if reason_codes:
-        lines.append("GRÜNDE / REASONS")
+        lines.append("GRUENDE / REASONS")
         lines.append("-" * 40)
         for r in reason_codes:
             sev = str(r.get("severity", "")).upper()
@@ -1025,14 +1034,23 @@ def write_no_trade_report(
             candidates = int(nm.get("total_candidates", 0) or 0)
             blocked = bool(nm.get("transport_blocked", False))
             lines.append(f"  {label}")
-            lines.append(f"    Grund: {reason}  |  Kandidaten geprüft: {candidates}")
+            lines.append(f"    Grund: {reason}  |  Kandidaten geprueft: {candidates}")
             if blocked:
                 lines.append("    [Transport blockiert - keine Shipping Lane verfuegbar]")
+            operational_floor = float(nm.get("operational_profit_floor_isk", 0.0) or 0.0)
+            if operational_floor > 0.0:
+                lines.append(f"    Internal Route Floor: {fmt_isk_de(operational_floor)}")
+            suppressed_profit = float(nm.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+            if suppressed_profit > 0.0:
+                lines.append(f"    Suppressed Expected Profit: {fmt_isk_de(suppressed_profit)}")
+            operational_note = str(nm.get("operational_filter_note", "") or "")
+            if operational_note:
+                lines.append(f"    Internal Route Note: {operational_note}")
             why = dict(nm.get("why_out_summary", {}) or {})
             if why:
                 top_why = sorted(why.items(), key=lambda kv: kv[1], reverse=True)[:3]
                 why_str = "  ".join(f"{k}={v}" for k, v in top_why)
-                lines.append(f"    Ablehnungsgründe: {why_str}")
+                lines.append(f"    Ablehnungsgruende: {why_str}")
         lines.append("")
 
     # Profile comparison
@@ -1040,7 +1058,7 @@ def write_no_trade_report(
     if comparison:
         lines.append("PROFIL-VERGLEICH")
         lines.append("-" * 40)
-        lines.append("  Würde ein anderes Profil hier handeln?")
+        lines.append("  Wuerde ein anderes Profil hier handeln?")
         for pname, would_trade in sorted(comparison.items()):
             verdict = "JA - wuerde handeln" if would_trade else "NEIN - wuerde ebenfalls ablehnen"
             lines.append(f"    {pname:<20} {verdict}")

@@ -88,6 +88,9 @@ Not fully re-audited this session:
 - cargo-fill density checks now compare expected-realized profit on both sides
   for planned exits
 - execution plan, leaderboard, CSV, and summary outputs
+- route-profile, chain, roundtrip, leaderboard, and no-trade text artifacts
+  now distinguish between actionable routes/legs and aggregate sequential or
+  alternative totals instead of implying one simultaneous executable spend
 - local trade journal and confidence calibration support
 - targeted test suite plus lightweight custom test runner
 - optional private character context via EVE SSO/ESI with local token storage,
@@ -235,9 +238,9 @@ Not fully re-audited this session:
   limits; very old trades can stay uncertain when the loaded transaction window
   does not reach far enough back
 - personal analytics and the opt-in decision layer are now visible in journal
-  views, normal runtime output, and execution plans, but chain/roundtrip
-  summary artifacts outside `execution_plan.py` still do not mirror the same
-  compact status block
+  views, normal runtime output, execution plans, and the adjacent no-trade /
+  summary artifacts, but the non-CLI web surfaces still intentionally stay
+  lighter-weight
 - the personal decision layer is intentionally narrow: it only adjusts
   `decision_overall_confidence` with hard caps and explainability, so evidence
   for broader scope tuning is still limited
@@ -253,7 +256,8 @@ centered on:
 
 - hard pick-level profile enforcement and explainable prune reasons
 - route-ranking adjustments by profile
-- execution-plan output restructuring and aggregate-vs-actionable semantics
+- execution-plan and summary-output restructuring with honest
+  aggregate-vs-actionable / sequential-leg semantics
 - CLI/runtime integration for profile-aware output
 - targeted core-logic cleanup in portfolio construction and volume handling
 - optional private character-context integration and cacheable ESI sync
@@ -298,10 +302,9 @@ Files that indicate this focus:
 
 ## Known Issues And Uncertainties
 
-- Route-profile execution-plan behavior is materially cleaner than on
-  2026-03-08, but chain/roundtrip summary artifacts outside
-  `write_execution_plan_profiles()` still deserve a follow-up review for the
-  same aggregate-total semantics and internal-route floor messaging.
+- Route-profile, chain, roundtrip, leaderboard, and no-trade text outputs now
+  share the same honest aggregate semantics and preserve internal-route floor
+  messaging, but browser/UI surfaces were not re-audited in this session.
 - `route_search.py` speculative penalty was re-reviewed on 2026-03-07. The
   small planned-share term still looks like a separate route-composition risk
   heuristic, not a confirmed double-counting defect, so no change was made.

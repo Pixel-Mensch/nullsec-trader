@@ -70,9 +70,11 @@ Use this section to avoid loading large unrelated modules.
 - Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
 - Shipping costs, route blocking, and transport context: `shipping.py`
 - Fee calculations: `fees.py`, `fee_engine.py`
-- Human-readable output, route plan rendering, and no-trade reports: `execution_plan.py`
+- Human-readable output, route plan rendering, route leaderboard, and no-trade
+  reports: `execution_plan.py`
 - Do Not Trade decision engine (reason codes, near-misses, profile comparison): `no_trade.py`
-- CSV and summary writers: `runtime_reports.py`
+- CSV and summary writers for chain/roundtrip artifacts with sequential-leg
+  aggregate semantics: `runtime_reports.py`
 - Journal CLI and persistence: `journal_cli.py`, `journal_store.py`,
   `journal_models.py`, `journal_reporting.py`
 - Wallet/journal reconciliation: `journal_reconciliation.py`

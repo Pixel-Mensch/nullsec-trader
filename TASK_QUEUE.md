@@ -53,13 +53,23 @@ full backlog scrape.
 ### Task 0b: Mirror route-profile plan semantics in chain and roundtrip artifacts
 
 - Priority: P1
-- Status: ready
+- Status: DONE
+- Completed: 2026-03-13
 - Relevant files: `execution_plan.py`, `runtime_reports.py`,
   `runtime_runner.py`, `tests/`
-- Expected result: chain/roundtrip summaries should not imply one simultaneous
-  executable plan when they still show alternative legs or suppressed internal
-  routes; internal-route operational floor notes should stay visible outside
-  the route-profile text plan as well.
+- What was done:
+  - `runtime_reports.py` now labels chain and roundtrip footer totals as
+    sequential aggregates instead of simultaneous capital requirements
+  - chain execution plans now surface suppressed/non-actionable legs when an
+    internal route was filtered by the operational floor instead of dropping
+    them silently
+  - chain summaries, route leaderboard, and no-trade near-miss output now keep
+    `internal_self_haul` floor, suppressed-profit, and prune-reason details
+  - `runtime_runner.py` now passes full route metadata into the roundtrip
+    summary writer so the writer can show the same honest status/floor context
+  - focused regression:
+    `pytest -q tests/test_runtime_reports.py tests/test_execution_plan.py tests/test_route_search.py tests/test_no_trade.py tests/test_core.py tests/test_runtime_runner.py tests/test_shipping.py`
+    -> **168 passed**
 
 ### Task 2: Practical output + Do Not Trade + full audit (this session)
 
