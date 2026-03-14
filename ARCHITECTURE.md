@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14 (session 35 cleanup + clickable web launcher)
+Last updated: 2026-03-14 (session 36 web launcher quoting fix)
 
 ## Evidence And Limits
 
@@ -51,8 +51,9 @@ import facade used by tests and local tooling.
 The click-first local web startup path is:
 
 1. `start_webapp.bat`
-2. `webapp.app.run_dev_server()`
-3. browser on `http://127.0.0.1:8000`
+2. `start_webapp_server.bat`
+3. `python -m uvicorn webapp.app:create_app --factory --host 127.0.0.1 --port 8000`
+4. browser on `http://127.0.0.1:8000`
 
 ## High-Value Files By Task
 
@@ -100,6 +101,7 @@ Use this section to avoid loading large unrelated modules.
 - Local browser UI and service bridge: `webapp/app.py`, `webapp/routes/pages.py`,
   `webapp/services/`
 - Clickable Windows web launcher: `start_webapp.bat`
+- Internal batch helper for the clickable launcher: `start_webapp_server.bat`
 - Startup node and chain resolution: `startup_helpers.py`
 
 ## Runtime Flow

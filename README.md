@@ -159,7 +159,8 @@ Oder per Doppelklick direkt aus dem Repo:
 
 - [`start_webapp.bat`](./start_webapp.bat)
 - startet den lokalen Web-Server in einem eigenen Fenster
-- oeffnet danach direkt den Browser auf `http://127.0.0.1:8000`
+- wartet kurz auf die echte Erreichbarkeit des lokalen Servers und oeffnet
+  danach den Browser auf `http://127.0.0.1:8000`
 - beenden: das Fenster `Nullsec Trader Web` schliessen oder `Strg+C`
 
 Dann im Browser:

@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 35 cleanup + clickable web launcher)
+Last updated: 2026-03-14 (session 36 web launcher quoting fix)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -26,6 +26,11 @@ full backlog scrape.
   - targeted verification:
     `python -m pytest -q tests/test_runtime_cleanup.py`
     -> **2 passed**
+  - follow-up on 2026-03-14:
+    the original nested `python -c` launch path in `start_webapp.bat` broke on
+    Windows quoting; the launcher now delegates to
+    `start_webapp_server.bat` and waits for a real local HTTP response before
+    opening the browser
 
 ### Task 0n: Add active web risk-profile switching and clearer internal-route diagnosis
 

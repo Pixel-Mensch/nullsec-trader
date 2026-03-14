@@ -58,6 +58,7 @@ journal, character, and config workflows without replacing the CLI.
 - `webapp/templates/`
 - `webapp/static/`
 - `start_webapp.bat`
+- `start_webapp_server.bat`
 - `tests/test_webapp.py`
 
 ## Important Entry Points
@@ -65,6 +66,7 @@ journal, character, and config workflows without replacing the CLI.
 - `webapp.app:create_app`
 - `webapp.app:run_dev_server`
 - `start_webapp.bat`
+- `start_webapp_server.bat`
 - page routes in `webapp/routes/pages.py`
 - `invoke_runtime()` in `webapp/services/runtime_bridge.py`
 
@@ -83,6 +85,7 @@ journal, character, and config workflows without replacing the CLI.
 
 - local browser sessions
 - `start_webapp.bat`
+- `start_webapp_server.bat`
 - `nullsec-trader-web`
 - `uvicorn webapp.app:create_app --factory`
 - `tests/test_webapp.py`
@@ -95,6 +98,9 @@ journal, character, and config workflows without replacing the CLI.
 - expose more status metadata without changing trading logic
 - keep the click-first Windows launcher aligned with the same local host/port
   and dependency assumptions as `run_dev_server()`
+- keep launcher quoting simple on Windows: prefer delegating to a real batch
+  helper over nested inline Python snippets when a Doppelklick entry point is
+  needed
 - surface active-character state globally and switch it without bypassing the
   existing runtime/journal character-context files
 - surface active-profile state globally and keep browser analysis defaults

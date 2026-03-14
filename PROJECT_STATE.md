@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 35 cleanup + clickable web launcher)
+Last updated: 2026-03-14 (session 36 web launcher quoting fix)
 
 ## Snapshot
 
@@ -68,9 +68,11 @@ Reviewed this session:
 - `tests/test_webapp.py`
 - `tests/test_runtime_cleanup.py`
 - `start_webapp.bat`
+- `start_webapp_server.bat`
 - current `git status`
 - `python -m pytest -q`
 - `python .\main.py clean`
+- direct local launcher verification of `start_webapp.bat` with HTTP `200`
 - focused live CLI run on 2026-03-08 using local overlay config
 - replay CLI run on 2026-03-08 against the freshly written live snapshot
 - real HTTP `uvicorn` checks for `/analysis` replay and long-running live POST
@@ -223,7 +225,11 @@ Not fully re-audited this session:
 - the repo now also has a small click-first web launcher `start_webapp.bat`
   for Windows single-user use: it checks Python, installs missing web
   dependencies from `requirements.txt` if needed, starts the local web server
-  in its own console window, and opens the browser on `127.0.0.1:8000`
+  in its own console window, waits for a real local HTTP response, and then
+  opens the browser on `127.0.0.1:8000`
+- that launcher now delegates the actual server process to the small internal
+  helper `start_webapp_server.bat`, which avoids the prior broken nested
+  `python -c` quoting path on Windows
 - the web journal page now surfaces current cached character snapshot data
   (open orders plus wallet transaction/journal counts) even when the local
   journal DB is empty; opening the dedicated Reconcile/Unmatched tabs now
