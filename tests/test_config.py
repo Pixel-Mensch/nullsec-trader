@@ -110,11 +110,34 @@ def test_validate_config_rejects_invalid_mode() -> None:
     assert any("filters_forward.mode must be one of" in str(e) for e in vr.get("errors", []))
 
 
+def test_validate_config_rejects_unknown_risk_profile_name() -> None:
+    cfg = _minimal_valid_config()
+    cfg["risk_profile"] = {"name": "imaginary_profile"}
+    vr = nst.validate_config(cfg)
+    assert any("risk_profile.name must be one of" in str(e) for e in vr.get("errors", []))
+
+
 def test_validate_config_rejects_negative_internal_self_haul_profit_floor() -> None:
     cfg = _minimal_valid_config()
     cfg["route_search"] = {"internal_self_haul_min_expected_profit_isk": -1}
     vr = nst.validate_config(cfg)
     assert any("route_search.internal_self_haul_min_expected_profit_isk" in str(e) for e in vr.get("errors", []))
+
+
+def test_validate_config_rejects_invalid_ansiblex_toll_mode() -> None:
+    cfg = _minimal_valid_config()
+    cfg["ansiblex"] = {"enabled": True, "toll_mode": "weird_mode"}
+    vr = nst.validate_config(cfg)
+    assert any("ansiblex.toll_mode" in str(e) for e in vr.get("errors", []))
+
+def test_validate_config_rejects_invalid_candidate_node_kind() -> None:
+    cfg = _minimal_valid_config()
+    cfg["candidate_nodes"] = {
+        "enabled": True,
+        "nodes": [{"label": "1DQ1-A", "kind": "mystery_hub"}],
+    }
+    vr = nst.validate_config(cfg)
+    assert any("candidate_nodes.nodes[0].kind" in str(e) for e in vr.get("errors", []))
 
 def test_validate_config_rejects_invalid_structure_regions() -> None:
     cfg = _minimal_valid_config()

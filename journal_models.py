@@ -45,6 +45,23 @@ def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> f
     return float(numerator) / float(denominator)
 
 
+def _route_confidence_value(route: dict, key: str, fallback: float) -> float:
+    try:
+        value = float(route.get(key, fallback) or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    fallback_value = float(fallback or 0.0)
+    if value <= 0.0 and fallback_value > 0.0:
+        return fallback_value
+    return value
+
+
+def _summarize_route_for_manifest(route: dict) -> dict:
+    from route_search import summarize_route_for_ranking
+
+    return summarize_route_for_ranking(route)
+
+
 def make_run_id(timestamp: str | None = None, stable_suffix_source: str | None = None) -> str:
     base = str(timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")).strip() or "run"
     safe_base = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in base)
@@ -179,6 +196,7 @@ def build_trade_plan_manifest(
     for route in list(route_results or []):
         if not isinstance(route, dict):
             continue
+        route_summary = _summarize_route_for_manifest(route)
         source_location_id = _node_location_id(route.get("source_node_info"))
         target_location_id = _node_location_id(route.get("dest_node_info"))
         character_summary = route.get("_character_context_summary", {})
@@ -196,6 +214,13 @@ def build_trade_plan_manifest(
             if text:
                 route_warning_lines.append(text)
         route_warning_lines = list(dict.fromkeys(route_warning_lines))
+        route_failure_hints = [str(item).strip() for item in list(route.get("route_failure_hints", []) or []) if str(item).strip()]
+        route_failure_summary = str(route.get("route_failure_summary", "") or "").strip()
+        if not route_failure_summary and route_failure_hints:
+            route_failure_summary = " | ".join(route_failure_hints)
+        display_meta = route.get("_route_display", {})
+        if not isinstance(display_meta, dict):
+            display_meta = {}
         picks_out: list[dict] = []
         for pick in list(route.get("picks", []) or []):
             if not isinstance(pick, dict):
@@ -276,17 +301,31 @@ def build_trade_plan_manifest(
                 "route_label": str(route.get("route_label", "") or ""),
                 "source_market": str(route.get("source_label", "") or ""),
                 "target_market": str(route.get("dest_label", "") or ""),
-                "route_confidence": float(route.get("route_confidence", 0.0) or 0.0),
-                "raw_route_confidence": float(route.get("raw_route_confidence", route.get("route_confidence", 0.0)) or 0.0),
-                "calibrated_route_confidence": float(
-                    route.get("calibrated_route_confidence", route.get("route_confidence", 0.0)) or 0.0
+                "route_confidence": _route_confidence_value(route, "route_confidence", float(route_summary.get("route_confidence", 0.0) or 0.0)),
+                "raw_route_confidence": _route_confidence_value(
+                    route,
+                    "raw_route_confidence",
+                    float(route_summary.get("raw_route_confidence", route_summary.get("route_confidence", 0.0)) or 0.0),
                 ),
-                "transport_confidence": float(route.get("transport_confidence", 0.0) or 0.0),
-                "raw_transport_confidence": float(
-                    route.get("raw_transport_confidence", route.get("transport_confidence", 0.0)) or 0.0
+                "calibrated_route_confidence": _route_confidence_value(
+                    route,
+                    "calibrated_route_confidence",
+                    float(route_summary.get("calibrated_route_confidence", route_summary.get("route_confidence", 0.0)) or 0.0),
                 ),
-                "calibrated_transport_confidence": float(
-                    route.get("calibrated_transport_confidence", route.get("transport_confidence", 0.0)) or 0.0
+                "transport_confidence": _route_confidence_value(
+                    route,
+                    "transport_confidence",
+                    float(route_summary.get("transport_confidence", 0.0) or 0.0),
+                ),
+                "raw_transport_confidence": _route_confidence_value(
+                    route,
+                    "raw_transport_confidence",
+                    float(route_summary.get("raw_transport_confidence", route_summary.get("transport_confidence", 0.0)) or 0.0),
+                ),
+                "calibrated_transport_confidence": _route_confidence_value(
+                    route,
+                    "calibrated_transport_confidence",
+                    float(route_summary.get("calibrated_transport_confidence", route_summary.get("transport_confidence", 0.0)) or 0.0),
                 ),
                 "capital_lock_risk": float(route.get("capital_lock_risk", 0.0) or 0.0),
                 "calibration_warning": str(route.get("calibration_warning", "") or ""),
@@ -301,17 +340,36 @@ def build_trade_plan_manifest(
                 "net_revenue_total": float(route.get("net_revenue_total", 0.0) or 0.0),
                 "total_fees_taxes": float(route.get("total_fees_taxes", 0.0) or 0.0),
                 "expected_realized_profit_total": float(route.get("expected_realized_profit_total", 0.0) or 0.0),
+                "expected_profit_before_logistics_total": float(route.get("expected_profit_before_logistics_total", 0.0) or 0.0),
+                "expected_profit_after_logistics_total": float(route.get("expected_profit_after_logistics_total", route.get("expected_realized_profit_total", 0.0)) or 0.0),
                 "full_sell_profit_total": float(route.get("full_sell_profit_total", route.get("profit_total", 0.0)) or 0.0),
+                "full_sell_profit_before_logistics_total": float(route.get("full_sell_profit_before_logistics_total", 0.0) or 0.0),
+                "full_sell_profit_after_logistics_total": float(route.get("full_sell_profit_after_logistics_total", route.get("full_sell_profit_total", route.get("profit_total", 0.0))) or 0.0),
                 "m3_used": float(route.get("m3_used", route.get("total_route_m3", 0.0)) or 0.0),
                 "cargo_total": float(route.get("cargo_total", 0.0) or 0.0),
                 "cargo_util_pct": float(route.get("cargo_util_pct", 0.0) or 0.0),
                 "shipping_cost_total": float(route.get("shipping_cost_total", route.get("total_shipping_cost", 0.0)) or 0.0),
                 "total_route_cost": float(route.get("total_route_cost", 0.0) or 0.0),
                 "total_transport_cost": float(route.get("total_transport_cost", 0.0) or 0.0),
+                "travel_summary": str(route.get("travel_summary", "") or ""),
+                "travel_path_found": bool(route.get("travel_path_found", False)),
+                "travel_path_kind": str(route.get("travel_path_kind", "") or ""),
+                "gate_leg_count": int(route.get("gate_leg_count", 0) or 0),
+                "ansiblex_leg_count": int(route.get("ansiblex_leg_count", 0) or 0),
+                "ansiblex_logistics_cost_isk": float(route.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+                "used_ansiblex": bool(route.get("used_ansiblex", False)),
+                "travel_source_system": str(route.get("travel_source_system", "") or ""),
+                "travel_dest_system": str(route.get("travel_dest_system", "") or ""),
+                "travel_path_legs": json.loads(json.dumps(route.get("travel_path_legs", []), ensure_ascii=False)),
+                "candidate_node_summary": str(route.get("candidate_node_summary", "") or ""),
+                "candidate_nodes": json.loads(json.dumps(route.get("candidate_nodes", []), ensure_ascii=False)),
                 "transport_mode": str(route.get("transport_mode", "") or ""),
                 "transport_mode_note": str(route.get("transport_mode_note", "") or ""),
                 "budget_left_reason": str(route.get("budget_left_reason", "") or ""),
                 "warnings": json.loads(json.dumps(route_warning_lines, ensure_ascii=False)),
+                "route_failure_hints": json.loads(json.dumps(route_failure_hints, ensure_ascii=False)),
+                "route_failure_summary": route_failure_summary,
+                "display": json.loads(json.dumps(display_meta, ensure_ascii=False)),
                 "picks": picks_out,
             }
         )

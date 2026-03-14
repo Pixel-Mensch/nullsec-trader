@@ -181,6 +181,48 @@ def test_trade_plan_manifest_falls_back_to_sell_avg_for_instant_picks() -> None:
     assert float(route["expected_realized_profit_total"]) == 500.0
 
 
+def test_trade_plan_manifest_derives_route_confidence_when_route_fields_are_missing() -> None:
+    route_results = [
+        {
+            "route_tag": "o4t_to_jita",
+            "route_label": "o4t -> jita_44",
+            "source_label": "o4t",
+            "dest_label": "jita_44",
+            "route_actionable": True,
+            "cost_model_confidence": "normal",
+            "isk_used": 1000.0,
+            "budget_total": 2000.0,
+            "budget_util_pct": 50.0,
+            "expected_realized_profit_total": 500.0,
+            "picks": [
+                {
+                    "type_id": 35,
+                    "name": "Pyerite",
+                    "qty": 5,
+                    "buy_avg": 100.0,
+                    "sell_avg": 250.0,
+                    "gross_profit_if_full_sell": 550.0,
+                    "expected_realized_profit_90d": 500.0,
+                    "expected_days_to_sell": 5.0,
+                    "exit_type": "planned_sell",
+                    "overall_confidence": 0.84,
+                    "mode": "planned_sell",
+                }
+            ],
+        }
+    ]
+    nst.attach_plan_metadata(route_results, plan_id="plan_test_confidence", created_at="2026-03-07T12:00:00+00:00")
+    manifest = nst.build_trade_plan_manifest(
+        route_results,
+        plan_id="plan_test_confidence",
+        created_at="2026-03-07T12:00:00+00:00",
+        runtime_mode="route_profiles",
+    )
+    route = manifest["routes"][0]
+    assert float(route["route_confidence"]) > 0.0
+    assert float(route["transport_confidence"]) > 0.0
+
+
 def test_trade_plan_import_creates_journal_entry() -> None:
     route_results = _sample_route_results()
     nst.attach_plan_metadata(route_results, plan_id="plan_test_2", created_at="2026-03-07T12:00:00+00:00")

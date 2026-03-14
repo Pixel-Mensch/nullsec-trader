@@ -14,14 +14,75 @@
           <p class="eyebrow">Local browser control surface</p>
           <h1><a href="/">Nullsec Trader Tool</a></h1>
         </div>
-        <nav class="site-nav" aria-label="Primary">
-          <a class="{% if page == 'dashboard' %}is-active{% endif %}" href="/">Dashboard</a>
-          <a class="{% if page == 'analysis' %}is-active{% endif %}" href="/analysis">Analyze</a>
-          <a class="{% if page == 'journal' %}is-active{% endif %}" href="/journal">Journal</a>
-          <a class="{% if page == 'character' %}is-active{% endif %}" href="/character">Character</a>
-          <a class="{% if page == 'config' %}is-active{% endif %}" href="/config">Config</a>
-        </nav>
+        <div class="header-meta">
+          <nav class="site-nav" aria-label="Primary">
+            <a class="{% if page == 'dashboard' %}is-active{% endif %}" href="/">Dashboard</a>
+            <a class="{% if page == 'analysis' %}is-active{% endif %}" href="/analysis">Analyze</a>
+            <a class="{% if page == 'journal' %}is-active{% endif %}" href="/journal">Journal</a>
+            <a class="{% if page == 'character' %}is-active{% endif %}" href="/character">Character</a>
+            <a class="{% if page == 'config' %}is-active{% endif %}" href="/config">Config</a>
+          </nav>
+          <div class="header-switchers">
+            <section class="character-switcher">
+              <div>
+                <p class="card-label">Active character</p>
+                <p class="switcher-title">{{ character_switch.active_character.display_name or "No active character" }}</p>
+                <p class="muted">{{ character_switch.basis_note }}</p>
+              </div>
+              {% if character_switch.available %}
+              <form method="post" action="/character/activate" class="inline-form">
+                <input type="hidden" name="return_to" value="{{ current_path or character_switch.return_to or '/' }}">
+                <label class="sr-only" for="active-character-select">Active character</label>
+                <select id="active-character-select" name="character_id">
+                  {% for item in character_switch.characters %}
+                  <option value="{{ item.character_id }}" {% if item.is_active %}selected{% endif %}>
+                    {{ item.display_name }}{% if item.has_profile %} | profile{% endif %}{% if item.has_token %} | token{% endif %}
+                  </option>
+                  {% endfor %}
+                </select>
+                <button class="button secondary" type="submit">Switch</button>
+              </form>
+              {% else %}
+              <a class="button secondary" href="/character">Login / sync</a>
+              {% endif %}
+            </section>
+            <section class="character-switcher">
+              <div>
+                <p class="card-label">Active profile</p>
+                <p class="switcher-title">{{ profile_switch.active_profile.name or "balanced" }}</p>
+                <p class="muted">{{ profile_switch.basis_note }}</p>
+              </div>
+              {% if profile_switch.available %}
+              <form method="post" action="/profile/activate" class="inline-form">
+                <input type="hidden" name="return_to" value="{{ current_path or profile_switch.return_to or '/' }}">
+                <label class="sr-only" for="active-profile-select">Active risk profile</label>
+                <select id="active-profile-select" name="profile_name">
+                  {% for item in profile_switch.profiles %}
+                  <option value="{{ item.name }}" {% if item.is_active %}selected{% endif %}>{{ item.name }}</option>
+                  {% endfor %}
+                </select>
+                <button class="button secondary" type="submit">Switch</button>
+              </form>
+              {% endif %}
+            </section>
+          </div>
+        </div>
       </header>
+
+      {% if security %}
+      <section class="security-banner {% if security.password_configured %}is-protected{% else %}is-local-only{% endif %}">
+        {% if security.password_configured %}
+        <strong>Web access is password protected.</strong>
+        <span>Browser requests require Basic Auth before any page content is shown.</span>
+        {% else %}
+        <strong>Web access is local-only by default.</strong>
+        <span>Remote requests without a configured web password are blocked.</span>
+        {% endif %}
+        {% if security.sensitive_path %}
+        <span class="security-tag">Sensitive page</span>
+        {% endif %}
+      </section>
+      {% endif %}
 
       <main class="page-content">
         {% block content %}{% endblock %}

@@ -46,6 +46,9 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Shipping- und zusaetzliche Routenkosten werden vor dem finalen Ranking vom Profit abgezogen.
 - Wenn fuer eine Route kein belastbares Transportmodell existiert, wird sie standardmaessig blockiert. Eine Zero-Cost-Ausnahme ist nur explizit ueber `route_search.allow_zero_transport_cost_for_routes` moeglich.
 - Interne Struktur-zu-Struktur-Routen ohne Jita werden dabei separat behandelt: sie laufen standardmaessig als `internal_self_haul` und werden nicht wegen fehlender externer Shipping-Lanes blockiert. Solange keine expliziten internen `route_costs` gesetzt sind, gelten dort aktuell `0 ISK` Transportkosten.
+- Wenn interne Routen leer bleiben, schreibt der Runtime jetzt zusaetzlich eine kurze Diagnose in Plan-/No-Trade-Output und Browser-Ergebnisse, statt nur grob `candidates_below_profit_floor` stehen zu lassen. Der Fokus liegt auf ehrlichen Hinweisen wie duenne Orderbuecher, unprofitabler Kandidatenbasis, aktive Profilfilter oder interner operativer Profit-Floor.
+- Optional kann fuer interne Corridor-Wege ein kleiner Ansiblex-Layer zugeschaltet werden. Die Source of Truth ist [`docs/Ansis.txt`](./docs/Ansis.txt) mit gerichteten Zeilen im Format `FROM -> TO`; Gate-Wege bleiben dabei weiter erhalten und werden nicht ersetzt.
+- Das aktuelle Ansiblex-Kostenmodell bleibt absichtlich klein und additiv: pro genutztem Ansiblex-Leg wird ein geschaetzter Fuel-/Toll-Kostenblock berechnet und zusaetzlich zu bestehenden Route-/Shipping-Kosten verbucht, statt das Route-Scoring oder die Profitformeln neu zu schreiben.
 
 ### Wichtiger Unterschied: Papierprofit vs. erwartbarer Profit
 
@@ -137,7 +140,8 @@ Bewusst erhalten bleiben:
 ### Lokale Web App
 
 Die CLI bleibt der produktive Kernpfad. Zusaetzlich gibt es jetzt eine lokale
-Web-App fuer Browser-Nutzung auf demselben Rechner.
+Web-App fuer Browser-Nutzung auf demselben Rechner oder einen kleinen privaten
+Single-User-Deploy.
 
 Start:
 
@@ -151,6 +155,14 @@ oder nach Installation ueber den Console-Script-Einstieg:
 nullsec-trader-web
 ```
 
+Oder per Doppelklick direkt aus dem Repo:
+
+- [`start_webapp.bat`](./start_webapp.bat)
+- startet den lokalen Web-Server in einem eigenen Fenster
+- wartet kurz auf die echte Erreichbarkeit des lokalen Servers und oeffnet
+  danach den Browser auf `http://127.0.0.1:8000`
+- beenden: das Fenster `Nullsec Trader Web` schliessen oder `Strg+C`
+
 Dann im Browser:
 
 `http://127.0.0.1:8000`
@@ -163,10 +175,60 @@ Aktuelle Seiten:
 - Character
 - Config
 
+Web Character / Profile seams:
+
+- im Header gibt es jetzt einen globalen `Active character`-Switcher fuer den
+  privaten Single-User-Betrieb
+- lokal bekannte Characters werden aus bereits gesehenen Token/Profile-Slots
+  angeboten; ein Wechsel kopiert den gewaehlten Token/Profile-Slot in die
+  bestehenden aktiven Runtime-Pfade statt einen zweiten Analysepfad zu bauen
+- auf der `Character`-Seite gibt es jetzt zusaetzlich `Login other character`:
+  das erzwingt einen frischen EVE-SSO-Login auch dann, wenn der aktuelle Token
+  noch gueltig ist, damit ein zweiter Character ueberhaupt als lokaler
+  switchbarer Slot gespeichert werden kann
+- neue Analysen, Character-Status und Journal-/Reconcile-Ansichten nutzen
+  damit denselben aktiv gewaehlten Character-Basiszustand
+- die Journal-Seite zeigt zusaetzlich offene Sell-Order-Exponierung des
+  aktiven Characters aus dem gecachten Character-Profil und ordnet sie, soweit
+  lokal moeglich, vorhandenen Journal-Eintraegen nach `item_type_id` zu
+- im Header gibt es jetzt zusaetzlich einen globalen `Active profile`-Switcher
+  fuer denselben privaten Single-User-Betrieb
+- die Auswahl kommt direkt aus `risk_profiles.BUILTIN_PROFILES`; es gibt keine
+  separat gepflegte Web-Profilliste
+- neue Browser-Analysen nutzen standardmaessig dieses aktive Profil; das
+  Analyse-Formular startet mit demselben Profil vorbelegt und kann es fuer
+  einen einzelnen Run noch explizit ueberschreiben
+- der aktive Profilzustand bleibt lokal in einem kleinen Web-State erhalten
+  und ersetzt keine CLI-/Config-Profile global
+
+Kleine Zugriffssicherung fuer private Deploys:
+
+- ohne gesetztes Web-Passwort ist ausschliesslich direkter localhost-Betrieb
+  der vorgesehene Modus; Proxy-, Tunnel- oder sonstige als nicht-direkt
+  erkennbare Requests werden explizit geblockt, statt die App still offen zu
+  lassen
+- fuer privaten non-local Single-User-Betrieb kann ein kleines Basic-Auth-Gate
+  gesetzt werden:
+  `NULLSEC_WEBAPP_PASSWORD=...` oder lokal `webapp.access_password`
+- `run_dev_server()` bleibt standardmaessig auf `127.0.0.1:8000`; `host` und
+  `port` koennen optional lokal oder per Env ueberschrieben werden
+- `Character` und `Config` gelten browserseitig als sensibel und werden mit
+  `Cache-Control: no-store` ausgeliefert
+- `Character` und `Config` bekommen in den Templates nur noch explizit
+  benoetigte, redigierte View-Model-Felder; rohe Secrets wie
+  `esi.client_secret` oder `webapp.access_password` werden dort nicht
+  durchgereicht
+
 Wichtige Grenzen:
 
-- lokal gedacht, keine oeffentliche Deployment-Architektur
-- keine neue Nutzerverwaltung
+- fuer privaten Single-User-Betrieb gedacht, keine oeffentliche oder
+  Multi-User-Deployment-Architektur
+- keine neue Nutzerverwaltung; nur kleines Passwort-Gate fuer private Deploys
+- keine Session-, Rollen- oder CSRF-Haertung; oeffentliche Multi-User-Haertung
+  bleibt bewusst ausserhalb dieses Blocks
+- Reverse Proxy / Tunnel / oeffentliche Exponierung ohne Passwort sind
+  absichtlich kein unterstuetzter Betriebsmodus dieses Blocks; wenn solcher
+  Betrieb gewuenscht ist, muss Schutz aktiv sein
 - keine Shell-Wrapper im Browser; die Web-Schicht nutzt kleine Services und
   fuer Vollruns einen in-process Runtime-Bridge auf `runtime_runner.run_cli()`
 - CLI, Route-Ranking, Candidate-Scoring, `no_trade`, Reconciliation und
@@ -182,6 +244,7 @@ Per CLI-Argument:
 
 ```powershell
 python .\main.py --profile conservative --cargo-m3 10000 --budget-isk 500m
+python .\main.py --profile small_wallet_hub_safe --cargo-m3 12000 --budget-isk 800m --compact
 python .\main.py --profile aggressive
 python .\main.py --profile instant_only
 python .\main.py --profile low_maintenance
@@ -221,6 +284,7 @@ Einzelne Parameter koennen im Config-Block ueberschrieben werden (werden auf das
 | Profil | Beschreibung | planned_sell | Max Items | Max Tage |
 |---|---|---|---|---|
 | `conservative` | Nur liquide Instant-Exits, enge Confidence-Schwellen | blockiert | 20 | 14 |
+| `small_wallet_hub_safe` | Kleine Wallet, direkte Exits, Reserve bleibt frei, harte Book-/Hub-Qualitaet | blockiert | 8 | 7 |
 | `balanced` | Standardverhalten, gemischte Exits (Standard-Profil) | erlaubt | 40 | 45 |
 | `aggressive` | Maximaler Papierprofit, duenne Maerkte toleriert | erlaubt | 100 | 90 |
 | `instant_only` | Kein planned_sell, nur Buy-Order-Exits | blockiert | 50 | 1 |
@@ -231,13 +295,17 @@ Einzelne Parameter koennen im Config-Block ueberschrieben werden (werden auf das
 
 - **Candidate Filter**: `min_fill_probability`, `max_expected_days_to_sell`, `planned_min_liquidity_confidence`, `min_expected_profit_isk`, `min_profit_per_m3`
 - **Portfolio**: `max_item_share_of_budget`, `max_items`, `max_liquidation_days_per_position`
+- **Finale Safety Gates**: Profile koennen nach dem Portfoliobau nochmals auf `liquidity_confidence`, `market_quality_score`, `manipulation_risk_score`, `expected_days_to_sell` und `profit/spend` hart filtern
+- **Reserve Liquidity**: `small_wallet_hub_safe` haelt einen Teil des Budgets als Reserve zurueck und plant nur mit dem spendable Budget
 - **planned_sell-Blockierung**: Profile wie `instant_only`, `conservative` und `low_maintenance` blockieren den planned_sell-Pfad vollstaendig
 - **Route-Ranking**: Jedes Profil gewichtet `stale_market_penalty`, `speculative_penalty`, `concentration_penalty` und `capital_lock_risk` unterschiedlich
-- **Output**: Das aktive Profil und seine Restriktionen erscheinen im Execution Plan Header
+- **Output**: Das aktive Profil und seine Restriktionen erscheinen im Execution Plan Header; `small_wallet_hub_safe` bekommt zusaetzlich einen kompakten `SAFE BUYS TODAY`-Block
 
 #### Beispiel: konservativ vs. aggressiv
 
 Bei denselben Marktdaten:
+
+- `small_wallet_hub_safe` ist noch wallet-schonender: direkte Exits only, 25% Reserve-Liquiditaet (mit 150m ISK Floor wenn das Budget es hergibt), 15% Max Budget/Item und zusaetzliche finale Gates fuer Liquidity, Market Quality und Profit/Spend.
 
 - `conservative` laesst nur Kandidaten mit >= 70% Fill-Probability, max. 14 Tage Verkaufsdauer, min. 5m ISK konservativem Profit durch — und blockiert planned_sell.
 - `aggressive` akzeptiert bereits 10% Fill-Probability, bis zu 90 Tage, keine ISK-Untergrenze und erlaubt speculative Exits.
@@ -331,6 +399,8 @@ Artefakte liegen unter dem ohnehin ignorierten `cache/`-Bereich:
 - `cache/character_context/sso_token.json`
 - `cache/character_context/sso_metadata.json`
 - `cache/character_context/character_profile.json`
+- `cache/character_context/saved_characters/`
+- `cache/character_context/web_character_registry.json`
 
 Der Safe-Cleanup ueber `python .\main.py clean` entfernt diese Dateien bewusst
 nicht.
@@ -513,6 +583,8 @@ Fuer den Betrieb relevant sind vor allem:
 - `structures`, `locations`, `structure_regions`
 - `fees`
 - `shipping_lanes`, `route_costs`, `shipping_defaults`
+- `ansiblex`
+- `candidate_nodes`
 - `filters_forward`, `filters_return`, `filters_planned_sell_forward`
 - `planned_sell`, `reference_price`, `strict_mode`
 - `portfolio`
@@ -545,10 +617,13 @@ Im Route-Profile- und Chain-Pfad schreibt das Tool ein `execution_plan_<timestam
 
 Pro Route werden unter anderem ausgegeben:
 
+- fuer `small_wallet_hub_safe` zusaetzlich ein kompakter `SAFE BUYS TODAY`-Block am Anfang: beste sichere Route, spendable Budget heute, geschuetzte Reserve und nur die saubersten Mandatory-Picks
 - Buy-/Sell-Ort
 - `Exit Type`
 - `Total Expected Realized Profit`
 - `Total Full Sell Profit`
+- `Expected Profit Before Logistics`
+- `Expected Profit After Logistics`
 - `route_confidence`
 - `transport_confidence`
 - `capital_lock_risk`
@@ -557,6 +632,12 @@ Pro Route werden unter anderem ausgegeben:
   offene Order-Anzahl
 - sichtbarer Order-Overlap-Hinweis, wenn vorgeschlagene Picks bereits mit
   eigenen Character-Orders kollidieren
+- kompakte Travel-Metadaten fuer interne Routen: Gate-Legs, Ansiblex-Legs,
+  geschaetzte Ansiblex-Logistikkosten und sichtbare Travel-Legs, wenn
+  Ansiblex genutzt wurde
+- optional kompakte Candidate-Node-Hinweise, wenn eine Route an einem
+  beobachteten `station_candidate`, `market_candidate` oder
+  `corridor_checkpoint` startet, endet oder vorbeilaeuft
 
 Pro Pick werden unter anderem ausgegeben:
 
@@ -582,6 +663,18 @@ Wichtig beim Lesen:
 - `instant` ist normalerweise belastbarer als `planned` oder `speculative`.
 - Lange `expected_days_to_sell`, schwache Confidence oder hohe Queue sprechen gegen den Trade.
 - `[NOT ACTIONABLE]` bedeutet: nicht normal handeln, auch wenn irgendwo noch ein theoretischer Spread sichtbar ist.
+- Route-Profile-Ausgaben sind jetzt zusaetzlich nach Streckenlogik lesbar:
+  direkte Legs stehen vor laengeren profitablen Spannweiten derselben Corridor-
+  Quelle, laengere profitable Legs wie `O4T -> 1ST` bleiben sichtbar, und
+  Jita-Connectoren bleiben als eigene Gruppe sichtbar
+- diese Corridor-Sortierung ist reine Darstellung; Route Search, Ranking und
+  Scoring werden dadurch nicht umgebaut
+- falls eine Route Ansiblex nutzt, wird das in Plan und Web-Resultaten sichtbar
+  gemacht: Travel-Zusammenfassung, einzelne Ansiblex-Legs, Gate-/Ansiblex-
+  Counts sowie Profit vor und nach Logistik
+- Candidate Nodes sind bewusst nur Beobachtungsknoten: sie erzeugen kein
+  eigenes Ranking, kein Fake-Scoring und machen ein System nicht automatisch zu
+  einem echten Handels-Hub
 
 ### Weitere Dateien
 
@@ -592,6 +685,13 @@ Je nach Modus entstehen ausserdem:
 - `*_to_*_<timestamp>.csv` fuer Pick-Daten
 - `*_top_candidates_<timestamp>.txt` fuer Kandidaten-Diagnostik und Rejection-Reasons
 - `trade_plan_<plan_id>.json` fuer Journal-Import und stabile Pick-IDs
+- `trade_plan_<plan_id>.json` enthaelt jetzt zusaetzlich Travel-Metadaten fuer
+  Gate-/Ansiblex-Legs, geschaetzte Ansiblex-Kosten sowie Profit vor und nach
+  Logistik fuer Browser- und Journal-Paritaet
+- `trade_plan_<plan_id>.json` leitet Route-/Transport-Confidence jetzt
+  notfalls aus derselben Route-Summary-Seam wie Leaderboard und Execution Plan
+  ab, damit JSON-/Browser-Ausgabe nicht mit `0.0` neben sinnvollen Textwerten
+  auseinanderlaufen
 - `snapshot_<timestamp>.json` im Snapshot-Only-Modus
 - `market_snapshot.json` als Laufzeit-Snapshot
 - `replay_snapshot.json`, wenn ein Live-Run einen Replay-Snapshot schreibt
@@ -616,6 +716,10 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`fees.py`](./fees.py), [`fee_engine.py`](./fee_engine.py): Gebuehrenmodell
 - [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
 - [`journal_reconciliation.py`](./journal_reconciliation.py): Wallet-Transaction-/Wallet-Journal-Matching gegen lokale Journal-Eintraege mit Confidence und Unmatched-Tracking
+- [`ansiblex.py`](./ansiblex.py): gerichteter Ansiblex-Parser, kleines Kostenmodell und interner Gate-/Ansiblex-Travel-Layer fuer Route-Metadaten
+- [`candidate_nodes.py`](./candidate_nodes.py): konfigurierbare Watch-/Hub-
+  Kandidaten mit sauberer Typtrennung fuer `station_candidate`,
+  `market_candidate` und `corridor_checkpoint`
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
 - [`route_search.py`](./route_search.py): Route Search, Ranking und Route-Summary fuer das Leaderboard
 - [`portfolio_builder.py`](./portfolio_builder.py): Portfolio-Bau unter Risiko-, Nachfrage-, Budget- und Cargo-Grenzen
@@ -627,6 +731,8 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`webapp/`](./webapp): lokale FastAPI-/Jinja2-Webschicht mit Services,
   Templates und statischen Assets fuer Dashboard, Analyse, Journal und
   Character-Status
+- [`docs/Ansis.txt`](./docs/Ansis.txt): Source of Truth fuer gerichtete
+  Ansiblex-Verbindungen; nur explizit vorhandene Richtungen gelten
 
 ### Runtime-Helfer
 
@@ -649,6 +755,17 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
 - `planned_sell` ist riskanter als `instant`, weil Queue und Konkurrenz sich nach dem Kauf veraendern koennen.
 - Regionale History ist fuer Strukturmaerkte nur ein schwacher Proxy. Das Tool behandelt sie inzwischen vorsichtiger, aber nicht magisch praezise.
 - Shipping-Modelle sind konfigurationsgetrieben. Wenn Lane-Parameter nicht zur realen Hauling-Situation passen, passt auch die Profitrechnung nicht.
+- Der Ansiblex-Layer ist bewusst klein: [`docs/Ansis.txt`](./docs/Ansis.txt)
+  liefert nur Topologie, keine echten LY-Distanzen. Das aktuelle Default-
+  Modell rechnet deshalb mit einer konstanten Schaetzung pro Ansiblex-Leg, bis
+  spaeter genauere Distanzdaten vorliegen.
+- Candidate Nodes sind absichtlich nur konfigurierbare Beobachtungspunkte.
+  `market_candidate` oder `corridor_checkpoint` bedeuten nicht automatisch,
+  dass dort ein belastbarer Handelsmarkt oder eine echte Station aktiv ist.
+  Die Default-`nodes`-Liste in `config.json` ist bewusst leer — Nodes duerfen
+  erst nach manueller Verifikation durch den Operator eingetragen werden.
+  NPC-Raum-, neutrale oder nicht verifizierte Kandidaten gehoeren nicht in die
+  Defaults.
 - Gebuehren haengen von den in der Config hinterlegten Skills und Markttypen ab. Wenn dein Charakter oder Markt-Setup davon abweicht, driftet das Ergebnis.
 - Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
   harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell
@@ -668,6 +785,10 @@ python .\tests\run_all.py
 python .\test_nullsectrader.py
 python .\scripts\quality_check.py
 ```
+
+Der minimale gepflegte CI-Pfad laeuft ueber `python .\scripts\quality_check.py`
+und spiegelt damit denselben Compile- und Pytest-Subset wie der Workflow unter
+`.github/workflows/ci.yml`.
 
 ### Was die Tests absichern
 

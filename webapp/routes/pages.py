@@ -3,18 +3,61 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from webapp.services import analysis_service, character_service, config_service, dashboard_service, journal_service
+from webapp.services import (
+    active_character_service,
+    active_profile_service,
+    analysis_service,
+    character_service,
+    config_service,
+    dashboard_service,
+    journal_service,
+)
+from webapp.security import describe_request_access
 
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent / "templates"))
 
 
+def _switch_return_path(request: Request) -> str:
+    path = str(request.url.path or "/").strip() or "/"
+    if path == "/analysis/run":
+        return "/analysis"
+    if path.startswith("/character/auth/") or path.startswith("/character/context/"):
+        return "/character"
+    query = str(request.url.query or "").strip()
+    return f"{path}?{query}" if query else path
+
+
+def _safe_return_path(raw_value: str) -> str:
+    value = str(raw_value or "").strip() or "/"
+    if not value.startswith("/") or value.startswith("//"):
+        return "/"
+    if value == "/analysis/run":
+        return "/analysis"
+    return value
+
+
 def _render(request: Request, template_name: str, **context):
-    return templates.TemplateResponse(request, template_name, {"request": request, **context})
+    security = getattr(request.state, "web_access", None)
+    if not isinstance(security, dict):
+        security = describe_request_access(request, getattr(request.app.state, "web_access_settings", {}))
+    current_path = _switch_return_path(request)
+    return templates.TemplateResponse(
+        request,
+        template_name,
+        {
+            "request": request,
+            "security": security,
+            "current_path": current_path,
+            "character_switch": active_character_service.get_switcher_context(current_path=current_path),
+            "profile_switch": active_profile_service.get_switcher_context(current_path=current_path),
+            **context,
+        },
+    )
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -44,6 +87,23 @@ def analysis_run(
         risk_profile=str(risk_profile or ""),
     )
     return _render(request, "results.html", page="analysis", result=result, data=result.get("form", analysis_service.get_analysis_form_data()))
+
+
+@router.post("/profile/activate")
+def profile_activate(request: Request, profile_name: str = Form(""), return_to: str = Form("/")):
+    result = active_profile_service.activate_profile(profile_name)
+    if bool(result.get("ok", False)):
+        return RedirectResponse(url=_safe_return_path(return_to), status_code=303)
+    return _render(
+        request,
+        "analysis.html",
+        page="analysis",
+        result=None,
+        data={
+            **analysis_service.get_analysis_form_data(),
+            "action_error": str(result.get("error", "Risk Profile konnte nicht aktiviert werden.") or "").strip(),
+        },
+    )
 
 
 @router.get("/journal", response_class=HTMLResponse)
@@ -78,6 +138,19 @@ def character_page(request: Request):
 @router.post("/character/auth/{action}", response_class=HTMLResponse)
 def character_auth_action(request: Request, action: str):
     return _render(request, "character.html", page="character", data=character_service.run_auth_action(action))
+
+
+@router.post("/character/activate")
+def character_activate(request: Request, character_id: str = Form(""), return_to: str = Form("/")):
+    result = character_service.activate_character(character_id)
+    if bool(result.get("ok", False)):
+        return RedirectResponse(url=_safe_return_path(return_to), status_code=303)
+    return _render(
+        request,
+        "character.html",
+        page="character",
+        data=character_service.get_character_page(action_error=str(result.get("error", "Character konnte nicht aktiviert werden.") or "").strip()),
+    )
 
 
 @router.post("/character/context/{action}", response_class=HTMLResponse)

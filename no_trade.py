@@ -148,6 +148,7 @@ def _build_near_misses(non_actionable: list[dict]) -> list[dict]:
             "total_candidates": int(r.get("total_candidates", 0) or 0),
             "why_out_summary": dict(r.get("why_out_summary", {}) or {}),
             "transport_blocked": bool(r.get("route_blocked_due_to_transport", False)),
+            "transport_mode": str(r.get("transport_mode", "") or ""),
             "operational_profit_floor_isk": float(r.get("operational_profit_floor_isk", 0.0) or 0.0),
             "suppressed_expected_realized_profit_total": float(r.get("suppressed_expected_realized_profit_total", 0.0) or 0.0),
             "operational_filter_note": str(r.get("operational_filter_note", "") or ""),

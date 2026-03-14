@@ -1,12 +1,237 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 26 output honesty + tail cleanup)
+Last updated: 2026-03-14 (session 37 character relogin slot fix)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0p: Let the web UI add a second character even when the current token is still valid
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/services/character_service.py`,
+  `webapp/templates/character.html`, `tests/test_webapp.py`,
+  `README.md`, `PROJECT_STATE.md`, `ARCHITECTURE.md`,
+  `SESSION_HANDOFF.md`, `docs/module-maps/webapp.md`
+- What was done:
+  - confirmed the user's local switcher only had one saved character slot, so
+    there was nothing to switch to
+  - identified the practical blocker: `Auth login` reused a valid token and
+    therefore did not force a new browser login for a different character
+  - added `Login other character` on the Character page, wired to a forced
+    `oauth_authorize(...)` path so another character can actually be saved and
+    then switched from the global header
+  - added a focused regression proving `relogin` bypasses `ensure_token(...)`
+    and forces the fresh SSO login path
+  - focused regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **25 passed**
+
+### Task 0o: Add a click-first Windows launcher for the local web UI
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `start_webapp.bat`, `README.md`, `ARCHITECTURE.md`,
+  `PROJECT_STATE.md`, `SESSION_HANDOFF.md`, `docs/module-maps/webapp.md`
+- What was done:
+  - added a root-level `start_webapp.bat` for Windows double-click use
+  - the launcher checks Python, installs missing web dependencies from
+    `requirements.txt` if needed, starts the local web server in its own
+    console window, and opens `http://127.0.0.1:8000` in the browser
+  - executed a real cleanup run with `python .\main.py clean` so the repo is
+    free of generated runtime artifacts again while preserving token, journal,
+    and character cache state
+  - targeted verification:
+    `python -m pytest -q tests/test_runtime_cleanup.py`
+    -> **2 passed**
+  - follow-up on 2026-03-14:
+    the original nested `python -c` launch path in `start_webapp.bat` broke on
+    Windows quoting; the launcher now delegates to
+    `start_webapp_server.bat` and waits for a real local HTTP response before
+    opening the browser
+
+### Task 0n: Add active web risk-profile switching and clearer internal-route diagnosis
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/routes/pages.py`,
+  `webapp/services/active_profile_service.py`,
+  `webapp/services/analysis_service.py`, `webapp/templates/`,
+  `runtime_runner.py`, `execution_plan.py`, `journal_models.py`, `tests/`
+- What was done:
+  - added a small single-user `Active profile` switcher in the web header,
+    backed by a tiny local state file and sourced directly from
+    `risk_profiles.BUILTIN_PROFILES`
+  - browser analysis now defaults to that active built-in profile, while still
+    allowing a one-run override in the form
+  - checked the current internal nullsec no-pick path against real artifacts:
+    the primary cause is still candidate scarcity / weak orderbook quality on
+    internal markets, not broken `internal_self_haul` transport wiring
+  - made final route prune output more honest when candidates passed search but
+    were later removed by profile rules
+  - added short route-diagnosis lines to execution-plan / no-trade output and
+    browser result cards so empty internal routes explain themselves better
+  - focused regression:
+    `python -m pytest -q tests/test_webapp.py tests/test_active_profile_service.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_no_trade.py tests/test_journal.py tests/test_runtime_reports.py`
+    -> **165 passed**
+
+### Task 0m: Add a small active-character switch seam to the local web UI
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/routes/pages.py`, `webapp/services/active_character_service.py`,
+  `webapp/services/character_service.py`, `webapp/services/journal_service.py`,
+  `webapp/templates/`, `journal_models.py`, `tests/`
+- What was done:
+  - added a small single-user active-character registry under the existing
+    character cache area and a global browser switcher that can activate a
+    locally saved character at any time
+  - character activation now replaces the existing active runtime token/profile
+    files, so later analysis runs and journal/reconcile views really use the
+    selected character basis instead of only showing a cosmetic label
+  - the character page now lists saved locally known characters and their local
+    token/profile availability
+  - the journal page now shows active-character sell-order exposure from the
+    cached character profile and matches it against local journal entries by
+    type where data exists
+  - `trade_plan_*.json` now derives route/transport confidence from the same
+    route-summary seam used by leaderboard/text output when those fields are
+    absent on the raw route record
+  - focused regression:
+    `python -m pytest -q tests/test_webapp.py tests/test_active_character_service.py tests/test_journal.py tests/test_runtime_runner.py tests/test_execution_plan.py`
+    -> **118 passed**
+
+### Task 0l: Add a small-wallet conservative hub-safe profile
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `risk_profiles.py`, `runtime_runner.py`,
+  `execution_plan.py`, `config_loader.py`, `no_trade.py`, `tests/`
+- What was done:
+  - added built-in profile `small_wallet_hub_safe` for low-downside
+    nullsec-to-hub trading with direct exits, harsh liquidity / market-quality
+    gates, small per-item exposure, and shorter sell-time tolerance
+  - added reserve-budget handling so this profile keeps part of the budget
+    liquid before route planning instead of merely warning about concentration
+  - added a compact `SAFE BUYS TODAY` section to execution plans for this
+    profile so the operator gets a short actionable buy list first
+  - tightened config validation for `risk_profile.name`
+  - fixed adjacent no-trade near-miss rendering so internal-route floor
+    metadata is shown whenever the near miss is explicitly an internal-floor
+    rejection
+  - focused regression:
+    `python -m pytest -q tests/test_risk_profiles.py tests/test_config.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_webapp.py`
+    -> **195 passed**
+  - adjacent regression:
+    `python -m pytest -q tests/test_no_trade.py tests/test_execution_plan.py`
+    -> **108 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **203 passed**
+
+### Task 0k: Add config-driven Imperium candidate nodes without hardcoded hub claims
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `candidate_nodes.py`, `config.json`, `config_loader.py`,
+  `runtime_runner.py`, `execution_plan.py`, `journal_models.py`,
+  `webapp/services/analysis_service.py`, `webapp/templates/results.html`,
+  `nullsectrader.py`, `tests/`, `scripts/quality_check.py`
+- What was done:
+  - added a small `candidate_nodes` config seam with explicit node kinds:
+    `station_candidate`, `market_candidate`, and `corridor_checkpoint`
+  - the mechanism supports `station_candidate`, `market_candidate`, and
+    `corridor_checkpoint` node kinds as configurable watch-node entries
+  - **follow-up (2026-03-14):** all previously preloaded Imperium systems and
+    `RE-C26` removed from the `config.json` defaults; the `nodes` list is now
+    intentionally empty — only manually verified, clearly blue nodes may be
+    added by the operator
+  - attached candidate-node hits to route metadata when a route starts, ends,
+    or passes through one of those nodes; this is display-only and does not
+    change route search or scoring
+  - execution plans, browser results, and `trade_plan` artifacts now surface a
+    compact candidate-node summary when relevant
+  - focused regression:
+    `python -m pytest -q tests/test_candidate_nodes.py tests/test_config.py tests/test_route_search.py tests/test_runtime_runner.py tests/test_shipping.py tests/test_execution_plan.py tests/test_webapp.py`
+    -> **181 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **199 passed**
+
+### Task 0j: Add a small directed ansiblex corridor travel layer
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `ansiblex.py`, `config.json`, `config_loader.py`,
+  `shipping.py`, `runtime_runner.py`, `execution_plan.py`,
+  `journal_models.py`, `webapp/services/analysis_service.py`,
+  `webapp/templates/results.html`, `nullsectrader.py`, `tests/`,
+  `scripts/quality_check.py`, `docs/Ansis.txt`
+- What was done:
+  - added `docs/Ansis.txt` as directed source of truth for optional ansiblex
+    connections; parser ignores blank lines and simple comments but does not
+    invent reverse edges
+  - kept normal gate travel intact and layered ansiblex edges on top of the
+    internal corridor graph instead of rewriting route search
+  - added a small configurable ansiblex cost model and folds its estimated
+    logistics cost additively into existing route transport costs
+  - route summaries, execution plans, browser results, and `trade_plan` JSON
+    now show gate legs, ansiblex legs, ansiblex logistics cost, travel summary,
+    and profit before vs after logistics
+  - corridor ordering stayed presentation-only; longer spans like
+    `O4T -> 1ST` and Jita connector routes remain visible
+  - focused regression:
+    `python -m pytest -q tests/test_ansiblex.py tests/test_config.py tests/test_route_search.py tests/test_runtime_runner.py tests/test_shipping.py tests/test_execution_plan.py tests/test_webapp.py`
+    -> **183 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **195 passed**
+
+### Task 0h: Add small private web protection and corridor-ordered route display
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/app.py`, `webapp/security.py`,
+  `webapp/routes/pages.py`, `webapp/services/analysis_service.py`,
+  `webapp/services/config_service.py`, `webapp/templates/results.html`,
+  `webapp/templates/base.html`, `execution_plan.py`, `runtime_runner.py`,
+  `journal_models.py`, `location_utils.py`, `tests/`,
+  `scripts/quality_check.py`, `.github/workflows/ci.yml`
+- What was done:
+  - added a small web access seam: optional Basic Auth when a web password is
+    configured; without a password only direct localhost request shape is
+    supported, while proxy-shaped requests are blocked
+  - scoped that seam to private single-user use instead of inventing a public
+    multi-user web architecture
+  - sensitive browser pages (`/character`, `/config`) now run behind the same
+    seam, emit `Cache-Control: no-store`, and receive only redacted/sanitized
+    template view models instead of broader raw config/context payloads
+  - restored `1st` normalization so corridor routes such as `O4T -> 1ST` and
+    Jita-to-1ST connectors remain visible
+  - route-profile results now carry presentation-only corridor metadata;
+    execution plans and browser results group direct legs before longer spans
+    while keeping longer profitable spans and Jita connectors visible without
+    touching route-search scoring
+  - synchronized `scripts/quality_check.py` with the pytest-based quality path
+    used by this block, removed CI drift around unused `pyflakes`, and added a
+    minimal CI workflow
+  - focused regression:
+    `pytest -q tests/test_route_search.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_webapp.py tests/test_shipping.py tests/test_integration.py`
+    -> **164 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **187 passed**
 
 ### Task 0: Restore execution-plan consistency for route profiles
 
@@ -147,6 +372,53 @@ full backlog scrape.
 
 ## P1
 
+### Task 1a: Localize the post-snapshot slow live-run path
+
+- Priority: P1
+- Status: TODO
+- Relevant files: `runtime_runner.py`, `runtime_clients.py`, `market_fetch.py`,
+  `cache/http_cache.json`, `cache/types.json`
+- Expected result:
+  - determine which live-only step still runs for a long time after
+    `replay_snapshot.json` has already been written
+  - confirm whether the stall is cache/type enrichment, remaining fetch work,
+    or later post-fetch runtime processing
+  - keep this diagnostic narrow; no broad performance rewrite unless the hot
+    path is clearly identified
+
+### Task 1b: Decide whether internal nullsec market coverage needs a narrow candidate-stage tweak
+
+- Priority: P1
+- Status: TODO
+- Relevant files: `candidate_engine.py`, `runtime_runner.py`,
+  `execution_plan.py`, replay artifacts
+- Expected result:
+  - use replay evidence to decide whether there is a safe small internal-market
+    improvement to make, or whether the current honest diagnosis is the right
+    stopping point for now
+
+### Task 0i: Tighten private web deploy semantics and sensitive-page minimization
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/security.py`, `webapp/app.py`,
+  `webapp/services/config_service.py`, `webapp/services/character_service.py`,
+  `tests/test_webapp.py`, `.github/workflows/ci.yml`,
+  `scripts/quality_check.py`
+- What was done:
+  - made direct localhost without password the only supported unprotected mode
+    in the app seam; proxy-shaped or non-local requests are blocked until a
+    password is configured
+  - trimmed `/config` and `/character` template payloads down to explicit
+    redacted/sanitized view-model fields so secrets do not land in template
+    context
+  - added regressions for `Cache-Control: no-store`, config redaction,
+    sanitized character payloads, and request classification around proxy
+    headers / loopback host shapes
+  - removed CI drift by aligning the workflow with the maintained
+    `scripts/quality_check.py` path instead of installing unused `pyflakes`
+
 ### Task 0f: Add a safe clean-start command for runtime artifacts
 
 - Priority: P1
@@ -272,7 +544,8 @@ full backlog scrape.
   `tests/`, `test_nullsectrader.py`
 - Expected result: one narrow automated test or smoke-test script confirms that
   the CLI can parse profile flags and reach the expected runtime path without
-  requiring a broad end-to-end environment.
+  requiring a broad end-to-end environment, including newer profiles such as
+  `small_wallet_hub_safe`.
 
 ### Task 3b: Stop falsely blocking profitable internal nullsec routes
 
@@ -505,6 +778,26 @@ full backlog scrape.
 - Expected result: replace some stdout/artifact parsing in the web analysis path
   with a smaller structured runtime service API, without rewriting CLI behavior
   or duplicating trading logic.
+
+### Task 7h: Decide whether ansiblex travel should use real LY distances later
+
+- Priority: P2
+- Status: ready
+- Relevant files: `ansiblex.py`, `docs/Ansis.txt`, `config.json`, `README.md`
+- Expected result: if a trustworthy distance source becomes available, replace
+  the current per-edge default estimate with explicit LY data without changing
+  the additive cost seam or route-search scoring.
+
+### Task 7i: Decide later which watch nodes deserve real station/location treatment
+
+- Priority: P2
+- Status: ready
+- Relevant files: `config.json`, `candidate_nodes.py`, `startup_helpers.py`,
+  `route_search.py`, `README.md`
+- Expected result: only promote a configured watch node into real location or
+  structure logic when verified data or an explicit operator decision exists;
+  the default `nodes` list is already empty — this task covers the decision of
+  which verified nodes to promote into real station/location treatment.
 
 ### Task 7c: Keep local journal schema migration robust for UI and CLI entry points
 

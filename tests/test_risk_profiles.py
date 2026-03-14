@@ -25,6 +25,7 @@ from risk_profiles import (
     filter_picks_by_profile,
     profile_header_lines,
     profile_restrictions_summary,
+    resolve_profile_budget_window,
     resolve_active_profile,
 )
 
@@ -195,7 +196,75 @@ class TestHighLiquidity:
 
 
 # ---------------------------------------------------------------------------
-# 4. low_maintenance reduces item count and speculative picks
+# 4. small_wallet_hub_safe protects reserve and tightens final quality gates
+# ---------------------------------------------------------------------------
+
+class TestSmallWalletHubSafe:
+    def test_small_wallet_profile_blocks_planned_sell(self):
+        filters = _base_filters()
+        out = apply_profile_to_filters("small_wallet_hub_safe", BUILTIN_PROFILES["small_wallet_hub_safe"], filters)
+        assert out["_profile_allow_planned_sell"] is False
+
+    def test_small_wallet_profile_stores_final_quality_gates(self):
+        filters = _base_filters()
+        out = apply_profile_to_filters("small_wallet_hub_safe", BUILTIN_PROFILES["small_wallet_hub_safe"], filters)
+        assert out.get("_profile_min_liquidity_confidence", 0.0) > 0.0
+        assert out.get("_profile_min_market_quality_score", 0.0) > 0.0
+        assert out.get("_profile_min_profit_to_cost_ratio", 0.0) > 0.0
+
+    def test_small_wallet_budget_window_keeps_reserve(self):
+        spendable, reserved = resolve_profile_budget_window(BUILTIN_PROFILES["small_wallet_hub_safe"], 500_000_000.0)
+        assert reserved == pytest.approx(150_000_000.0)
+        assert spendable == pytest.approx(350_000_000.0)
+
+    def test_small_wallet_budget_window_caps_absolute_floor_on_tiny_wallet(self):
+        spendable, reserved = resolve_profile_budget_window(BUILTIN_PROFILES["small_wallet_hub_safe"], 100_000_000.0)
+        assert reserved == pytest.approx(50_000_000.0)
+        assert spendable == pytest.approx(50_000_000.0)
+
+    def test_small_wallet_final_filter_rejects_low_quality_pick(self):
+        picks = [
+            _make_pick(
+                1,
+                "Clean Instant",
+                overall_confidence=0.90,
+                decision_overall_confidence=0.90,
+                expected_realized_profit_per_m3_90d=4_000.0,
+                expected_realized_profit_90d=4_000_000.0,
+            ),
+            _make_pick(
+                2,
+                "Thin Book",
+                overall_confidence=0.86,
+                decision_overall_confidence=0.86,
+                expected_realized_profit_per_m3_90d=4_000.0,
+                expected_realized_profit_90d=4_000_000.0,
+            ),
+        ]
+        picks[0]["cost"] = 50_000_000.0
+        picks[0]["liquidity_confidence"] = 0.86
+        picks[0]["market_quality_score"] = 0.82
+        picks[0]["manipulation_risk_score"] = 0.05
+        picks[0]["expected_days_to_sell"] = 2.0
+        picks[1]["cost"] = 50_000_000.0
+        picks[1]["liquidity_confidence"] = 0.50
+        picks[1]["market_quality_score"] = 0.58
+        picks[1]["manipulation_risk_score"] = 0.30
+        picks[1]["expected_days_to_sell"] = 12.0
+
+        filters_safe = apply_profile_to_filters(
+            "small_wallet_hub_safe",
+            BUILTIN_PROFILES["small_wallet_hub_safe"],
+            _base_filters(),
+        )
+        kept, rejected = filter_picks_by_profile(picks, filters_safe, budget_isk=350_000_000.0)
+        assert [p["name"] for p in kept] == ["Clean Instant"]
+        assert [p["name"] for p in rejected] == ["Thin Book"]
+        assert "profile_min_liquidity_confidence" in rejected[0]["_profile_rejection_codes"]
+
+
+# ---------------------------------------------------------------------------
+# 5. low_maintenance reduces item count and speculative picks
 # ---------------------------------------------------------------------------
 
 class TestLowMaintenance:
@@ -227,7 +296,7 @@ class TestLowMaintenance:
 
 
 # ---------------------------------------------------------------------------
-# 5. Route ranking: profiles influence score
+# 6. Route ranking: profiles influence score
 # ---------------------------------------------------------------------------
 
 class TestRouteRanking:
@@ -303,7 +372,7 @@ class TestRouteRanking:
 
 
 # ---------------------------------------------------------------------------
-# 6. Portfolio selection: profiles restrict choices
+# 7. Portfolio selection: profiles restrict choices
 # ---------------------------------------------------------------------------
 
 class TestPortfolioProfile:
@@ -335,7 +404,7 @@ class TestPortfolioProfile:
 
 
 # ---------------------------------------------------------------------------
-# 7. filter_picks_by_profile (post-build min_profit_per_m3)
+# 8. filter_picks_by_profile (post-build min_profit_per_m3)
 # ---------------------------------------------------------------------------
 
 class TestFilterPicksByProfile:
@@ -403,7 +472,7 @@ class TestFilterPicksByProfile:
 
 
 # ---------------------------------------------------------------------------
-# 8. Profile resolution
+# 9. Profile resolution
 # ---------------------------------------------------------------------------
 
 class TestProfileResolution:
@@ -444,12 +513,20 @@ class TestProfileResolution:
         assert params["min_fill_probability"] == pytest.approx(0.99)
 
     def test_all_builtin_profiles_exist(self):
-        for name in ("conservative", "balanced", "aggressive", "instant_only", "high_liquidity", "low_maintenance"):
+        for name in (
+            "conservative",
+            "small_wallet_hub_safe",
+            "balanced",
+            "aggressive",
+            "instant_only",
+            "high_liquidity",
+            "low_maintenance",
+        ):
             assert name in BUILTIN_PROFILES, f"Missing profile: {name}"
 
 
 # ---------------------------------------------------------------------------
-# 9. Output helpers
+# 10. Output helpers
 # ---------------------------------------------------------------------------
 
 class TestOutputHelpers:
@@ -476,9 +553,14 @@ class TestOutputHelpers:
         summary = profile_restrictions_summary("instant_only", BUILTIN_PROFILES["instant_only"])
         assert "BLOCKED" in summary
 
+    def test_small_wallet_summary_shows_reserve(self):
+        summary = profile_restrictions_summary("small_wallet_hub_safe", BUILTIN_PROFILES["small_wallet_hub_safe"])
+        assert "reserve=" in summary
+        assert "min_roi=" in summary
+
 
 # ---------------------------------------------------------------------------
-# 10. End-to-end integration: profiles produce different outcomes on same data
+# 11. End-to-end integration: profiles produce different outcomes on same data
 # ---------------------------------------------------------------------------
 
 def _make_pick(

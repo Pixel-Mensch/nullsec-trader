@@ -25,6 +25,10 @@ from __future__ import annotations
 #  min_confidence                   float  0-1    decision_overall_confidence gate
 #  min_fill_probability             float  0-1    fill_probability gate (instant proxy)
 #  max_expected_days_to_sell        float  days   hard ceiling on sell duration
+#  min_liquidity_confidence         float  0-1    final pick liquidity gate
+#  min_market_quality_score         float  0-1    final pick market-quality gate
+#  max_manipulation_risk_score      float  0-1    final pick manipulation-risk ceiling
+#  min_profit_to_cost_ratio         float  0-1    expected profit / spend floor
 #  allow_planned_sell               bool          whether planned_sell mode is permitted
 #  planned_min_liquidity_confidence float  0-1    planned-sell liquidity gate
 #  min_expected_profit_isk          float  ISK    minimum expected realized profit
@@ -35,6 +39,9 @@ from __future__ import annotations
 #  max_item_share_of_budget         float  0-1    single-item budget cap
 #  max_items                        int           portfolio item count cap
 #  max_liquidation_days_per_position float days   per-pick liquidation ceiling
+#  reserve_budget_ratio             float  0-1    keep this share liquid
+#  reserve_budget_isk               float  ISK    preferred absolute reserve when budget allows
+#  safe_buy_today_limit             int           compact summary item cap
 #
 #  Route ranking modifiers (multipliers > 1 = harder penalty on that dimension)
 #  ---------------------------------------------------------------------------
@@ -63,6 +70,33 @@ BUILTIN_PROFILES: dict[str, dict] = {
         "route_speculative_penalty_weight": 2.5,
         "route_concentration_penalty_weight": 1.5,
         "route_capital_lock_weight": 2.0,
+    },
+    "small_wallet_hub_safe": {
+        "description": (
+            "Small Wallet / Hub Safe: direkter Exit vor Papierprofit, Reserve-Liquiditaet "
+            "bleibt geschuetzt, duenne Buecher und langsame Trades werden hart verworfen."
+        ),
+        "min_confidence": 0.78,
+        "min_fill_probability": 0.82,
+        "max_expected_days_to_sell": 7.0,
+        "min_liquidity_confidence": 0.78,
+        "min_market_quality_score": 0.72,
+        "max_manipulation_risk_score": 0.22,
+        "min_profit_to_cost_ratio": 0.035,
+        "allow_planned_sell": False,
+        "planned_min_liquidity_confidence": 0.88,
+        "min_expected_profit_isk": 2_500_000.0,
+        "min_profit_per_m3": 2_500.0,
+        "max_item_share_of_budget": 0.15,
+        "max_items": 8,
+        "max_liquidation_days_per_position": 7.0,
+        "reserve_budget_ratio": 0.25,
+        "reserve_budget_isk": 150_000_000.0,
+        "safe_buy_today_limit": 5,
+        "route_stale_penalty_weight": 2.8,
+        "route_speculative_penalty_weight": 3.0,
+        "route_concentration_penalty_weight": 2.0,
+        "route_capital_lock_weight": 2.8,
     },
     "balanced": {
         "description": (
@@ -224,6 +258,7 @@ def apply_profile_to_filters(profile_name: str, profile: dict, filters: dict) ->
             float(out.get("max_expected_days_to_sell", 99_999.0) or 99_999.0),
             max_days,
         )
+        out["_profile_max_expected_days_to_sell"] = float(max_days)
 
     min_liq_conf = float(profile.get("planned_min_liquidity_confidence", 0.0) or 0.0)
     if min_liq_conf > 0.0:
@@ -231,6 +266,22 @@ def apply_profile_to_filters(profile_name: str, profile: dict, filters: dict) ->
             float(out.get("planned_min_liquidity_confidence", 0.0) or 0.0),
             min_liq_conf,
         )
+
+    final_min_liq_conf = float(profile.get("min_liquidity_confidence", 0.0) or 0.0)
+    if final_min_liq_conf > 0.0:
+        out["_profile_min_liquidity_confidence"] = float(final_min_liq_conf)
+
+    min_market_quality = float(profile.get("min_market_quality_score", 0.0) or 0.0)
+    if min_market_quality > 0.0:
+        out["_profile_min_market_quality_score"] = float(min_market_quality)
+
+    max_manip_risk = float(profile.get("max_manipulation_risk_score", 0.0) or 0.0)
+    if max_manip_risk > 0.0:
+        out["_profile_max_manipulation_risk_score"] = float(max_manip_risk)
+
+    min_profit_to_cost = float(profile.get("min_profit_to_cost_ratio", 0.0) or 0.0)
+    if min_profit_to_cost > 0.0:
+        out["_profile_min_profit_to_cost_ratio"] = float(min_profit_to_cost)
 
     min_profit = float(profile.get("min_expected_profit_isk", 0.0) or 0.0)
     if min_profit > 0.0:
@@ -251,6 +302,9 @@ def apply_profile_to_filters(profile_name: str, profile: dict, filters: dict) ->
 
     out["_profile_allow_planned_sell"] = bool(profile.get("allow_planned_sell", True))
     out["_profile_min_confidence"] = float(profile.get("min_confidence", 0.0) or 0.0)
+    out["_profile_reserve_budget_ratio"] = float(profile.get("reserve_budget_ratio", 0.0) or 0.0)
+    out["_profile_reserve_budget_isk"] = float(profile.get("reserve_budget_isk", 0.0) or 0.0)
+    out["_profile_safe_buy_today_limit"] = int(profile.get("safe_buy_today_limit", 0) or 0)
     out["_profile_name"] = str(profile_name)
 
     return out
@@ -283,6 +337,25 @@ def apply_profile_to_portfolio_cfg(profile: dict, port_cfg: dict) -> dict:
         )
 
     return out
+
+
+def resolve_profile_budget_window(profile: dict, budget_isk: float) -> tuple[float, float]:
+    """Return (spendable_budget, reserved_budget) for the active profile.
+
+    The absolute reserve floor is intentionally soft-capped at 50 % of the
+    available budget so very small wallets still keep some capital deployable.
+    """
+    total_budget = max(0.0, float(budget_isk or 0.0))
+    if total_budget <= 0.0:
+        return 0.0, 0.0
+
+    reserve_ratio = max(0.0, float(profile.get("reserve_budget_ratio", 0.0) or 0.0))
+    reserve_floor = max(0.0, float(profile.get("reserve_budget_isk", 0.0) or 0.0))
+    reserve_from_ratio = total_budget * reserve_ratio
+    reserve_floor_capped = min(reserve_floor, total_budget * 0.50) if reserve_floor > 0.0 else 0.0
+    reserved_budget = min(total_budget, max(reserve_from_ratio, reserve_floor_capped))
+    spendable_budget = max(0.0, total_budget - reserved_budget)
+    return float(spendable_budget), float(reserved_budget)
 
 
 # ---------------------------------------------------------------------------
@@ -366,6 +439,30 @@ def _pick_confidence(pick: dict) -> float:
     )
 
 
+def _pick_expected_days(pick: dict) -> float:
+    return float(pick.get("expected_days_to_sell", pick.get("order_duration_days", 0.0)) or 0.0)
+
+
+def _pick_liquidity_confidence(pick: dict) -> float:
+    return float(pick.get("liquidity_confidence", pick.get("fill_probability", 0.0)) or 0.0)
+
+
+def _pick_market_quality_score(pick: dict) -> float:
+    return float(pick.get("market_quality_score", pick.get("market_plausibility_score", 1.0)) or 1.0)
+
+
+def _pick_manipulation_risk_score(pick: dict) -> float:
+    return float(pick.get("manipulation_risk_score", 0.0) or 0.0)
+
+
+def _pick_profit_to_cost_ratio(pick: dict) -> float:
+    expected_profit = _pick_expected_profit(pick)
+    cost = float(pick.get("cost", 0.0) or 0.0)
+    if cost <= 0.0:
+        return 999.0 if expected_profit > 0.0 else 0.0
+    return float(expected_profit / cost)
+
+
 def filter_picks_by_profile(
     picks: list[dict],
     filters_used: dict,
@@ -382,10 +479,25 @@ def filter_picks_by_profile(
         or 0.0
     )
     min_conf = float(filters_used.get("_profile_min_confidence", 0.0) or 0.0)
+    max_days = float(filters_used.get("_profile_max_expected_days_to_sell", 0.0) or 0.0)
+    min_liq_conf = float(filters_used.get("_profile_min_liquidity_confidence", 0.0) or 0.0)
+    min_market_quality = float(filters_used.get("_profile_min_market_quality_score", 0.0) or 0.0)
+    max_manip_risk = float(filters_used.get("_profile_max_manipulation_risk_score", 0.0) or 0.0)
+    min_profit_to_cost = float(filters_used.get("_profile_min_profit_to_cost_ratio", 0.0) or 0.0)
     max_share = float(filters_used.get("_profile_max_item_share_of_budget", 0.0) or 0.0)
     profile_name = str(filters_used.get("_profile_name", "") or "")
 
-    if min_profit_isk <= 0.0 and min_p_m3 <= 0.0 and min_conf <= 0.0 and max_share <= 0.0:
+    if (
+        min_profit_isk <= 0.0
+        and min_p_m3 <= 0.0
+        and min_conf <= 0.0
+        and max_days <= 0.0
+        and min_liq_conf <= 0.0
+        and min_market_quality <= 0.0
+        and max_manip_risk <= 0.0
+        and min_profit_to_cost <= 0.0
+        and max_share <= 0.0
+    ):
         return list(picks), []
 
     kept: list[dict] = []
@@ -396,6 +508,11 @@ def filter_picks_by_profile(
         expected_profit = _pick_expected_profit(pick)
         profit_per_m3 = _pick_profit_per_m3(pick)
         confidence = _pick_confidence(pick)
+        expected_days = _pick_expected_days(pick)
+        liquidity_confidence = _pick_liquidity_confidence(pick)
+        market_quality = _pick_market_quality_score(pick)
+        manipulation_risk = _pick_manipulation_risk_score(pick)
+        profit_to_cost = _pick_profit_to_cost_ratio(pick)
         cost = float(pick.get("cost", 0.0) or 0.0)
 
         if min_profit_isk > 0.0 and expected_profit + 1e-6 < min_profit_isk:
@@ -412,6 +529,31 @@ def filter_picks_by_profile(
             reason_codes.append("profile_min_confidence")
             reasons.append(
                 f"[profile:{profile_name}] confidence {confidence:.2f} < {min_conf:.2f}"
+            )
+        if max_days > 0.0 and expected_days - 1e-6 > max_days:
+            reason_codes.append("profile_max_expected_days_to_sell")
+            reasons.append(
+                f"[profile:{profile_name}] expected days {expected_days:.1f} > {max_days:.1f}"
+            )
+        if min_liq_conf > 0.0 and liquidity_confidence + 1e-6 < min_liq_conf:
+            reason_codes.append("profile_min_liquidity_confidence")
+            reasons.append(
+                f"[profile:{profile_name}] liquidity {liquidity_confidence:.2f} < {min_liq_conf:.2f}"
+            )
+        if min_market_quality > 0.0 and market_quality + 1e-6 < min_market_quality:
+            reason_codes.append("profile_min_market_quality_score")
+            reasons.append(
+                f"[profile:{profile_name}] market quality {market_quality:.2f} < {min_market_quality:.2f}"
+            )
+        if max_manip_risk > 0.0 and manipulation_risk - 1e-6 > max_manip_risk:
+            reason_codes.append("profile_max_manipulation_risk_score")
+            reasons.append(
+                f"[profile:{profile_name}] manipulation risk {manipulation_risk:.2f} > {max_manip_risk:.2f}"
+            )
+        if min_profit_to_cost > 0.0 and profit_to_cost + 1e-6 < min_profit_to_cost:
+            reason_codes.append("profile_min_profit_to_cost_ratio")
+            reasons.append(
+                f"[profile:{profile_name}] profit/spend {profit_to_cost:.1%} < {min_profit_to_cost:.1%}"
             )
         if (
             max_share > 0.0
@@ -479,6 +621,28 @@ def profile_header_lines(profile_name: str, profile: dict) -> list[str]:
     if min_fill > 0.0:
         lines.append(f"  Min Fill Prob     : {min_fill:.0%}")
 
+    min_liq = float(profile.get("min_liquidity_confidence", 0.0) or 0.0)
+    if min_liq > 0.0:
+        lines.append(f"  Min Liquidity     : {min_liq:.0%}")
+
+    min_quality = float(profile.get("min_market_quality_score", 0.0) or 0.0)
+    if min_quality > 0.0:
+        lines.append(f"  Min Market Qual   : {min_quality:.2f}")
+
+    min_roi = float(profile.get("min_profit_to_cost_ratio", 0.0) or 0.0)
+    if min_roi > 0.0:
+        lines.append(f"  Min ROI/Spend     : {min_roi:.1%}")
+
+    reserve_ratio = float(profile.get("reserve_budget_ratio", 0.0) or 0.0)
+    reserve_isk = float(profile.get("reserve_budget_isk", 0.0) or 0.0)
+    if reserve_ratio > 0.0 or reserve_isk > 0.0:
+        reserve_parts: list[str] = []
+        if reserve_ratio > 0.0:
+            reserve_parts.append(f"{reserve_ratio:.0%}")
+        if reserve_isk > 0.0:
+            reserve_parts.append(f"{reserve_isk / 1_000_000:.0f}m ISK floor")
+        lines.append(f"  Reserve Liquidity : keep {' + '.join(reserve_parts)} liquid")
+
     return lines
 
 
@@ -502,6 +666,20 @@ def profile_restrictions_summary(profile_name: str, profile: dict) -> str:
     if max_items > 0:
         parts.append(f"max_items={max_items}")
 
+    min_roi = float(profile.get("min_profit_to_cost_ratio", 0.0) or 0.0)
+    if min_roi > 0.0:
+        parts.append(f"min_roi={min_roi:.1%}")
+
+    reserve_ratio = float(profile.get("reserve_budget_ratio", 0.0) or 0.0)
+    reserve_isk = float(profile.get("reserve_budget_isk", 0.0) or 0.0)
+    if reserve_ratio > 0.0 or reserve_isk > 0.0:
+        reserve_bits: list[str] = []
+        if reserve_ratio > 0.0:
+            reserve_bits.append(f"{reserve_ratio:.0%}")
+        if reserve_isk > 0.0:
+            reserve_bits.append(f"{reserve_isk / 1_000_000:.0f}m")
+        parts.append(f"reserve={'/'.join(reserve_bits)}")
+
     return "  ".join(parts)
 
 
@@ -516,5 +694,6 @@ __all__ = [
     "filter_picks_by_profile",
     "profile_header_lines",
     "profile_restrictions_summary",
+    "resolve_profile_budget_window",
     "resolve_active_profile",
 ]

@@ -6,6 +6,7 @@
     <p class="eyebrow">Trade journal and reconciliation</p>
     <h2>Journal</h2>
     <p class="hero-copy">Read-only journal views plus on-demand reconciliation against cached or live character context.</p>
+    <p class="muted">Active basis: <strong>{{ character_switch.active_character.display_name or "No active character" }}</strong>. Reconcile and sell-order context below follow this active character slot.</p>
   </div>
   <div class="hero-actions">
     <form method="post" action="/journal/reconcile">
@@ -56,4 +57,33 @@
   {% endif %}
   <pre>{{ data.content }}</pre>
 </section>
+
+{% if data.active_sell_orders and data.active_sell_orders.available %}
+<section class="panel">
+  <div class="panel-header">
+    <h3>Active character sell orders</h3>
+  </div>
+  <p class="muted">Open sell orders from the active character snapshot, matched against local journal entries by item type.</p>
+  {% if data.active_sell_orders.sell_orders %}
+  <div class="row-list">
+    {% for item in data.active_sell_orders.sell_orders %}
+    <article class="row-item">
+      <div class="row-item-main">
+        <strong>{{ item.name }}</strong>
+        <span class="muted">Sell orders {{ item.sell_order_count }} | Units {{ item.sell_units }} | Gross {{ "%.0f"|format(item.sell_gross_isk or 0) }} ISK</span>
+        <span class="muted">Journal matches {{ item.journal_match_count }} | Active-character tagged {{ item.active_character_match_count }}</span>
+      </div>
+      <div class="row-item-actions">
+        {% if item.location_ids %}
+        <span class="pill muted">Locations {{ item.location_ids|join(", ") }}</span>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No sell orders are cached for the currently active character.</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

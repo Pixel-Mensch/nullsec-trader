@@ -5,6 +5,7 @@ import os
 import sys
 import time
 
+from candidate_nodes import annotate_route_candidate_nodes
 from candidate_engine import _route_adjusted_candidate_score, compute_candidates, compute_route_wide_candidates_for_source
 from character_profile import (
     apply_character_fee_overrides,
@@ -431,6 +432,154 @@ def enforce_route_destination(picks: list[dict], expected_dest_label: str) -> li
     return out
 
 
+def _route_display_chain_entries(cfg: dict) -> list[dict]:
+    chain_cfg = cfg.get("route_chain", {}) if isinstance(cfg.get("route_chain", {}), dict) else {}
+    legs = chain_cfg.get("legs", [])
+    if not isinstance(legs, list):
+        return []
+    out: list[dict] = []
+    seen_norms: set[str] = set()
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        label = str(leg.get("label", leg.get("system", "")) or "").strip()
+        norm = normalize_location_label(label)
+        if not label or not norm or norm in seen_norms:
+            continue
+        out.append({"index": len(out), "label": label, "norm": norm})
+        seen_norms.add(norm)
+    return out
+
+
+def _route_expected_profit_for_display(route: dict) -> float:
+    total = float(route.get("expected_realized_profit_total", route.get("profit_total", 0.0)) or 0.0)
+    if total > 0.0:
+        return total
+    return sum(
+        float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0)
+        for p in list(route.get("picks", []) or [])
+        if isinstance(p, dict)
+    )
+
+
+def _build_route_display_meta(route: dict, cfg: dict, chain_entries: list[dict] | None = None) -> dict:
+    chain_entries = list(chain_entries or [])
+    by_norm = {str(entry.get("norm", "")): entry for entry in chain_entries if str(entry.get("norm", ""))}
+    chain_len = len(chain_entries)
+    source_label = str(route.get("source_label", route.get("source_market", "")) or "").strip()
+    dest_label = str(route.get("dest_label", route.get("target_market", "")) or "").strip()
+    source_norm = normalize_location_label(source_label)
+    dest_norm = normalize_location_label(dest_label)
+    expected_profit = _route_expected_profit_for_display(route)
+    base = {
+        "kind": "other",
+        "direction": "",
+        "section_key": "other_routes",
+        "section_label": "Other routes",
+        "section_note": "Routes outside the configured corridor stay visible after corridor and Jita sections.",
+        "section_order": 900,
+        "item_order": 900,
+        "logic_label": "free route",
+        "span_hops": 0,
+        "is_direct_leg": False,
+        "source_index": -1,
+        "dest_index": -1,
+        "expected_profit": float(expected_profit),
+    }
+
+    source_entry = by_norm.get(source_norm)
+    dest_entry = by_norm.get(dest_norm)
+
+    if source_norm == "jita" or dest_norm == "jita":
+        anchor_entry = dest_entry if source_norm == "jita" else source_entry
+        anchor_label = str(anchor_entry.get("label", "")) if anchor_entry else (dest_label if source_norm == "jita" else source_label)
+        anchor_index = int(anchor_entry.get("index", 99)) if anchor_entry else 99
+        direction = "from_jita" if source_norm == "jita" else "to_jita"
+        base.update(
+            {
+                "kind": "jita_connector",
+                "direction": direction,
+                "section_key": f"jita_{anchor_index}_{direction}",
+                "section_label": f"Jita connectors @ {anchor_label}" if anchor_label else "Jita connectors",
+                "section_note": "Jita routes stay visible as external connectors and are not folded into corridor spans.",
+                "section_order": 300 + (anchor_index * 2) + (0 if direction == "from_jita" else 1),
+                "item_order": 0 if direction == "from_jita" else 1,
+                "logic_label": "Jita outbound connector" if direction == "from_jita" else "Jita return connector",
+            }
+        )
+        if anchor_entry:
+            base["source_index"] = int(anchor_entry.get("index", -1))
+        return base
+
+    if source_entry is not None and dest_entry is not None:
+        source_index = int(source_entry.get("index", -1))
+        dest_index = int(dest_entry.get("index", -1))
+        span_hops = abs(dest_index - source_index)
+        is_direct = span_hops == 1
+        logic_label = "direct leg" if is_direct else f"{span_hops}-leg span"
+        base.update(
+            {
+                "kind": "corridor",
+                "span_hops": int(span_hops),
+                "is_direct_leg": bool(is_direct),
+                "source_index": source_index,
+                "dest_index": dest_index,
+                "logic_label": logic_label,
+            }
+        )
+        if source_index < dest_index:
+            base.update(
+                {
+                    "direction": "forward",
+                    "section_key": f"corridor_forward_{source_index}",
+                    "section_label": f"Corridor {source_entry.get('label', source_label)} outbound",
+                    "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+                    "section_order": 100 + source_index,
+                    "item_order": (span_hops * 10) + dest_index,
+                }
+            )
+        else:
+            base.update(
+                {
+                    "direction": "reverse",
+                    "section_key": f"corridor_reverse_{source_index}",
+                    "section_label": f"Corridor {source_entry.get('label', source_label)} return",
+                    "section_note": "Return routes stay grouped separately, with direct returns before longer spans.",
+                    "section_order": 200 + max(0, chain_len - 1 - source_index),
+                    "item_order": (span_hops * 10) + max(0, chain_len - 1 - dest_index),
+                }
+            )
+        return base
+
+    anchor_entry = source_entry if source_entry is not None else dest_entry
+    if anchor_entry is not None:
+        anchor_index = int(anchor_entry.get("index", 99))
+        anchor_label = str(anchor_entry.get("label", "") or "")
+        base.update(
+            {
+                "kind": "external_connector",
+                "direction": "external",
+                "section_key": f"external_{anchor_index}",
+                "section_label": f"External connectors @ {anchor_label}",
+                "section_note": "Non-corridor routes anchored on a corridor node stay visible after direct corridor sections.",
+                "section_order": 400 + anchor_index,
+                "item_order": 0,
+                "logic_label": "external connector",
+                "source_index": int(anchor_entry.get("index", -1)),
+            }
+        )
+    return base
+
+
+def _attach_route_display_meta(route_results: list[dict], cfg: dict) -> list[dict]:
+    chain_entries = _route_display_chain_entries(cfg)
+    for route in list(route_results or []):
+        if not isinstance(route, dict):
+            continue
+        route["_route_display"] = _build_route_display_meta(route, cfg, chain_entries)
+    return route_results
+
+
 def _resolve_route_wide_scan_cfg(cfg: dict) -> dict:
     rw = cfg.get("route_wide_scan", {})
     if not isinstance(rw, dict):
@@ -697,21 +846,36 @@ def _merge_reason_counts(dst: dict, src: dict) -> None:
 def _profile_rejection_metrics(pick: dict, filters_used: dict, budget_isk: float) -> dict:
     cost = float(pick.get("cost", 0.0) or 0.0)
     budget_total = float(budget_isk or 0.0)
+    expected_profit = float(
+        pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0
+    )
     return {
-        "expected_realized_profit_90d": float(
-            pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0
-        ),
+        "expected_realized_profit_90d": expected_profit,
         "expected_realized_profit_per_m3_90d": float(
             pick.get("expected_realized_profit_per_m3_90d", pick.get("expected_profit_per_m3_90d", pick.get("profit_per_m3", 0.0))) or 0.0
         ),
         "decision_overall_confidence": float(
             pick.get("decision_overall_confidence", pick.get("calibrated_overall_confidence", pick.get("overall_confidence", 0.0))) or 0.0
         ),
+        "expected_days_to_sell": float(pick.get("expected_days_to_sell", 0.0) or 0.0),
+        "liquidity_confidence": float(pick.get("liquidity_confidence", pick.get("fill_probability", 0.0)) or 0.0),
+        "market_quality_score": float(
+            pick.get("market_quality_score", pick.get("market_plausibility_score", 1.0)) or 1.0
+        ),
+        "manipulation_risk_score": float(pick.get("manipulation_risk_score", 0.0) or 0.0),
+        "profit_to_cost_ratio": (expected_profit / cost) if cost > 0.0 else 0.0,
         "profile_min_expected_profit_isk": float(filters_used.get("_profile_min_expected_profit_isk", 0.0) or 0.0),
         "profile_min_profit_per_m3": float(
             filters_used.get("_profile_min_profit_density_isk_per_m3", filters_used.get("_profile_min_profit_per_m3", 0.0)) or 0.0
         ),
         "profile_min_confidence": float(filters_used.get("_profile_min_confidence", 0.0) or 0.0),
+        "profile_max_expected_days_to_sell": float(filters_used.get("_profile_max_expected_days_to_sell", 0.0) or 0.0),
+        "profile_min_liquidity_confidence": float(filters_used.get("_profile_min_liquidity_confidence", 0.0) or 0.0),
+        "profile_min_market_quality_score": float(filters_used.get("_profile_min_market_quality_score", 0.0) or 0.0),
+        "profile_max_manipulation_risk_score": float(
+            filters_used.get("_profile_max_manipulation_risk_score", 0.0) or 0.0
+        ),
+        "profile_min_profit_to_cost_ratio": float(filters_used.get("_profile_min_profit_to_cost_ratio", 0.0) or 0.0),
         "profile_max_item_share_of_budget": float(filters_used.get("_profile_max_item_share_of_budget", 0.0) or 0.0),
         "budget_share": (cost / budget_total) if budget_total > 0.0 else 0.0,
     }
@@ -798,6 +962,7 @@ def _prune_reason_bucket(reason: str) -> str:
         "orderbook_min_source_sell_price",
         "profile_min_expected_profit_isk",
         "profile_min_profit_per_m3",
+        "profile_min_profit_to_cost_ratio",
     }:
         return "candidates_below_profit_floor"
     if key in {"profile_min_confidence", "planned_low_confidence"}:
@@ -809,6 +974,9 @@ def _prune_reason_bucket(reason: str) -> str:
         "dest_buy_depth_units",
         "min_depth_units",
         "orderbook_window_units_too_low",
+        "profile_min_liquidity_confidence",
+        "profile_min_market_quality_score",
+        "profile_max_manipulation_risk_score",
     }:
         return "candidates_failed_fill_probability"
     if key in {
@@ -821,10 +989,12 @@ def _prune_reason_bucket(reason: str) -> str:
         "planned_queue_ahead_too_heavy",
         "planned_demand_cap_zero",
         "planned_demand_cap_too_low",
+        "planned_price_unreliable_orderbook",
         "planned_structure_micro_liquidity",
         "planned_history_order_count",
         "no_history_volume",
         "strict_no_fallback_volume",
+        "profile_max_expected_days_to_sell",
     }:
         return "candidates_failed_sell_time"
     if key in {"invalid_volume"}:
@@ -841,13 +1011,31 @@ def _derive_route_prune_reason(result: dict) -> str:
     if current_reason and current_reason != "no_picks":
         return current_reason
 
-    reason_counts = result.get("why_out_summary", {})
+    reason_counts = _route_reason_counts(result.get("why_out_summary", {}))
+    passed_all = int(result.get("passed_all_filters", 0) or 0)
+    profile_bucket_counts = _route_bucket_counts(reason_counts, profile_only=True)
+    if passed_all > 0 and profile_bucket_counts:
+        return _dominant_prune_bucket(profile_bucket_counts)
+
+    bucket_counts = _route_bucket_counts(reason_counts)
+    if bucket_counts:
+        return _dominant_prune_bucket(bucket_counts)
+
+    total_candidates = int(result.get("total_candidates", 0) or 0)
+    if passed_all > 0:
+        return "no_picks_after_portfolio_constraints"
+    if total_candidates <= 0:
+        return "no_candidates"
+    return current_reason or "no_picks"
+
+
+def _route_reason_counts(reason_counts: object) -> dict[str, int]:
     if not isinstance(reason_counts, dict):
-        reason_counts = {}
-    bucket_counts: dict[str, int] = {}
+        return {}
+    out: dict[str, int] = {}
     for reason, count in reason_counts.items():
-        bucket = _prune_reason_bucket(reason)
-        if not bucket:
+        key = str(reason or "").strip().lower()
+        if not key:
             continue
         try:
             n = int(count or 0)
@@ -855,17 +1043,122 @@ def _derive_route_prune_reason(result: dict) -> str:
             n = 0
         if n <= 0:
             continue
-        bucket_counts[bucket] = int(bucket_counts.get(bucket, 0) or 0) + n
-    if bucket_counts:
-        return max(bucket_counts.items(), key=lambda item: (item[1], item[0]))[0]
+        out[key] = int(out.get(key, 0) or 0) + n
+    return out
 
+
+def _is_profile_rejection_reason(reason: str) -> bool:
+    key = str(reason or "").strip().lower()
+    return bool(key) and (key.startswith("profile_") or key == "planned_low_confidence")
+
+
+def _route_bucket_counts(reason_counts: object, *, profile_only: bool = False) -> dict[str, int]:
+    bucket_counts: dict[str, int] = {}
+    for reason, count in _route_reason_counts(reason_counts).items():
+        if profile_only and not _is_profile_rejection_reason(reason):
+            continue
+        bucket = _prune_reason_bucket(reason)
+        if not bucket:
+            continue
+        bucket_counts[bucket] = int(bucket_counts.get(bucket, 0) or 0) + int(count or 0)
+    return bucket_counts
+
+
+def _dominant_prune_bucket(bucket_counts: dict[str, int]) -> str:
+    if not bucket_counts:
+        return ""
+    return max(bucket_counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def _derive_route_failure_hints(result: dict) -> list[str]:
+    if bool(result.get("route_actionable", False)) and not bool(result.get("route_blocked_due_to_transport", False)):
+        return []
+
+    hints: list[str] = []
+    route_prune_reason = str(result.get("route_prune_reason", "") or "").strip().lower()
+    reason_counts = _route_reason_counts(result.get("why_out_summary", {}))
     total_candidates = int(result.get("total_candidates", 0) or 0)
     passed_all = int(result.get("passed_all_filters", 0) or 0)
-    if passed_all > 0:
-        return "no_picks_after_portfolio_constraints"
-    if total_candidates <= 0:
-        return "no_candidates"
-    return current_reason or "no_picks"
+    profile_bucket = _dominant_prune_bucket(_route_bucket_counts(reason_counts, profile_only=True))
+
+    def _add_hint(text: str) -> None:
+        message = str(text or "").strip()
+        if message and message not in hints:
+            hints.append(message)
+
+    if bool(result.get("route_blocked_due_to_transport", False)):
+        _add_hint("Transport blocked: no usable cost model.")
+    if route_prune_reason == "internal_route_profit_below_operational_floor":
+        _add_hint("Internal route profit stayed below the operational floor.")
+
+    if passed_all > 0 and profile_bucket:
+        profile_messages = {
+            "candidates_below_profit_floor": "Candidates existed, but the active profile removed them on profit floors.",
+            "candidates_failed_budget_rule": "Candidates existed, but the active profile removed them on budget concentration.",
+            "candidates_failed_confidence": "Candidates existed, but the active profile removed them on confidence.",
+            "candidates_failed_fill_probability": "Candidates existed, but the active profile removed them on liquidity or market quality.",
+            "candidates_failed_sell_time": "Candidates existed, but the active profile removed them on sell-time limits.",
+        }
+        _add_hint(profile_messages.get(profile_bucket, "Candidates existed, but the active profile removed them."))
+
+    category_scores = [
+        (
+            int(
+                reason_counts.get("non_positive_profit", 0)
+                + reason_counts.get("non_positive_profit_90d", 0)
+                + reason_counts.get("expected_profit_too_low", 0)
+                + reason_counts.get("expected_profit_too_low_after_shipping", 0)
+                + reason_counts.get("min_profit_pct", 0)
+                + reason_counts.get("min_profit_pct_after_shipping", 0)
+                + reason_counts.get("profit_threshold", 0)
+            ),
+            "Most candidates stayed unprofitable after fees or logistics.",
+        ),
+        (
+            int(
+                reason_counts.get("min_depth_units", 0)
+                + reason_counts.get("orderbook_window_units_too_low", 0)
+                + reason_counts.get("dest_buy_depth_units", 0)
+                + reason_counts.get("fill_probability", 0)
+            ),
+            "Orderbook depth was too thin on source or destination.",
+        ),
+        (
+            int(
+                reason_counts.get("planned_price_unreliable_orderbook", 0)
+                + reason_counts.get("planned_queue_ahead_too_heavy", 0)
+                + reason_counts.get("planned_demand_cap_zero", 0)
+                + reason_counts.get("planned_demand_cap_too_low", 0)
+                + reason_counts.get("planned_structure_micro_liquidity", 0)
+                + reason_counts.get("planned_history_order_count", 0)
+                + reason_counts.get("no_history_volume", 0)
+                + reason_counts.get("strict_no_fallback_volume", 0)
+            ),
+            "Planned-sell pricing looked too unreliable on the destination book.",
+        ),
+        (
+            int(reason_counts.get("orderbook_min_source_sell_price", 0)),
+            "Source sell orders did not support a reliable entry price.",
+        ),
+        (
+            int(reason_counts.get("invalid_volume", 0)),
+            "Some candidates had invalid volume data.",
+        ),
+    ]
+    for score, text in sorted(category_scores, key=lambda item: (-item[0], item[1])):
+        if score > 0:
+            _add_hint(text)
+        if len(hints) >= 3:
+            return hints[:3]
+
+    if not hints:
+        if total_candidates <= 0:
+            _add_hint("No candidates reached the route search window.")
+        elif passed_all > 0:
+            _add_hint("Candidates survived search, but portfolio selection kept no valid route.")
+        else:
+            _add_hint("Candidates were found, but none survived the route filters.")
+    return hints[:3]
 
 
 def _refresh_route_result_from_current_picks(result: dict) -> dict:
@@ -904,6 +1197,10 @@ def _refresh_route_result_from_current_picks(result: dict) -> dict:
     result["shipping_cost_total"] = float(total_shipping_cost)
     result["total_route_cost"] = float(total_route_cost)
     result["total_transport_cost"] = float(total_transport_cost)
+    result["expected_profit_before_logistics_total"] = float(expected_realized_total + total_transport_cost)
+    result["expected_profit_after_logistics_total"] = float(expected_realized_total)
+    result["full_sell_profit_before_logistics_total"] = float(full_sell_total + total_transport_cost)
+    result["full_sell_profit_after_logistics_total"] = float(full_sell_total)
     result["route_actionable"] = bool(picks and not bool(result.get("route_blocked_due_to_transport", False)))
     result["budget_left_reason"] = (
         "Keine weiteren Picks erfuellen Profit-Floors nach Gebuehren und Routenkosten."
@@ -911,6 +1208,8 @@ def _refresh_route_result_from_current_picks(result: dict) -> dict:
         else ""
     )
     result["route_prune_reason"] = _derive_route_prune_reason(result)
+    result["route_failure_hints"] = _derive_route_failure_hints(result)
+    result["route_failure_summary"] = " | ".join(result["route_failure_hints"])
 
     csv_path = str(result.get("csv_path", "") or "").strip()
     if csv_path:
@@ -1182,6 +1481,7 @@ def _apply_internal_self_haul_operational_filter(result: dict, cfg: dict) -> dic
 def _finalize_route_result_runtime_state(result: dict, cfg: dict) -> dict:
     _refresh_route_result_from_current_picks(result)
     _apply_post_selection_route_mix_cleanup(result, cfg)
+    result.update(annotate_route_candidate_nodes(result, cfg))
     return _apply_internal_self_haul_operational_filter(result, cfg)
 
 
@@ -1336,10 +1636,24 @@ def _finalize_route_result(
         "profit_total": float(total_profit),
         "expected_realized_profit_total": float(expected_realized_total),
         "full_sell_profit_total": float(full_sell_total),
+        "expected_profit_before_logistics_total": float(expected_realized_total + float(transport_summary.get("total_transport_cost", 0.0))),
+        "expected_profit_after_logistics_total": float(expected_realized_total),
+        "full_sell_profit_before_logistics_total": float(full_sell_total + float(transport_summary.get("total_transport_cost", 0.0))),
+        "full_sell_profit_after_logistics_total": float(full_sell_total),
         "total_shipping_cost": float(transport_summary.get("total_shipping_cost", 0.0)),
         "shipping_cost_total": float(transport_summary.get("total_shipping_cost", 0.0)),
         "total_route_cost": float(transport_summary.get("total_route_cost", 0.0)),
         "total_transport_cost": float(transport_summary.get("total_transport_cost", 0.0)),
+        "travel_summary": str(transport_summary.get("travel_summary", "") or ""),
+        "travel_path_found": bool(transport_summary.get("travel_path_found", False)),
+        "travel_path_legs": list(transport_summary.get("travel_path_legs", []) or []),
+        "travel_path_kind": str(transport_summary.get("travel_path_kind", "") or ""),
+        "gate_leg_count": int(transport_summary.get("gate_leg_count", 0) or 0),
+        "ansiblex_leg_count": int(transport_summary.get("ansiblex_leg_count", 0) or 0),
+        "ansiblex_logistics_cost_isk": float(transport_summary.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+        "used_ansiblex": bool(transport_summary.get("used_ansiblex", False)),
+        "travel_source_system": str(transport_summary.get("travel_source_system", "") or ""),
+        "travel_dest_system": str(transport_summary.get("travel_dest_system", "") or ""),
         "shipping_lane_id": str(transport_summary.get("shipping_lane_id", "")),
         "shipping_pricing_model": str(transport_summary.get("shipping_pricing_model", "")),
         "shipping_provider": str(transport_summary.get("shipping_provider", "")),
@@ -1992,6 +2306,7 @@ def run_cli() -> None:
         apply_profile_to_portfolio_cfg,
         apply_profile_to_route_result,
         profile_header_lines,
+        resolve_profile_budget_window,
         resolve_active_profile,
     )
     cli_profile = cli.get("profile") or None
@@ -2078,6 +2393,27 @@ def run_cli() -> None:
 
     if cargo_m3 <= 0 or budget_isk <= 0:
         die("Cargo und Budget muessen positiv sein.")
+
+    input_budget_isk = float(budget_isk)
+    spendable_budget_isk, reserved_budget_isk = resolve_profile_budget_window(active_profile_params, input_budget_isk)
+    if spendable_budget_isk <= 0.0:
+        die("Aktives Profil reserviert das komplette Budget. Budget erhoehen oder Profil anpassen.")
+    profile_budget_meta = {
+        "input_budget_isk": float(input_budget_isk),
+        "spendable_budget_isk": float(spendable_budget_isk),
+        "reserved_budget_isk": float(reserved_budget_isk),
+        "reserve_budget_ratio": float(active_profile_params.get("reserve_budget_ratio", 0.0) or 0.0),
+        "reserve_budget_isk_floor": float(active_profile_params.get("reserve_budget_isk", 0.0) or 0.0),
+    }
+    cfg["_profile_budget_meta"] = dict(profile_budget_meta)
+    budget_isk = int(spendable_budget_isk)
+    if reserved_budget_isk > 0.0:
+        print(
+            "Profile Budget Guard: "
+            f"{fmt_isk(reserved_budget_isk)} Reserve bleibt liquid | "
+            f"Spendable heute {fmt_isk(float(budget_isk))} "
+            f"(Input {fmt_isk(input_budget_isk)})"
+        )
 
     character_summary = build_character_context_summary(character_context, budget_isk=budget_isk)
     cfg["_character_context_summary"] = character_summary
@@ -2318,6 +2654,7 @@ def run_cli() -> None:
             apply_profile_to_route_result(active_profile_name, active_profile_params, result)
             result["_active_risk_profile"] = active_profile_name
             result["_active_risk_profile_params"] = dict(active_profile_params)
+            result["_profile_budget_meta"] = dict(profile_budget_meta)
             _attach_runtime_advisories_to_result(result, character_context, personal_calibration_runtime, budget_isk=budget_isk)
             route_results.append(result)
             if "csv_path" in result:
@@ -2327,6 +2664,7 @@ def run_cli() -> None:
 
         if route_results:
             route_profiles_active = True
+            _attach_route_display_meta(route_results, cfg)
             attach_plan_metadata(route_results, plan_id=plan_id, created_at=plan_created_at)
 
             # --- Do Not Trade evaluation ---

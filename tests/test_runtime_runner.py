@@ -1,5 +1,7 @@
 """Targeted tests for shared runtime_runner post-processing helpers."""
 
+import runtime_runner as runtime_runner_module
+
 from tests.shared import *  # noqa: F401,F403
 from route_search import summarize_route_for_ranking
 
@@ -86,6 +88,14 @@ def test_prune_reason_bucket_maps_budget_rule() -> None:
     assert nst._prune_reason_bucket("profile_max_item_share_of_budget") == "candidates_failed_budget_rule"
 
 
+def test_prune_reason_bucket_maps_small_wallet_quality_rule() -> None:
+    assert nst._prune_reason_bucket("profile_min_market_quality_score") == "candidates_failed_fill_probability"
+
+
+def test_prune_reason_bucket_maps_small_wallet_sell_time_rule() -> None:
+    assert nst._prune_reason_bucket("profile_max_expected_days_to_sell") == "candidates_failed_sell_time"
+
+
 def test_derive_route_prune_reason_prefers_invalid_volume_bucket() -> None:
     result = {
         "picks": [],
@@ -96,6 +106,42 @@ def test_derive_route_prune_reason_prefers_invalid_volume_bucket() -> None:
         "passed_all_filters": 0,
     }
     assert nst._derive_route_prune_reason(result) == "candidates_invalid_volume"
+
+
+def test_derive_route_prune_reason_prefers_profile_bucket_after_candidates_passed_search() -> None:
+    result = {
+        "picks": [],
+        "route_blocked_due_to_transport": False,
+        "route_prune_reason": "",
+        "why_out_summary": {
+            "non_positive_profit": 120,
+            "profile_min_confidence": 1,
+        },
+        "total_candidates": 1,
+        "passed_all_filters": 1,
+    }
+    assert nst._derive_route_prune_reason(result) == "candidates_failed_confidence"
+
+
+def test_derive_route_failure_hints_surface_profile_and_market_depth_causes() -> None:
+    result = {
+        "picks": [],
+        "route_actionable": False,
+        "route_blocked_due_to_transport": False,
+        "route_prune_reason": "candidates_failed_confidence",
+        "why_out_summary": {
+            "profile_min_confidence": 1,
+            "orderbook_window_units_too_low": 14,
+            "min_depth_units": 7,
+        },
+        "total_candidates": 1,
+        "passed_all_filters": 1,
+    }
+
+    hints = runtime_runner_module._derive_route_failure_hints(result)
+
+    assert "Candidates existed, but the active profile removed them on confidence." in hints
+    assert "Orderbook depth was too thin on source or destination." in hints
 
 
 def test_internal_self_haul_operational_filter_suppresses_low_profit_route() -> None:
@@ -198,3 +244,46 @@ def test_route_mix_cleanup_removes_weak_speculative_price_sensitive_tail_pick() 
     assert out["route_mix_cleanup_applied"] is True
     assert "Weak Spec Tail" in str(out["route_mix_cleanup_notes"][0])
     assert "price-sensitive" in str(out["route_mix_cleanup_notes"][0])
+
+
+def test_attach_route_display_meta_marks_direct_span_and_jita_connector() -> None:
+    routes = [
+        {
+            **_route_result(picks=[_route_pick(expected_profit=4_000_000.0)]),
+            "route_label": "O4T -> R-ARKN",
+            "source_label": "O4T",
+            "dest_label": "R-ARKN",
+        },
+        {
+            **_route_result(picks=[_route_pick(expected_profit=9_000_000.0)]),
+            "route_label": "O4T -> 1st Taj Mahgoon",
+            "source_label": "O4T",
+            "dest_label": "1st Taj Mahgoon",
+        },
+        {
+            **_route_result(picks=[_route_pick(expected_profit=12_000_000.0)]),
+            "route_label": "jita_44 -> O4T",
+            "source_label": "jita_44",
+            "dest_label": "O4T",
+            "transport_mode": "shipping_lane",
+        },
+    ]
+    cfg = {
+        "route_chain": {
+            "legs": [
+                {"id": 1, "label": "O4T"},
+                {"id": 2, "label": "R-ARKN"},
+                {"id": 3, "label": "UALX-3"},
+                {"id": 4, "label": "1st Taj Mahgoon"},
+            ]
+        }
+    }
+
+    out = nst._attach_route_display_meta(routes, cfg)
+    display_by_label = {str(route["route_label"]): dict(route.get("_route_display", {}) or {}) for route in out}
+
+    assert len(out) == 3
+    assert display_by_label["O4T -> R-ARKN"]["logic_label"] == "direct leg"
+    assert int(display_by_label["O4T -> 1st Taj Mahgoon"]["span_hops"]) == 3
+    assert display_by_label["O4T -> 1st Taj Mahgoon"]["logic_label"] == "3-leg span"
+    assert display_by_label["jita_44 -> O4T"]["section_label"] == "Jita connectors @ O4T"

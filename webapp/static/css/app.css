@@ -52,6 +52,18 @@ body.page-analysis {
   margin-bottom: 28px;
 }
 
+.header-meta {
+  display: grid;
+  gap: 14px;
+  justify-items: end;
+}
+
+.header-switchers {
+  display: grid;
+  gap: 14px;
+  width: min(100%, 420px);
+}
+
 .site-header h1 {
   margin: 0;
   font-size: clamp(2rem, 4vw, 2.8rem);
@@ -95,6 +107,42 @@ body.page-analysis {
   border-color: rgba(242, 184, 74, 0.45);
 }
 
+.security-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(8, 14, 24, 0.76);
+  color: var(--muted);
+}
+
+.security-banner strong {
+  color: var(--text);
+}
+
+.security-banner.is-protected {
+  border-color: rgba(76, 195, 138, 0.28);
+}
+
+.security-banner.is-local-only {
+  border-color: rgba(242, 184, 74, 0.32);
+}
+
+.security-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(240, 115, 115, 0.14);
+  border: 1px solid rgba(240, 115, 115, 0.24);
+  color: #ffd2d2;
+  font-size: 0.82rem;
+}
+
 .page-content {
   display: grid;
   gap: 20px;
@@ -104,7 +152,8 @@ body.page-analysis {
 .hero-card,
 .panel,
 .info-card,
-.route-card {
+.route-card,
+.character-switcher {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 24px;
@@ -125,6 +174,20 @@ body.page-analysis {
 .hero-copy,
 .muted {
   color: var(--muted);
+}
+
+.character-switcher {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 20px;
+  background: rgba(9, 15, 25, 0.78);
+}
+
+.switcher-title {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  font-weight: 700;
 }
 
 .hero-actions,
@@ -239,9 +302,48 @@ details {
   margin: 0 0 6px;
 }
 
+.row-list {
+  display: grid;
+  gap: 12px;
+}
+
+.row-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(7, 12, 21, 0.65);
+}
+
+.row-item-main {
+  display: grid;
+  gap: 6px;
+}
+
+.row-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 .analysis-form {
   display: grid;
   gap: 14px;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.inline-form select {
+  min-width: min(100%, 240px);
 }
 
 .analysis-form label {
@@ -298,6 +400,20 @@ th {
 .route-stack {
   display: grid;
   gap: 18px;
+}
+
+.route-group-stack {
+  display: grid;
+  gap: 20px;
+}
+
+.route-group {
+  min-width: 0;
+}
+
+.route-section-note,
+.route-logic {
+  margin: 0;
 }
 
 .route-metrics {
@@ -383,6 +499,18 @@ summary {
   color: #7ce5a8;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ── Analysis loading overlay ── */
 .run-overlay {
   display: none;
@@ -443,5 +571,9 @@ summary {
   .hero-card {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .header-meta {
+    justify-items: stretch;
   }
 }

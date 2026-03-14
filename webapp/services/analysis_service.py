@@ -8,6 +8,7 @@ from risk_profiles import BUILTIN_PROFILES, DEFAULT_PROFILE
 from runtime_common import TOKEN_PATH, parse_isk
 
 from config_loader import load_config, validate_config
+from webapp.services import active_profile_service
 from webapp.services.runtime_bridge import extract_personal_layer_lines, invoke_runtime
 
 
@@ -39,6 +40,7 @@ def _route_cards(manifest: dict) -> list[dict]:
         if not isinstance(route, dict):
             continue
         picks = [pick for pick in list(route.get("picks", []) or []) if isinstance(pick, dict)]
+        display = dict(route.get("display", {}) or {}) if isinstance(route.get("display", {}), dict) else {}
         expected_total = float(route.get("expected_realized_profit_total", 0.0) or 0.0)
         if expected_total <= 0.0:
             expected_total = sum(float(pick.get("proposed_expected_profit", 0.0) or 0.0) for pick in picks)
@@ -68,13 +70,61 @@ def _route_cards(manifest: dict) -> list[dict]:
                 "total_fees_taxes": float(route.get("total_fees_taxes", 0.0) or 0.0),
                 "total_transport_cost": float(route.get("total_transport_cost", 0.0) or 0.0),
                 "shipping_cost_total": float(route.get("shipping_cost_total", 0.0) or 0.0),
+                "expected_profit_before_logistics_total": float(
+                    route.get("expected_profit_before_logistics_total", expected_total + float(route.get("total_transport_cost", 0.0) or 0.0))
+                    or 0.0
+                ),
+                "expected_profit_after_logistics_total": float(route.get("expected_profit_after_logistics_total", expected_total) or 0.0),
                 "expected_profit_total": expected_total,
                 "full_sell_profit_total": full_total,
+                "travel_summary": str(route.get("travel_summary", "") or ""),
+                "travel_path_found": bool(route.get("travel_path_found", False)),
+                "travel_path_kind": str(route.get("travel_path_kind", "") or ""),
+                "gate_leg_count": int(route.get("gate_leg_count", 0) or 0),
+                "ansiblex_leg_count": int(route.get("ansiblex_leg_count", 0) or 0),
+                "ansiblex_logistics_cost_isk": float(route.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+                "used_ansiblex": bool(route.get("used_ansiblex", False)),
+                "travel_path_legs": [dict(leg) for leg in list(route.get("travel_path_legs", []) or []) if isinstance(leg, dict)],
+                "candidate_node_summary": str(route.get("candidate_node_summary", "") or ""),
+                "candidate_nodes": [dict(node) for node in list(route.get("candidate_nodes", []) or []) if isinstance(node, dict)],
                 "warnings": [str(item).strip() for item in list(route.get("warnings", []) or []) if str(item).strip()],
+                "route_failure_hints": [str(item).strip() for item in list(route.get("route_failure_hints", []) or []) if str(item).strip()],
+                "route_failure_summary": str(route.get("route_failure_summary", "") or "").strip(),
+                "display": display,
+                "route_logic_label": str(display.get("logic_label", "") or ""),
                 "picks": picks,
             }
         )
-    return cards
+    indexed = list(enumerate(cards))
+    indexed.sort(
+        key=lambda entry: (
+            int(entry[1].get("display", {}).get("section_order", 9999) or 9999),
+            int(entry[1].get("display", {}).get("item_order", 9999) or 9999),
+            0 if bool(entry[1].get("actionable", False)) else 1,
+            -float(entry[1].get("expected_profit_total", 0.0) or 0.0),
+            entry[0],
+        )
+    )
+    return [card for _, card in indexed]
+
+
+def _route_sections(route_cards: list[dict]) -> list[dict]:
+    sections: list[dict] = []
+    current_section: dict | None = None
+    for card in list(route_cards or []):
+        display = dict(card.get("display", {}) or {}) if isinstance(card.get("display", {}), dict) else {}
+        section_key = str(display.get("section_key", "") or "")
+        section_label = str(display.get("section_label", "") or "").strip()
+        section_note = str(display.get("section_note", "") or "").strip()
+        if not section_key or not section_label:
+            section_key = "routes"
+            section_label = "Routes"
+            section_note = ""
+        if current_section is None or str(current_section.get("key", "")) != section_key:
+            current_section = {"key": section_key, "label": section_label, "note": section_note, "routes": []}
+            sections.append(current_section)
+        current_section["routes"].append(card)
+    return sections
 
 
 def get_analysis_form_data() -> dict:
@@ -82,18 +132,25 @@ def get_analysis_form_data() -> dict:
     validation = validate_config(cfg)
     defaults = dict(cfg.get("defaults", {}) or {})
     replay_cfg = dict(cfg.get("replay", {}) or {})
+    active_profile_name = active_profile_service.resolve_active_profile_name(cfg)
+    config_profile_cfg = cfg.get("risk_profile", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(config_profile_cfg, dict):
+        config_profile_cfg = {}
+    config_profile_name = str(config_profile_cfg.get("name", "") or "").strip().lower()
+    if config_profile_name not in BUILTIN_PROFILES:
+        config_profile_name = DEFAULT_PROFILE
     return {
         "config": cfg,
         "config_valid": not bool(validation.get("errors", [])),
         "config_errors": list(validation.get("errors", []) or []),
         "defaults": defaults,
         "replay_enabled": bool(replay_cfg.get("enabled", False)),
-        "risk_profiles": [
-            {"name": name, "description": str((spec or {}).get("description", "") or "")}
-            for name, spec in BUILTIN_PROFILES.items()
-        ],
+        "risk_profiles": active_profile_service.list_builtin_profiles(),
         "route_mode": str(cfg.get("route_mode", "roundtrip") or "roundtrip"),
         "default_profile_name": DEFAULT_PROFILE,
+        "config_profile_name": config_profile_name,
+        "active_profile_name": active_profile_name,
+        "selected_profile_name": active_profile_name,
         "market_auth": _market_auth_info(),
     }
 
@@ -137,6 +194,14 @@ def run_analysis(
                 "form": get_analysis_form_data(),
             }
     profile_name = str(risk_profile or "").strip().lower()
+    if profile_name and profile_name not in BUILTIN_PROFILES:
+        return {
+            "ok": False,
+            "error": f"Unbekanntes Risk Profile: '{risk_profile}'.",
+            "form": get_analysis_form_data(),
+        }
+    if not profile_name:
+        profile_name = active_profile_service.resolve_active_profile_name(cfg)
     if profile_name:
         argv.extend(["--profile", profile_name])
     replay_override = "1" if bool(use_replay) else "0"
@@ -157,6 +222,7 @@ def run_analysis(
             leaderboard_text = content
     manifest = dict(runtime_result.get("manifest", {}) or {})
     route_cards = _route_cards(manifest)
+    route_sections = _route_sections(route_cards)
     personal_layer_lines = extract_personal_layer_lines(execution_plan_text or runtime_result.get("stdout", ""))
     return {
         "ok": bool(runtime_result.get("ok", False)),
@@ -169,6 +235,7 @@ def run_analysis(
         "manifest": manifest,
         "runtime_mode": str(manifest.get("runtime_mode", "snapshot_only" if snapshot_only else "") or ""),
         "route_cards": route_cards,
+        "route_sections": route_sections,
         "route_count": int(manifest.get("route_count", len(route_cards)) or len(route_cards)),
         "pick_count": int(manifest.get("pick_count", sum(len(route.get("picks", [])) for route in route_cards)) or 0),
         "actionable_route_count": sum(1 for route in route_cards if bool(route.get("actionable", False))),
@@ -178,7 +245,7 @@ def run_analysis(
         "no_trade_text": no_trade_text,
         "personal_layer_lines": personal_layer_lines,
         "form": get_analysis_form_data(),
-        "selected_profile": profile_name or str((cfg.get("risk_profile", {}) or {}).get("name", "balanced")),
+        "selected_profile": profile_name or DEFAULT_PROFILE,
         "used_replay": bool(use_replay),
     }
 

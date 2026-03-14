@@ -28,6 +28,8 @@ import location_utils as _location_utils
 import market_fetch as _market_fetch
 import market_normalization as _market_normalization
 import market_plausibility as _market_plausibility
+import ansiblex as _ansiblex
+import candidate_nodes as _candidate_nodes
 import models as _models
 import portfolio_builder as _portfolio_builder
 import risk_profiles as _risk_profiles
@@ -200,6 +202,7 @@ _EXPORTS = {
     "filter_picks_by_profile": _risk_profiles.filter_picks_by_profile,
     "profile_header_lines": _risk_profiles.profile_header_lines,
     "profile_restrictions_summary": _risk_profiles.profile_restrictions_summary,
+    "resolve_profile_budget_window": _risk_profiles.resolve_profile_budget_window,
     "resolve_active_profile": _risk_profiles.resolve_active_profile,
     "_parse_route_pair_token": _route_search._parse_route_pair_token,
     "_resolve_allowed_route_pair_lane_overrides": _route_search._resolve_allowed_route_pair_lane_overrides,
@@ -235,6 +238,7 @@ _EXPORTS = {
     "write_execution_plan_chain": _runtime_reports.write_execution_plan_chain,
     "write_top_candidate_dump": _runtime_reports.write_top_candidate_dump,
     "_apply_capital_flow_to_leg": _runtime_runner._apply_capital_flow_to_leg,
+    "_attach_route_display_meta": _runtime_runner._attach_route_display_meta,
     "_apply_internal_self_haul_operational_filter": _runtime_runner._apply_internal_self_haul_operational_filter,
     "_apply_post_selection_route_mix_cleanup": _runtime_runner._apply_post_selection_route_mix_cleanup,
     "_compute_chain_leg_budget": _runtime_runner._compute_chain_leg_budget,
@@ -247,12 +251,20 @@ _EXPORTS = {
     "_resolve_capital_flow_cfg": _runtime_runner._resolve_capital_flow_cfg,
     "_resolve_route_profiles_cfg": _runtime_runner._resolve_route_profiles_cfg,
     "_resolve_route_wide_scan_cfg": _runtime_runner._resolve_route_wide_scan_cfg,
+    "CANDIDATE_NODE_KINDS": _candidate_nodes.CANDIDATE_NODE_KINDS,
+    "annotate_route_candidate_nodes": _candidate_nodes.annotate_route_candidate_nodes,
+    "compute_ansiblex_jump_cost": _ansiblex.compute_ansiblex_jump_cost,
     "build_adjacent_pairs": _runtime_runner.build_adjacent_pairs,
     "build_route_profiles": _runtime_runner.build_route_profiles,
     "build_route_wide_pairs": _runtime_runner.build_route_wide_pairs,
+    "load_ansiblex_edges": _ansiblex.load_ansiblex_edges,
     "enforce_route_destination": _runtime_runner.enforce_route_destination,
     "evaluate_leg_disabled": _runtime_runner.evaluate_leg_disabled,
     "main": _runtime_runner.main,
+    "parse_ansiblex_edge_line": _ansiblex.parse_ansiblex_edge_line,
+    "resolve_candidate_nodes_cfg": _candidate_nodes.resolve_candidate_nodes_cfg,
+    "resolve_ansiblex_cfg": _ansiblex.resolve_ansiblex_cfg,
+    "resolve_route_travel_details": _ansiblex.resolve_route_travel_details,
     "run_cli": _runtime_runner.run_cli,
     "make_skipped_chain_leg": _runtime_runner.make_skipped_chain_leg,
     "run_route": _runtime_runner.run_route,

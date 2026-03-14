@@ -12,12 +12,20 @@ not a full line-by-line review.
 - coordinates route, route-wide, chain, and snapshot-only execution
 - dispatches the safe clean-start maintenance path
 - wires profiles, calibration, reporting, and plan artifacts together
+- applies profile-derived spendable-budget windows before route planning
 - applies the opt-in personal-history layer after generic calibration
 - attaches character/personal-history metadata and explainability to runtime results
 - owns the shared post-build pick-gating seam after transport and calibration
+- carries protected-budget metadata into final route results for output use
 - owns the post-selection route-mix cleanup seam for weak non-mandatory add-ons
 - owns the internal-self-haul operational route floor before artifact emission
 - keeps external routes from carrying misleading internal-route floor metadata
+- derives final prune buckets and short route-failure diagnosis hints for text
+  and browser output when a route stays non-actionable
+- carries presentation-ready internal travel metadata from transport context
+  into final route results and `trade_plan` artifacts
+- attaches display-only candidate-node annotations from config when a route
+  starts, ends, or passes through a watched system
 
 ## Inputs
 
@@ -48,6 +56,7 @@ not a full line-by-line review.
 - `_apply_post_build_profile_filters()`
 - `_apply_post_selection_route_mix_cleanup()`
 - `_derive_route_prune_reason()`
+- `_derive_route_failure_hints()`
 - `_apply_internal_self_haul_operational_filter()`
 - `_build_personal_calibration_runtime()`
 - `_apply_confidence_calibration_to_candidates()`
@@ -81,15 +90,26 @@ not a full line-by-line review.
 
 - add or adjust CLI/runtime modes
 - wire new profile, calibration, or ranking behavior into the main flow
+- keep reserve-budget behavior explicit and visible when a profile reduces the
+  spendable budget before planning
 - surface runtime metadata and keep personal-layer effects explicit
 - change artifact generation or route/chain branching
 - tune the weak-tail cleanup seam without weakening candidate-stage anti-bait gates
+- preserve display-only travel metadata such as gate/ansiblex counts and
+  profit-before/after-logistics without leaking routing logic into the runner
+- preserve candidate-node annotations as descriptive metadata only; do not let
+  them turn into hidden hub scoring inside the runner
+- keep empty-route diagnosis honest: distinguish broad candidate scarcity from
+  later profile-side removals when `passed_all_filters` shows candidates did
+  survive the earlier search
 
 ## Risk Areas
 
 - many branches share one file
 - easy to duplicate business logic that belongs in domain modules
 - route summaries, output files, and metadata can drift together
+- coarse prune labels can become misleading if candidate-stage rejects and
+  post-search profile rejects are mixed without a narrow precedence rule
 - profile and calibration changes can affect multiple runtime paths at once
 - generic calibration and the personal layer must stay ordered and separate
 - easy to accidentally apply the personal layer twice or forget the relaxed

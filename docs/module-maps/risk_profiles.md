@@ -11,6 +11,7 @@ currently an active worktree hotspot.
 - owns built-in risk profile definitions
 - resolves the active profile from env, CLI, and config
 - tightens filter and portfolio settings
+- can derive a spendable budget window for reserve-protecting profiles
 - carries profile metadata needed for final pick-level enforcement
 - applies profile-adjusted route scoring
 - formats profile summary text for output
@@ -26,6 +27,7 @@ currently an active worktree hotspot.
 
 - resolved active profile name and params
 - tightened filter and portfolio configs
+- spendable-budget / reserved-budget pair for profiles that protect liquidity
 - post-build pick rejections with explicit profile rejection codes
 - profile-adjusted route score fields
 - profile header and summary lines
@@ -42,6 +44,7 @@ currently an active worktree hotspot.
 - `resolve_active_profile()`
 - `apply_profile_to_filters()`
 - `apply_profile_to_portfolio_cfg()`
+- `resolve_profile_budget_window()`
 - `apply_profile_to_route_result()`
 - `filter_picks_by_profile()`
 
@@ -60,8 +63,10 @@ currently an active worktree hotspot.
 
 - add or tune built-in profiles
 - change env/CLI/config precedence
+- change reserve-budget policy for low-downside profiles
 - adjust route penalty weights
-- tighten or relax profile gates
+- tighten or relax profile gates, including final liquidity / market-quality /
+  capital-efficiency rules
 - change whether visible profile rules are hard-gated on final picks
 
 ## Risk Areas

@@ -148,13 +148,111 @@ def _show_profit_basis_block(p: dict) -> bool:
 
 def _internal_route_metadata_applicable(record: dict) -> bool:
     transport_mode = str(record.get("transport_mode", "") or "").strip().lower()
-    if transport_mode != "internal_self_haul":
+    prune_reason = str(record.get("route_prune_reason", record.get("prune_reason", "")) or "").strip().lower()
+    if transport_mode != "internal_self_haul" and prune_reason != "internal_route_profit_below_operational_floor":
         return False
     if float(record.get("operational_profit_floor_isk", 0.0) or 0.0) > 0.0:
         return True
     if float(record.get("suppressed_expected_realized_profit_total", 0.0) or 0.0) > 0.0:
         return True
     return bool(str(record.get("operational_filter_note", "") or "").strip())
+
+
+def _route_display_meta(record: dict) -> dict:
+    raw = record.get("_route_display", {})
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _route_travel_legs(record: dict) -> list[dict]:
+    raw = record.get("travel_path_legs", [])
+    if not isinstance(raw, list):
+        return []
+    return [dict(leg) for leg in raw if isinstance(leg, dict)]
+
+
+def _append_route_travel_lines(lines: list[str], record: dict, fmt_isk_de, *, indent: str = "", detail_mode: bool = False) -> None:
+    travel_summary = str(record.get("travel_summary", "") or "").strip()
+    gate_legs = int(record.get("gate_leg_count", 0) or 0)
+    ansiblex_legs = int(record.get("ansiblex_leg_count", 0) or 0)
+    ansiblex_cost = float(record.get("ansiblex_logistics_cost_isk", 0.0) or 0.0)
+    profit_before = float(
+        record.get(
+            "expected_profit_before_logistics_total",
+            float(record.get("expected_realized_profit_total", record.get("profit_total", 0.0)) or 0.0)
+            + float(record.get("total_transport_cost", 0.0) or 0.0),
+        )
+        or 0.0
+    )
+    profit_after = float(
+        record.get(
+            "expected_profit_after_logistics_total",
+            record.get("expected_realized_profit_total", record.get("profit_total", 0.0)),
+        )
+        or 0.0
+    )
+
+    if travel_summary:
+        lines.append(f"{indent}Travel: {travel_summary}")
+    if gate_legs > 0 or ansiblex_legs > 0:
+        lines.append(f"{indent}  gate_legs: {gate_legs} | ansiblex_legs: {ansiblex_legs}")
+    lines.append(f"{indent}  expected_profit_before_logistics: {fmt_isk_de(profit_before)}")
+    lines.append(f"{indent}  expected_profit_after_logistics:  {fmt_isk_de(profit_after)}")
+    if ansiblex_legs > 0 or ansiblex_cost > 0.0:
+        lines.append(f"{indent}  ansiblex_logistics_cost:        {fmt_isk_de(ansiblex_cost)}")
+
+    if ansiblex_legs <= 0 and not detail_mode:
+        return
+
+    for leg in _route_travel_legs(record):
+        mode = str(leg.get("mode", "gate") or "gate").strip().lower()
+        from_system = str(leg.get("from_system", "") or "").strip()
+        to_system = str(leg.get("to_system", "") or "").strip()
+        if not from_system or not to_system:
+            continue
+        detail_bits = [mode]
+        if mode == "ansiblex":
+            detail_bits.append(f"{fmt_isk_de(float(leg.get('ansiblex_logistics_cost_isk', 0.0) or 0.0))}")
+        lines.append(f"{indent}  leg: {from_system} -> {to_system} [{' | '.join(detail_bits)}]")
+
+
+def _append_candidate_node_lines(lines: list[str], record: dict, *, indent: str = "", detail_mode: bool = False) -> None:
+    summary = str(record.get("candidate_node_summary", "") or "").strip()
+    raw_nodes = record.get("candidate_nodes", [])
+    nodes = [dict(node) for node in list(raw_nodes or []) if isinstance(node, dict)] if isinstance(raw_nodes, list) else []
+    if summary:
+        lines.append(f"{indent}Candidate nodes: {summary}")
+    if not detail_mode:
+        return
+    for node in nodes:
+        label = str(node.get("label", "") or "").strip()
+        kind = str(node.get("kind", "") or "").strip()
+        match_role = str(node.get("match_role", "") or "").strip()
+        if not label or not kind or not match_role:
+            continue
+        lines.append(f"{indent}  candidate_node: {match_role} {label} [{kind}]")
+
+
+def _ordered_route_results_for_display(route_results: list[dict]) -> list[dict]:
+    indexed = list(enumerate(list(route_results or [])))
+
+    def sort_key(entry: tuple[int, dict]) -> tuple:
+        idx, record = entry
+        meta = _route_display_meta(record)
+        if not meta:
+            return (9999, 9999, idx)
+        summary = summarize_route_for_ranking(record)
+        expected_profit = float(
+            meta.get("expected_profit", summary.get("total_expected_realized_profit", record.get("profit_total", 0.0))) or 0.0
+        )
+        return (
+            int(meta.get("section_order", 9999) or 9999),
+            int(meta.get("item_order", 9999) or 9999),
+            0 if bool(summary.get("actionable", False)) else 1,
+            -float(expected_profit),
+            idx,
+        )
+
+    return [record for _, record in sorted(indexed, key=sort_key)]
 
 
 def _categorize_pick(p: dict) -> str:
@@ -318,6 +416,94 @@ def _write_shopping_list(lines: list[str], categorized: dict, fmt_isk_de) -> Non
             global_idx += 1
     if not any_picks:
         lines.append("  Keine Picks.")
+    lines.append("")
+
+
+def _pick_profit_to_cost_ratio(p: dict) -> float:
+    cost = float(p.get("cost", 0.0) or 0.0)
+    if cost <= 0.0:
+        return 0.0
+    return float(_pick_displayed_profit(p) / cost)
+
+
+def _best_actionable_entry(route_results: list[dict]) -> tuple[dict | None, dict | None]:
+    actionable_entries = [
+        (leg, summarize_route_for_ranking(leg))
+        for leg in list(route_results or [])
+        if bool(summarize_route_for_ranking(leg).get("actionable", False))
+    ]
+    if not actionable_entries:
+        return None, None
+    best_leg, best_summary = max(
+        actionable_entries,
+        key=lambda entry: (
+            _route_ranking_value(entry[0], "risk_adjusted_expected_profit"),
+            float(entry[1].get("total_expected_realized_profit", 0.0) or 0.0),
+        ),
+    )
+    return best_leg, best_summary
+
+
+def _write_safe_buys_today(
+    lines: list[str],
+    best_leg: dict | None,
+    best_summary: dict | None,
+    profile_params: dict,
+    fmt_isk_de,
+) -> None:
+    limit = int(profile_params.get("safe_buy_today_limit", 0) or 0)
+    if limit <= 0:
+        return
+
+    lines.append("SAFE BUYS TODAY")
+    lines.append("-" * 42)
+    if not best_leg or not best_summary:
+        lines.append("  No route cleared the safe-buy bar today.")
+        lines.append("  Keep the reserve liquid and do not force a trade.")
+        lines.append("")
+        return
+
+    budget_meta = dict(best_leg.get("_profile_budget_meta", {}) or {})
+    reserved_budget = float(budget_meta.get("reserved_budget_isk", 0.0) or 0.0)
+    spendable_budget = float(budget_meta.get("spendable_budget_isk", best_leg.get("budget_total", 0.0)) or 0.0)
+    lines.append(
+        f"  Best Route: {best_leg.get('route_label', '')}  "
+        f"| Route Confidence {float(best_summary.get('route_confidence', 0.0) or 0.0):.2f}"
+    )
+    if reserved_budget > 0.0 or spendable_budget > 0.0:
+        lines.append(
+            f"  Spendable Today: {fmt_isk_de(spendable_budget)}"
+            f"  | Reserve Held Back: {fmt_isk_de(reserved_budget)}"
+        )
+
+    picks = [
+        p
+        for p in sorted(
+            list(best_leg.get("picks", []) or []),
+            key=lambda pick: float(_pick_displayed_profit(pick)),
+            reverse=True,
+        )
+        if _categorize_pick(p) == _CAT_MANDATORY
+    ]
+    if not picks:
+        lines.append("  No pick cleared the safe-buy bar today.")
+        lines.append("  Review optional ideas only if you want to accept more downside.")
+        lines.append("")
+        return
+
+    for idx, pick in enumerate(picks[:limit], start=1):
+        spend = float(pick.get("cost", float(pick.get("buy_avg", 0.0) or 0.0) * int(pick.get("qty", 0) or 0)) or 0.0)
+        lines.append(
+            f"  {idx}. {_fmt_item_name(str(pick.get('name', '?')), width=24)}  "
+            f"qty={int(pick.get('qty', 0) or 0):>8,}  "
+            f"spend {fmt_isk_de(spend)}"
+        )
+        lines.append(
+            f"     route {best_leg.get('route_label', '')}"
+            f"  | max buy {fmt_isk_de(float(pick.get('buy_avg', 0.0) or 0.0))}/unit"
+            f"  | expected profit {fmt_isk_de(_pick_displayed_profit(pick))}"
+            f"  | ROI { _pick_profit_to_cost_ratio(pick):.1%}"
+        )
     lines.append("")
 
 
@@ -649,6 +835,10 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     if compact_mode:
         lines.append("Mode:      COMPACT (shopping list only - use --detail for full breakdown)")
     lines.append("")
+    lines.append("Display:   Corridor order for plan sections; direct legs stay before longer spans, Jita connectors stay separate.")
+    lines.append("")
+    best_leg, best_summary = _best_actionable_entry(route_results)
+    _write_safe_buys_today(lines, best_leg, best_summary, active_profile_params, fmt_isk_de)
 
     total_cost = 0.0
     total_revenue = 0.0
@@ -657,10 +847,23 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     total_shipping_cost = 0.0
     total_route_costs = 0.0
 
-    for idx, leg in enumerate(route_results, start=1):
+    display_route_results = _ordered_route_results_for_display(route_results)
+    current_section_key = ""
+
+    for idx, leg in enumerate(display_route_results, start=1):
         picks = list(leg.get("picks", []) or [])
         route_summary = summarize_route_for_ranking(leg)
         actionable = bool(route_summary.get("actionable", False))
+        display_meta = _route_display_meta(leg)
+        if display_meta:
+            section_key = str(display_meta.get("section_key", "") or "")
+            if section_key and section_key != current_section_key:
+                current_section_key = section_key
+                lines.append(f"ROUTE SECTION: {str(display_meta.get('section_label', 'Routes') or 'Routes')}")
+                section_note = str(display_meta.get("section_note", "") or "").strip()
+                if section_note:
+                    lines.append(f"  {section_note}")
+                lines.append("")
 
         # Categorise all picks for this leg
         categorized: dict = {_CAT_MANDATORY: [], _CAT_OPTIONAL: [], _CAT_SPECULATIVE: []}
@@ -681,6 +884,10 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         route_id = str(leg.get("route_id", leg.get("route_tag", "")) or "")
         if route_id:
             lines.append(f"Route ID: {route_id}")
+        if display_meta:
+            route_logic = str(display_meta.get("logic_label", "") or "").strip()
+            if route_logic:
+                lines.append(f"Route Logic: {route_logic}")
         personal_effect = dict(leg.get("_personal_history_effect_summary", {}) or {})
         if personal_summary and personal_layer and (
             bool(personal_layer.get("active", False)) or bool(personal_effect.get("applied", False))
@@ -722,6 +929,8 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             lines.append(f"  transport_cost_total: {fmt_isk_de(float(leg.get('total_transport_cost', 0.0) or 0.0))}")
             if transport_note:
                 lines.append(f"  note: {transport_note}")
+        _append_route_travel_lines(lines, leg, fmt_isk_de, indent="", detail_mode=detail_mode)
+        _append_candidate_node_lines(lines, leg, indent="", detail_mode=detail_mode)
         if shipping_lane_id:
             lines.append(f"Shipping Lane: {shipping_lane_id}")
             provider = str(leg.get("shipping_provider", "") or "")
@@ -758,6 +967,12 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         route_prune_reason = str(leg.get("route_prune_reason", route_summary.get("route_prune_reason", "")) or "")
         if route_prune_reason:
             lines.append(f"route_prune_reason: {route_prune_reason}")
+        route_failure_hints = [str(item).strip() for item in list(leg.get("route_failure_hints", []) or []) if str(item).strip()]
+        route_failure_summary = str(leg.get("route_failure_summary", "") or "").strip()
+        if not route_failure_summary and route_failure_hints:
+            route_failure_summary = " | ".join(route_failure_hints)
+        if route_failure_summary:
+            lines.append(f"route_diagnosis: {route_failure_summary}")
 
         lines.append("")
 
@@ -889,22 +1104,10 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         lines.append(SEP)
         lines.append("")
 
-    actionable_entries = [
-        (leg, summarize_route_for_ranking(leg))
-        for leg in list(route_results or [])
-        if bool(summarize_route_for_ranking(leg).get("actionable", False))
-    ]
     lines.append(SEP)
     lines.append("BEST ACTIONABLE ROUTE")
     lines.append(SEP)
-    if actionable_entries:
-        best_leg, best_summary = max(
-            actionable_entries,
-            key=lambda entry: (
-                _route_ranking_value(entry[0], "risk_adjusted_expected_profit"),
-                float(entry[1].get("total_expected_realized_profit", 0.0) or 0.0),
-            ),
-        )
+    if best_leg and best_summary:
         lines.append(f"Route:                         {best_leg.get('route_label', '')}")
         lines.append(f"Budget Used:                   {fmt_isk_de(float(best_leg.get('isk_used', 0.0) or 0.0))}")
         lines.append(
@@ -1006,6 +1209,8 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Total Route Costs: {fmt_isk_de(float(r.get('total_route_cost', 0.0) or 0.0))}")
         lines.append(f"   Total Shipping Cost: {fmt_isk_de(float(r.get('shipping_cost_total', 0.0) or 0.0))}")
         lines.append(f"   Total Transport Cost: {fmt_isk_de(float(r.get('total_transport_cost', 0.0) or 0.0))}")
+        _append_route_travel_lines(lines, r, fmt_isk_de, indent="   ", detail_mode=detail_mode)
+        _append_candidate_node_lines(lines, r, indent="   ", detail_mode=detail_mode)
         transport_note = str(r.get("transport_mode_note", "") or "")
         if transport_note:
             lines.append(f"   transport_note: {transport_note}")
@@ -1043,6 +1248,12 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
                 reason_code = str(pruned_reason.get("code", "") or "")
             suffix = f" [{reason_code}]" if reason_code else ""
             lines.append(f"- {r.get('route_label', '')}: {reason}{suffix}")
+            route_failure_hints = [str(item).strip() for item in list(r.get("route_failure_hints", []) or []) if str(item).strip()]
+            route_failure_summary = str(r.get("route_failure_summary", "") or "").strip()
+            if not route_failure_summary and route_failure_hints:
+                route_failure_summary = " | ".join(route_failure_hints)
+            if route_failure_summary:
+                lines.append(f"  diagnosis: {route_failure_summary}")
             if _internal_route_metadata_applicable(r):
                 operational_floor = float(r.get("operational_profit_floor_isk", 0.0) or 0.0)
                 if operational_floor > 0.0:
@@ -1140,6 +1351,12 @@ def write_no_trade_report(
                 operational_note = str(nm.get("operational_filter_note", "") or "")
                 if operational_note:
                     lines.append(f"    Internal Route Note: {operational_note}")
+            route_failure_hints = [str(item).strip() for item in list(nm.get("route_failure_hints", []) or []) if str(item).strip()]
+            route_failure_summary = str(nm.get("route_failure_summary", "") or "").strip()
+            if not route_failure_summary and route_failure_hints:
+                route_failure_summary = " | ".join(route_failure_hints)
+            if route_failure_summary:
+                lines.append(f"    Diagnose: {route_failure_summary}")
             why = dict(nm.get("why_out_summary", {}) or {})
             if why:
                 top_why = sorted(why.items(), key=lambda kv: kv[1], reverse=True)[:3]

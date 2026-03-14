@@ -1,86 +1,88 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 26 output honesty + tail cleanup)
+Date: 2026-03-14 (session 37 character relogin slot fix)
 Branch: `dev`
 
 ## Completed This Session
 
-Fixed the remaining output-honesty and weak-tail-pick issues in the
-route-profile path without weakening the recent anti-bait / market-quality
-work.
+Fixed the practical reason why the web UI could not switch characters in the
+reported setup.
+
+The switcher itself was functioning, but the local state only contained one
+saved character slot (`Navi Selerith`). The real blocker was that the
+Character-page `Auth login` path reused the current valid token and therefore
+did not force a fresh browser login for another character. The page now has a
+dedicated `Login other character` action that performs a new EVE SSO login and
+captures the resulting character as another switchable local slot.
 
 ## Root Cause
 
-- `execution_plan.py` rendered internal-route operational floor lines whenever
-  `operational_profit_floor_isk` existed, even if the route used external
-  shipping
-- PRICE-SENS picks only emitted a warning, not the actual profit-basis context,
-  so the shown sell quote and the shown profit looked inconsistent to a human
-- the existing post-selection cleanup seam favored clear score wins, but could
-  still keep a weak speculative / price-sensitive tail pick when route quality
-  improved and profit share stayed small, yet the score change was only near-flat
+- local inspection showed exactly one saved character in
+  `cache/character_context/web_character_registry.json`
+- the header switcher can only switch among already saved local slots
+- `webapp/services/character_service.py` called
+  `sso.ensure_token(..., allow_login=True)` for `Auth login`, which returns the
+  existing valid token without opening a new EVE SSO login flow
 
 ## What Changed
 
-- `execution_plan.py`
-  - added small helpers for displayed profit, visible-book profit proxy,
-    conservative executable profit proxy, retention, and internal-route
-    metadata applicability
-  - route summaries, leaderboard pruned entries, and no-trade near-misses now
-    show `Internal Route Floor` / `Internal Route Note` only for actual
-    `internal_self_haul` routes
-  - price-sensitive or materially repriced picks now show:
-    - quote basis
-    - visible-book profit proxy
-    - conservative executable profit proxy
-    - displayed profit basis used in the plan
-    - retention and implied net-exit basis
-- `runtime_runner.py`
-  - `_apply_post_selection_route_mix_cleanup()` now also considers explicit
-    weak-tail signals (`speculative`, `price-sensitive`,
-    `fragile-market-quality`, `weak-profit-retention`, `low-confidence`,
-    `elevated-manip-risk`) when profit share stays small and score retention
-    remains high
-  - `_apply_internal_self_haul_operational_filter()` now clears internal-route
-    floor metadata on external routes instead of carrying it forward
-- tests
-  - added focused coverage for hidden external floor lines, visible internal
-    floor lines, price-basis transparency, speculative price-sensitive tail
-    removal, and replay regression against known bait picks
+- `webapp/services/character_service.py`
+  - added a forced relogin path for action `relogin`
+  - `relogin` now calls `sso.oauth_authorize(...)` directly instead of
+    reusing the current valid token
+  - still mirrors the resulting token to the runtime path and captures the new
+    character into the saved-character registry
+- `webapp/templates/character.html`
+  - added a `Login other character` button
+  - added a small hint when only one saved character exists
+- `tests/test_webapp.py`
+  - now checks that the Character page shows `Login other character`
+  - adds a focused regression proving `relogin` forces the fresh SSO login
+    path instead of using `ensure_token(...)`
+- `README.md`
+  - documents the new `Login other character` flow
+- `PROJECT_STATE.md`
+  - records the forced-relogin slot-addition fix
+- `ARCHITECTURE.md`
+  - documents the small forced-relogin seam in `character_service.py`
+- `TASK_QUEUE.md`
+  - marks the fix as done
+- `docs/module-maps/webapp.md`
+  - documents why the relogin path exists and what problem it solves
 
 ## Tests And Verification
 
+- local state verification before the fix:
+  - `cache/character_context/web_character_registry.json` contained only one
+    character slot
+  - `cache/character_context/saved_characters/` contained only one directory
 - focused regression:
-  - `pytest -q tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py tests/test_runtime_runner.py`
-    -> **129 passed**
-- new coverage proves:
-  - external shipping routes do not render internal-route floor/note lines
-  - internal self-haul routes still surface floor, suppressed profit, and note
-  - PRICE-SENS picks expose the real profit basis in plan text
-  - weak speculative / price-sensitive tail picks can be dropped while strong
-    core picks remain
-  - the focused replay fixture still keeps the known bait picks out
+  - `python -m pytest -q tests/test_webapp.py`
+  - **25 passed**
 
 ## Remaining Limits
 
-- the new price-basis block explains the conservative basis via profit proxies
-  and implied net-exit math; it still does not persist a separately named
-  repriced unit sell quote for every path
-- the tail cleanup remains intentionally narrow: it still refuses removals that
-  would materially damage route score retention or break minimum strong-pick
-  expectations
-- an unrelated pre-existing local modification in `location_utils.py` remains
-  intentionally untouched
+- the switcher still only works across characters that have been logged in at
+  least once and therefore exist as local saved slots
+- unrelated user/worktree changes remain present in:
+  `config.json`, `docs/module-maps/candidate_nodes.md`, `risk_profiles.py`,
+  `runtime_runner.py`, `tests/test_candidate_nodes.py`,
+  `tests/test_risk_profiles.py`
+
+## Next Recommended Task
+
+If desired, add a tiny browser-visible status line in the global header when
+only one saved character exists, so the operator immediately knows why the
+switcher has nothing else to offer.
 
 ## Files Touched
 
-- `execution_plan.py`
-- `runtime_runner.py`
-- `tests/test_execution_plan.py`
-- `tests/test_route_search.py`
-- `tests/test_runtime_runner.py`
-- `tests/test_integration.py`
+- `webapp/services/character_service.py`
+- `webapp/templates/character.html`
+- `tests/test_webapp.py`
+- `README.md`
 - `PROJECT_STATE.md`
-- `TASK_QUEUE.md`
 - `ARCHITECTURE.md`
+- `TASK_QUEUE.md`
 - `SESSION_HANDOFF.md`
+- `docs/module-maps/webapp.md`

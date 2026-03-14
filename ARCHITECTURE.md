@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14
+Last updated: 2026-03-14 (session 37 character relogin slot fix)
 
 ## Evidence And Limits
 
@@ -32,6 +32,8 @@ Current module maps:
 - `docs/module-maps/eve_character_client.md`
 - `docs/module-maps/journal_reconciliation.md`
 - `docs/module-maps/webapp.md`
+- `docs/module-maps/ansiblex.md`
+- `docs/module-maps/candidate_nodes.md`
 
 Use the relevant module map before opening one of these larger files.
 
@@ -45,6 +47,13 @@ The productive startup path is:
 
 `nullsectrader.py` is not the main CLI path. It is a thin compatibility and
 import facade used by tests and local tooling.
+
+The click-first local web startup path is:
+
+1. `start_webapp.bat`
+2. `start_webapp_server.bat`
+3. `python -m uvicorn webapp.app:create_app --factory --host 127.0.0.1 --port 8000`
+4. browser on `http://127.0.0.1:8000`
 
 ## High-Value Files By Task
 
@@ -73,6 +82,10 @@ Use this section to avoid loading large unrelated modules.
 - Portfolio construction, liquidation gating, cargo fill, and local-search
   selection objective: `portfolio_builder.py`
 - Shipping costs, route blocking, and transport context: `shipping.py`
+- Directed ansiblex parsing, small internal travel graph, and additive
+  ansiblex logistics costs: `ansiblex.py`
+- Config-driven watch-node classification for station/market/corridor
+  candidates: `candidate_nodes.py`
 - Fee calculations: `fees.py`, `fee_engine.py`
 - Human-readable output, route plan rendering, route leaderboard, and no-trade
   reports: `execution_plan.py`
@@ -87,6 +100,8 @@ Use this section to avoid loading large unrelated modules.
   `journal_reporting.py`, `confidence_calibration.py`
 - Local browser UI and service bridge: `webapp/app.py`, `webapp/routes/pages.py`,
   `webapp/services/`
+- Clickable Windows web launcher: `start_webapp.bat`
+- Internal batch helper for the clickable launcher: `start_webapp_server.bat`
 - Startup node and chain resolution: `startup_helpers.py`
 
 ## Runtime Flow
@@ -101,6 +116,8 @@ The main runtime flow is:
 -> `candidate_engine.py`
 -> `portfolio_builder.py`
 -> `shipping.py`
+-> optional `ansiblex.py` internal corridor travel metadata/cost seam
+-> optional `candidate_nodes.py` display-only route annotations
 -> `route_search.py`
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
@@ -134,6 +151,7 @@ route results
 Local web flow is separate from the CLI and intentionally thin:
 
 `webapp/app.py`
+-> small request-level access guard in `webapp/security.py`
 -> `webapp/routes/pages.py`
 -> `webapp/services/*`
 -> direct calls into `character_profile.py`, `journal_reporting.py`,
@@ -145,6 +163,23 @@ Local web flow is separate from the CLI and intentionally thin:
 `webapp.app` is now a plain local FastAPI app without browser-heartbeat or
 idle auto-shutdown behavior. The local web process stays up until it is
 stopped explicitly.
+
+The web entry also owns a small private-deploy security seam:
+
+- if `NULLSEC_WEBAPP_PASSWORD` or `webapp.access_password` is configured, the
+  whole browser surface requires HTTP Basic Auth
+- if no password is configured, only direct localhost request shape is treated
+  as supported; proxy-shaped or non-local requests are blocked instead of
+  exposing the app unguarded
+- `/character` and `/config` are treated as sensitive pages and emit
+  `Cache-Control: no-store`
+- `webapp/services/config_service.py` and
+  `webapp/services/character_service.py` now pass redacted/sanitized
+  view-models into templates instead of the broader raw config/context payloads
+- `webapp/services/character_service.py` also owns the small forced-relogin
+  seam used by the Character page: `Auth login` may reuse a valid token, while
+  `Login other character` forces a fresh EVE SSO browser login so a second
+  local saved character slot can be captured
 
 The journal web path has two distinct data sources on purpose:
 
@@ -174,6 +209,10 @@ their own panels instead of widening the full page.
   explicit internal `route_costs` entry is present
 - route blocking for missing transport models still applies to non-internal,
   non-modeled routes
+- for internal route-chain nodes, `shipping.py` can now ask `ansiblex.py` for a
+  small gate/ansiblex travel path summary and additive ansiblex logistics cost;
+  this augments transport metadata but does not replace gate travel or rewrite
+  `route_search.py`
 
 `runtime_runner.py` now owns a second shared post-build gating seam after
 transport and confidence calibration:
@@ -181,7 +220,13 @@ transport and confidence calibration:
 - `risk_profiles.filter_picks_by_profile()` is applied to final picks in both
   `run_route()` and `run_route_wide_leg()`
 - that shared seam is responsible for hard pick-level profile enforcement
-  (expected profit, profit density, confidence, and max budget share)
+  (expected profit, profit density, confidence, max budget share, and now also
+  optional sell-time / liquidity / market-quality / manipulation-risk /
+  profit-spend gates for stricter profiles)
+- before route planning starts, `runtime_runner.py` can now also apply a
+  profile-owned spendable-budget window from `risk_profiles.py` so a profile
+  such as `small_wallet_hub_safe` keeps reserve liquidity out of the planned
+  portfolio entirely instead of only warning after the fact
 - after that, `runtime_runner.py` can apply a narrow post-selection route-mix
   cleanup that removes clearly weak optional/speculative add-ons when route
   confidence / market quality recover materially and the route score stays
@@ -193,6 +238,15 @@ transport and confidence calibration:
 - the same post-build seam also derives clearer `route_prune_reason` buckets
   and applies the internal-self-haul operational route floor before artifacts
   are emitted
+- the route-profile path now also attaches `_route_display` metadata per route
+  result so presentation consumers can group direct legs, longer spans, and
+  Jita connectors without changing ranking
+- final route results can now also carry travel metadata for browser and plan
+  parity: travel summary, gate/ansiblex leg counts, visible travel legs, and
+  profit before vs after logistics
+- final route results can also carry candidate-node annotations when a route
+  starts, ends, or passes through a configured watch node; this remains
+  display-only metadata and does not alter route ranking
 
 Trade quality now has one central seam instead of separate ad-hoc penalties:
 
@@ -214,9 +268,14 @@ Trade quality now has one central seam instead of separate ad-hoc penalties:
   PRICE-SENS / materially repriced picks show the quote basis, visible-book
   profit proxy, conservative executable profit proxy, retention, and the
   displayed profit basis actually used in the plan
+- profiles may now also drive a compact top-of-plan actionable summary:
+  `small_wallet_hub_safe` uses a `SAFE BUYS TODAY` block with the best route,
+  spendable budget, protected reserve, and mandatory picks only
 - internal-route operational floor metadata is now presentation-scoped to
   `internal_self_haul` routes instead of any route result that merely carried a
   floor value
+- execution-plan plan sections can now render corridor-ordered groups when
+  `_route_display` metadata is present
 
 Volume validity is now intentionally conservative across the runtime path:
 
@@ -253,6 +312,13 @@ Confirmed output families from the current docs and entry modules:
 - `*_to_*_<timestamp>.csv`
 - `*_top_candidates_<timestamp>.txt`
 - `trade_plan_<plan_id>.json`
+- route entries inside `trade_plan_<plan_id>.json` can now also carry a
+  `display` block used by the browser results page for corridor grouping parity
+- route entries inside `trade_plan_<plan_id>.json` can also carry travel
+  metadata for internal gate/ansiblex path visibility and profit-before/after-
+  logistics parity
+- route entries inside `trade_plan_<plan_id>.json` can also carry compact
+  candidate-node metadata for browser parity
 - `snapshot_<timestamp>.json`
 - `market_snapshot.json`
 - `replay_snapshot.json`
@@ -291,13 +357,17 @@ Known test and quality entry points:
 - `python scripts/quality_check.py`
 
 `tests/run_all.py` currently imports targeted test modules instead of scanning
-the repository dynamically.
+the repository dynamically. `scripts/quality_check.py` now compiles the full
+Python source set but runs the maintained pytest subset for the web /
+execution-plan / corridor-display surface; the minimal CI workflow uses that
+same script instead of a separate drifting command set.
 
 ## Current Hotspots
 
 Most recent focused work on 2026-03-13 touched:
 
-- risk profiles and profile-aware ranking/output
+- risk profiles and profile-aware ranking/output, especially the new
+  small-wallet safe profile
 - replay-based market-quality calibration against focused execution-plan and
   top-candidate artifacts
 - post-selection route-mix cleanup for weak optional/speculative add-ons
@@ -321,6 +391,10 @@ confirm the current branch state.
 
 - Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
+- Internal ansiblex source of truth and additive cost seam: `ansiblex.py` plus
+  `docs/Ansis.txt`
+- Candidate watch-node source of truth: `config.json` `candidate_nodes` plus
+  `candidate_nodes.py`
 - Internal self-haul vs external shipping classification: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
 - Confidence calibration logic and personal decision-layer policy:

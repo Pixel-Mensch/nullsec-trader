@@ -647,9 +647,24 @@ def validate_config(cfg: dict) -> dict:
         err("config root must be an object")
         return result
 
-    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context", "personal_history_policy"):
+    from risk_profiles import BUILTIN_PROFILES
+
+    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context", "personal_history_policy", "ansiblex", "candidate_nodes"):
         if key in cfg and not isinstance(cfg.get(key), dict):
             err(f"{key} must be an object")
+
+    risk_profile_cfg = cfg.get("risk_profile")
+    if risk_profile_cfg is not None:
+        if isinstance(risk_profile_cfg, str):
+            profile_name = str(risk_profile_cfg).strip().lower()
+            if profile_name and profile_name not in BUILTIN_PROFILES:
+                err(f"risk_profile must be one of: {', '.join(sorted(BUILTIN_PROFILES))}")
+        elif isinstance(risk_profile_cfg, dict):
+            raw_name = str(risk_profile_cfg.get("name", "") or "").strip().lower()
+            if raw_name and raw_name not in BUILTIN_PROFILES:
+                err(f"risk_profile.name must be one of: {', '.join(sorted(BUILTIN_PROFILES))}")
+        else:
+            err("risk_profile must be a string or an object")
 
     esi_cfg = cfg.get("esi", {})
     replay_cfg = cfg.get("replay", {})
@@ -977,6 +992,61 @@ def validate_config(cfg: dict) -> dict:
             and not isinstance(route_search_cfg.get("allow_zero_transport_cost_for_routes"), list)
         ):
             err("route_search.allow_zero_transport_cost_for_routes must be a list")
+
+    ansiblex_cfg = cfg.get("ansiblex", {})
+    if ansiblex_cfg is not None and not isinstance(ansiblex_cfg, dict):
+        err("ansiblex must be an object")
+    elif isinstance(ansiblex_cfg, dict):
+        if "enabled" in ansiblex_cfg and not isinstance(ansiblex_cfg.get("enabled"), bool):
+            err("ansiblex.enabled must be a boolean")
+        if "file_path" in ansiblex_cfg and not isinstance(ansiblex_cfg.get("file_path"), str):
+            err("ansiblex.file_path must be a string")
+        for nkey in (
+            "ship_mass_kg",
+            "liquid_ozone_price_isk",
+            "toll_isk_per_ozone",
+            "fixed_toll_isk_per_jump",
+        ):
+            if nkey in ansiblex_cfg:
+                _check_non_negative(f"ansiblex.{nkey}", ansiblex_cfg.get(nkey))
+        if "toll_mode" in ansiblex_cfg:
+            mode = str(ansiblex_cfg.get("toll_mode", "") or "").strip().lower()
+            if mode not in ("none", "per_ozone", "fixed_per_jump"):
+                err("ansiblex.toll_mode must be one of: none, per_ozone, fixed_per_jump")
+
+    candidate_nodes_cfg = cfg.get("candidate_nodes", {})
+    if candidate_nodes_cfg is not None and not isinstance(candidate_nodes_cfg, dict):
+        err("candidate_nodes must be an object")
+    elif isinstance(candidate_nodes_cfg, dict):
+        if "enabled" in candidate_nodes_cfg and not isinstance(candidate_nodes_cfg.get("enabled"), bool):
+            err("candidate_nodes.enabled must be a boolean")
+        raw_nodes = candidate_nodes_cfg.get("nodes", [])
+        if "nodes" in candidate_nodes_cfg and not isinstance(raw_nodes, list):
+            err("candidate_nodes.nodes must be a list")
+        elif isinstance(raw_nodes, list):
+            valid_kinds = {"station_candidate", "market_candidate", "corridor_checkpoint"}
+            for idx, raw_node in enumerate(raw_nodes):
+                prefix = f"candidate_nodes.nodes[{idx}]"
+                if not isinstance(raw_node, dict):
+                    err(f"{prefix} must be an object")
+                    continue
+                label = str(raw_node.get("label", raw_node.get("system", "")) or "").strip()
+                if not label:
+                    err(f"{prefix}.label must be a non-empty string")
+                kind = str(raw_node.get("kind", raw_node.get("node_type", "")) or "").strip().lower()
+                if kind not in valid_kinds:
+                    err(f"{prefix}.kind must be one of: station_candidate, market_candidate, corridor_checkpoint")
+                if "enabled" in raw_node and not isinstance(raw_node.get("enabled"), bool):
+                    err(f"{prefix}.enabled must be a boolean")
+                aliases = raw_node.get("aliases", [])
+                if "aliases" in raw_node and not isinstance(aliases, list):
+                    err(f"{prefix}.aliases must be a list of strings")
+                elif isinstance(aliases, list):
+                    for alias_idx, alias in enumerate(aliases):
+                        if not isinstance(alias, str) or not str(alias).strip():
+                            err(f"{prefix}.aliases[{alias_idx}] must be a non-empty string")
+                if "note" in raw_node and not isinstance(raw_node.get("note"), str):
+                    err(f"{prefix}.note must be a string")
 
     confidence_calibration_cfg = cfg.get("confidence_calibration", {})
     if confidence_calibration_cfg is not None and not isinstance(confidence_calibration_cfg, dict):

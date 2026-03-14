@@ -29,6 +29,7 @@ from execution_plan import (
     _write_route_trip_summary,
     write_execution_plan_profiles,
 )
+from risk_profiles import BUILTIN_PROFILES
 from runtime_common import parse_cli_args
 
 
@@ -464,6 +465,9 @@ class TestWriteShoppingList:
 
 def _make_route_result(picks=None) -> dict:
     p_list = [_instant_pick(), _planned_pick()] if picks is None else picks
+    total_transport_cost = 100_000.0
+    expected_profit_total = sum(float(p.get("expected_realized_profit_90d", p.get("profit", 0)) or 0.0) for p in p_list)
+    full_sell_profit_total = sum(float(p.get("profit", 0) or 0.0) for p in p_list)
     return {
         "route_label": "Jita -> Perimeter",
         "source_label": "Jita IV-4",
@@ -474,8 +478,21 @@ def _make_route_result(picks=None) -> dict:
         "m3_used": 2_000.0,
         "total_route_m3": 2_000.0,
         "profit_total": sum(float(p.get("profit", 0)) for p in p_list),
-        "total_transport_cost": 100_000.0,
+        "expected_realized_profit_total": expected_profit_total,
+        "expected_profit_before_logistics_total": expected_profit_total + total_transport_cost,
+        "expected_profit_after_logistics_total": expected_profit_total,
+        "full_sell_profit_total": full_sell_profit_total,
+        "full_sell_profit_before_logistics_total": full_sell_profit_total + total_transport_cost,
+        "full_sell_profit_after_logistics_total": full_sell_profit_total,
+        "total_transport_cost": total_transport_cost,
         "total_shipping_cost": 0.0,
+        "travel_summary": "Pure gate route with 0 gate leg(s)",
+        "gate_leg_count": 0,
+        "ansiblex_leg_count": 0,
+        "ansiblex_logistics_cost_isk": 0.0,
+        "travel_path_legs": [],
+        "candidate_node_summary": "",
+        "candidate_nodes": [],
         "picks": p_list,
         "_active_risk_profile": "balanced",
         "plan_id": "test-plan-001",
@@ -519,6 +536,18 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result])
         assert "Route Mix Cleanup: removed 1 weak add-on pick(s)" in content
         assert "Noise-5 'Needlejack' Filament" in content
+
+    def test_candidate_node_summary_is_rendered_when_present(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["candidate_node_summary"] = "start 1DQ1-A [market_candidate] | corridor RE-C26 [corridor_checkpoint]"
+        result["candidate_nodes"] = [
+            {"label": "1DQ1-A", "kind": "market_candidate", "match_role": "start", "note": ""},
+            {"label": "RE-C26", "kind": "corridor_checkpoint", "match_role": "corridor", "note": ""},
+        ]
+        content = self._write_and_read([result], detail_mode=True)
+        assert "Candidate nodes: start 1DQ1-A [market_candidate] | corridor RE-C26 [corridor_checkpoint]" in content
+        assert "candidate_node: start 1DQ1-A [market_candidate]" in content
+        assert "candidate_node: corridor RE-C26 [corridor_checkpoint]" in content
 
     def test_speculative_section_present(self):
         result = _make_route_result(picks=[_speculative_pick()])
@@ -570,6 +599,22 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result])
         assert "Resolved runtime override" in content
 
+    def test_small_wallet_profile_writes_safe_buys_today_section(self):
+        result = _make_route_result(picks=[_instant_pick(name="Clean Hub Pick"), _planned_pick(name="Slow Exit")])
+        result["_active_risk_profile"] = "small_wallet_hub_safe"
+        result["_active_risk_profile_params"] = dict(BUILTIN_PROFILES["small_wallet_hub_safe"])
+        result["_profile_budget_meta"] = {
+            "input_budget_isk": 500_000_000.0,
+            "spendable_budget_isk": 350_000_000.0,
+            "reserved_budget_isk": 150_000_000.0,
+        }
+        content = self._write_and_read([result], compact_mode=True)
+        assert "SAFE BUYS TODAY" in content
+        assert "Spendable Today:" in content
+        assert "Reserve Held Back:" in content
+        assert "Clean Hub Pick" in content
+        assert "ROI" in content
+
     def test_character_summary_shown_in_header(self):
         result = _make_route_result()
         result["_character_context_summary"] = {
@@ -607,6 +652,18 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result])
         assert "Internal Route Floor" not in content
         assert "Internal Route Note" not in content
+
+    def test_pruned_route_diagnosis_is_rendered(self):
+        result = _make_route_result(picks=[])
+        result["route_prune_reason"] = "candidates_failed_confidence"
+        result["route_failure_hints"] = [
+            "Candidates existed, but the active profile removed them on confidence.",
+            "Orderbook depth was too thin on source or destination.",
+        ]
+        result["route_failure_summary"] = " | ".join(result["route_failure_hints"])
+        content = self._write_and_read([result])
+        assert "diagnosis: Candidates existed, but the active profile removed them on confidence." in content
+        assert "Orderbook depth was too thin on source or destination." in content
 
     def test_price_sensitive_pick_shows_profit_basis_block(self):
         pick = _planned_pick(
@@ -725,6 +782,84 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([r1, r2])
         assert "PLAN 1:" in content
         assert "PLAN 2:" in content
+
+    def test_corridor_sections_sort_direct_then_span_then_jita_connector(self):
+        direct = _make_route_result(picks=[_instant_pick(name="Direct Pick")])
+        direct["route_label"] = "O4T -> R-ARKN"
+        direct["source_label"] = "O4T"
+        direct["dest_label"] = "R-ARKN"
+        direct["_route_display"] = {
+            "section_key": "corridor_forward_0",
+            "section_label": "Corridor O4T outbound",
+            "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+            "section_order": 100,
+            "item_order": 11,
+            "logic_label": "direct leg",
+            "expected_profit": 5_000_000.0,
+        }
+
+        span = _make_route_result(picks=[_planned_pick(name="Span Pick")])
+        span["route_label"] = "O4T -> 1st Taj Mahgoon"
+        span["source_label"] = "O4T"
+        span["dest_label"] = "1st Taj Mahgoon"
+        span["_route_display"] = {
+            "section_key": "corridor_forward_0",
+            "section_label": "Corridor O4T outbound",
+            "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+            "section_order": 100,
+            "item_order": 33,
+            "logic_label": "3-leg span",
+            "expected_profit": 7_000_000.0,
+        }
+
+        jita = _make_route_result(picks=[_instant_pick(name="Jita Pick")])
+        jita["route_label"] = "jita_44 -> O4T"
+        jita["source_label"] = "jita_44"
+        jita["dest_label"] = "O4T"
+        jita["_route_display"] = {
+            "section_key": "jita_0_from_jita",
+            "section_label": "Jita connectors @ O4T",
+            "section_note": "Jita routes stay visible as external connectors and are not folded into corridor spans.",
+            "section_order": 300,
+            "item_order": 0,
+            "logic_label": "Jita outbound connector",
+            "expected_profit": 9_000_000.0,
+        }
+
+        content = self._write_and_read([span, jita, direct])
+
+        assert "ROUTE SECTION: Corridor O4T outbound" in content
+        assert "ROUTE SECTION: Jita connectors @ O4T" in content
+        assert content.index("PLAN 1: O4T -> R-ARKN") < content.index("PLAN 2: O4T -> 1st Taj Mahgoon")
+        assert content.index("PLAN 2: O4T -> 1st Taj Mahgoon") < content.index("PLAN 3: jita_44 -> O4T")
+        assert "Route Logic: direct leg" in content
+        assert "Route Logic: 3-leg span" in content
+        assert "Route Logic: Jita outbound connector" in content
+
+    def test_execution_plan_shows_ansiblex_travel_legs_and_profit_before_after_logistics(self):
+        result = _make_route_result(picks=[_instant_pick(name="Ansiblex Pick")])
+        result["route_label"] = "O4T -> UALX-3"
+        result["source_label"] = "O4T"
+        result["dest_label"] = "UALX-3"
+        result["travel_summary"] = "1 gate leg(s), 1 ansiblex leg(s), 665000 ISK ansiblex logistics"
+        result["gate_leg_count"] = 1
+        result["ansiblex_leg_count"] = 1
+        result["ansiblex_logistics_cost_isk"] = 665_000.0
+        result["expected_profit_before_logistics_total"] = 5_665_000.0
+        result["expected_profit_after_logistics_total"] = 5_000_000.0
+        result["travel_path_legs"] = [
+            {"from_system": "O4T-Z5", "to_system": "R-ARKN", "mode": "gate"},
+            {"from_system": "R-ARKN", "to_system": "WT-2J9", "mode": "ansiblex", "ansiblex_logistics_cost_isk": 665_000.0},
+        ]
+
+        content = self._write_and_read([result])
+
+        assert "Travel: 1 gate leg(s), 1 ansiblex leg(s), 665000 ISK ansiblex logistics" in content
+        assert "expected_profit_before_logistics" in content
+        assert "expected_profit_after_logistics" in content
+        assert "ansiblex_logistics_cost" in content
+        assert "leg: O4T-Z5 -> R-ARKN [gate]" in content
+        assert "leg: R-ARKN -> WT-2J9 [ansiblex" in content
 
 
 # ---------------------------------------------------------------------------

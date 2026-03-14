@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14
+Last updated: 2026-03-14 (session 37 character relogin slot fix)
 
 ## Snapshot
 
@@ -32,10 +32,16 @@ Reviewed this session:
 - `webapp/app.py`
 - `webapp/routes/pages.py`
 - `webapp/services/analysis_service.py`
+- `webapp/services/active_profile_service.py`
 - `webapp/services/dashboard_service.py`
 - `webapp/services/journal_service.py`
 - `webapp/services/character_service.py`
+- `webapp/services/active_character_service.py`
 - `webapp/services/runtime_bridge.py`
+- `webapp/templates/base.html`
+- `webapp/templates/analysis.html`
+- `webapp/templates/journal.html`
+- `webapp/templates/character.html`
 - `webapp/templates/results.html`
 - `journal_reconciliation.py`
 - `journal_store.py`
@@ -50,16 +56,23 @@ Reviewed this session:
 - `tests/test_character_context.py`
 - `tests/test_integration.py`
 - `tests/test_journal.py`
+- `tests/test_active_character_service.py`
+- `tests/test_active_profile_service.py`
 - `tests/test_journal_reconciliation.py`
 - `tests/test_eve_sso.py`
 - `tests/test_execution_plan.py`
+- `tests/test_no_trade.py`
 - `tests/test_portfolio.py`
 - `tests/test_route_search.py`
 - `tests/test_risk_profiles.py`
 - `tests/test_webapp.py`
 - `tests/test_runtime_cleanup.py`
+- `start_webapp.bat`
+- `start_webapp_server.bat`
 - current `git status`
 - `python -m pytest -q`
+- `python .\main.py clean`
+- direct local launcher verification of `start_webapp.bat` with HTTP `200`
 - focused live CLI run on 2026-03-08 using local overlay config
 - replay CLI run on 2026-03-08 against the freshly written live snapshot
 - real HTTP `uvicorn` checks for `/analysis` replay and long-running live POST
@@ -148,6 +161,19 @@ Not fully re-audited this session:
   analysis, journal, character, and config pages
 - the web UI reuses existing runtime, journal, calibration, and character
   functions through a service layer; it does not replace or break the CLI
+- the local web UI now has a small private-deploy access seam: if a web
+  password is configured it requires HTTP Basic Auth, otherwise non-local
+  requests are blocked instead of exposing the app unguarded
+- without a web password, that seam now only treats direct localhost request
+  shape as the supported unprotected mode; proxy-shaped requests require
+  protection instead of sliding through as local
+- that web seam is intentionally aimed at private single-user operation; public
+  multi-user hardening remains out of scope for this block
+- sensitive web pages now receive redacted or sanitized view models instead of
+  the broader raw config/context payloads previously passed into templates
+- web security regressions now cover `Cache-Control: no-store`, config
+  redaction, and proxy-shaped request classification; minimal CI uses the same
+  `scripts/quality_check.py` path as local quality runs
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
@@ -170,10 +196,40 @@ Not fully re-audited this session:
   normalization continues to understand `cj6`, `c-j6mt`, and `1st`
 - `trade_plan_*.json` now preserves route budget/cargo/cost metrics for browser
   parity and no longer serializes `instant` picks with `proposed_sell_price=0`
+- `trade_plan_*.json` route entries now also preserve presentation-only
+  corridor display metadata for browser parity with execution-plan text output
+- corridor display now keeps direct legs first but still preserves longer
+  profitable spans and Jita connector routes instead of collapsing the view to
+  nearest-leg-only output
+- internal corridor travel can now optionally add a directed Ansiblex layer
+  from `docs/Ansis.txt`; gate travel remains available and the route-search
+  scoring path stays untouched
+- route and pick transport summaries now preserve internal travel metadata:
+  gate-leg count, ansiblex-leg count, estimated ansiblex logistics cost, and
+  profit before vs after logistics
+- execution plans, browser results, and `trade_plan_*.json` now surface those
+  internal travel fields so ansiblex usage is visible without inventing a
+  second ranking model
+- the repo has a small config-driven candidate-node seam: `station_candidate`,
+  `market_candidate`, and `corridor_checkpoint` stay distinct instead of
+  implicitly treating every named system as a real station market; the default
+  `nodes` list in `config.json` is intentionally empty — nodes must be manually
+  verified and added by the operator before use
+- candidate-node hits are display-only metadata on routes; execution plans,
+  browser results, and `trade_plan_*.json` can now show when a route starts,
+  ends, or passes through such a configured node
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
   it now stays up until the operator stops the process explicitly
+- the repo now also has a small click-first web launcher `start_webapp.bat`
+  for Windows single-user use: it checks Python, installs missing web
+  dependencies from `requirements.txt` if needed, starts the local web server
+  in its own console window, waits for a real local HTTP response, and then
+  opens the browser on `127.0.0.1:8000`
+- that launcher now delegates the actual server process to the small internal
+  helper `start_webapp_server.bat`, which avoids the prior broken nested
+  `python -c` quoting path on Windows
 - the web journal page now surfaces current cached character snapshot data
   (open orders plus wallet transaction/journal counts) even when the local
   journal DB is empty; opening the dedicated Reconcile/Unmatched tabs now
@@ -188,9 +244,44 @@ Not fully re-audited this session:
 - local journal initialization now migrates older `trade_journal.sqlite3`
   schemas before creating reconciliation-related indexes, so existing caches do
   not break dashboard or journal pages after schema expansion
-- configurable risk profiles (6 built-in) with end-to-end enforcement in
+- configurable risk profiles (7 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
+- new conservative profile `small_wallet_hub_safe` for sub-1B wallet work:
+  blocks planned exits, keeps reserve liquidity back before planning, caps
+  per-item exposure harder, and adds final pick gates for liquidity,
+  market-quality, manipulation risk, sell-time, and profit/spend efficiency
+- execution plans for `small_wallet_hub_safe` now start with a compact
+  `SAFE BUYS TODAY` block that names the best safe route, spendable budget,
+  held-back reserve, and the few mandatory picks worth buying now
+- the local web UI now has a global active-character switcher that keeps a
+  small single-user registry of locally seen characters and activates one by
+  copying that character's saved token/profile into the existing runtime
+  active paths instead of inventing a second character-selection stack
+- the Character page now also has an explicit `Login other character` path
+  that forces a fresh EVE SSO browser login even when the current token is
+  still valid, so additional local character slots can actually be added and
+  then switched in the header
+- browser analysis runs now explicitly state which active character slot is
+  used; subsequent runtime calls still flow through the same CLI/runtime seam
+  and therefore really use that selected character basis
+- the local web UI now also has a global active-profile switcher backed by a
+  small local state file; new browser analysis runs default to that selected
+  built-in risk profile instead of only showing a cosmetic label
+- the web journal now follows the same active character slot and shows cached
+  sell-order exposure for that active character, matched against local journal
+  entries by item type where data exists
+- `trade_plan_*.json` now falls back to derived route/transport confidence
+  values when those fields are absent or zero on a route record, keeping the
+  manifest/browser path aligned with execution-plan and leaderboard confidence
+  output for the same actionable route
+- route prune output is now more honest when candidates did exist but later
+  died in profile rules: the final prune bucket prefers post-search profile
+  rejections when `passed_all_filters > 0`, and runtime artifacts now carry a
+  short route-failure diagnosis instead of collapsing everything into one coarse
+  profit-floor label
+- config validation now rejects unknown `risk_profile.name` values instead of
+  silently falling back on typos in local config
 - route-profile pick filtering is now shared across `run_route()` and
   `run_route_wide_leg()`: pick-level expected profit, profit density,
   confidence, and max-budget-share rules are enforced after final transport and
@@ -290,13 +381,18 @@ Not fully re-audited this session:
   for Jita-connected routes and `internal_self_haul` for internal nullsec
   structure routes. Future internal ansiplex/fuel/risk surcharges can attach to
   the same central transport-mode seam.
+- the new ansiblex travel layer is intentionally narrow and topology-driven:
+  `docs/Ansis.txt` is the source of truth, edges are directed only, and no
+  automatic reverse bridges are inferred
 
 ## Current Focus
 
-Observed worktree activity on 2026-03-13 suggests current feature work is
+Observed worktree activity on 2026-03-14 suggests current feature work is
 centered on:
 
 - hard pick-level profile enforcement and explainable prune reasons
+- small-wallet conservative mode behavior through the existing risk-profile
+  and execution-plan seams
 - route-ranking adjustments by profile
 - replay-based calibration of market-quality and anti-bait thresholds
 - post-selection route-mix cleanup for weak optional/speculative add-ons
@@ -314,9 +410,29 @@ centered on:
 - compact runtime visibility for personal-history quality, fallback reasons,
   and applied scoped personal adjustments
 - a first local browser UI over the existing runtime and journal workflows
+- local browser hardening plus corridor-ordered route presentation near the
+  web entry and execution-plan path
+- active-character switching in the local web UI so analysis and journal views
+  can pivot between locally saved single-user character slots without changing
+  the CLI/runtime architecture
+- friction-free addition of new local character slots from the Character page,
+  so the active-character switcher is not stuck on the one currently valid SSO
+  token
+- active built-in risk-profile switching in the local web UI so analysis runs
+  can pivot between `balanced`, `small_wallet_hub_safe`, and other existing
+  profiles without changing CLI/config wiring
+- additive internal travel realism for `internal_self_haul` routes through a
+  small directed ansiblex layer and more transparent route/output travel
+  metadata
+- clearer diagnosis for empty internal nullsec routes, with the current code
+  evidence pointing to candidate scarcity and weak internal orderbooks first,
+  and profile cleanup only as a secondary cause on some surviving routes
+- cautious preparation for Imperium watch nodes and future market/station
+  expansion without hardcoding unverified hubs into route-search logic
 
 Files that indicate this focus:
 
+- `candidate_nodes.py`
 - `risk_profiles.py`
 - `runtime_runner.py`
 - `runtime_common.py`
@@ -349,6 +465,31 @@ Files that indicate this focus:
 - Route-profile, chain, roundtrip, leaderboard, and no-trade text outputs now
   share the same honest aggregate semantics and preserve internal-route floor
   messaging, but browser/UI surfaces were not re-audited in this session.
+- the new web protection seam is intentionally small and private-deploy
+  oriented; it is not a full multi-user auth/session system
+- without a web password, the supported web mode is now direct localhost use by
+  one operator; proxy-/tunnel-shaped requests are blocked and non-local private
+  use requires a password
+- public multi-user web hardening, session/role controls, and stronger reverse-
+  proxy trust handling remain explicit follow-up work rather than implied
+  guarantees of the current seam
+- a fully opaque local proxy that strips all proxy hints before forwarding is
+  not distinguishable from a direct localhost client at the HTTP app layer; the
+  supported operator rule therefore stays simple: any proxy/tunnel deployment
+  should be treated as password-required
+- the corridor ordering is presentation-only and intentionally leaves route
+  search formulas, ranking, and scoring untouched
+- ansiblex travel currently uses a constant per-edge distance estimate because
+  `docs/Ansis.txt` carries topology only, not geometric LY distances
+- internal ansiblex/gate path metadata only exists for route-chain systems that
+  are explicitly mapped through `route_chain.legs[].system`
+- candidate nodes are intentionally descriptive only in this block: they do not
+  fetch markets, create routes, or turn a system into a location/structure by
+  themselves
+- the default candidate-node block is intentionally empty: no system is
+  preloaded; only manually verified, clearly blue nodes may be added by the
+  operator — NPC space, neutral, or unverified systems must not appear as
+  defaults
 - replay calibration used the focused O4T/Jita fixture plus a narrow
   `replay_snapshot.json` route search. Those checks confirmed that prior bait
   picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage
@@ -360,6 +501,9 @@ Files that indicate this focus:
   `route_search.py` intentionally caps by average pick market quality across
   the whole selected route mix. That behavior was left unchanged in this
   session.
+- `small_wallet_hub_safe` reserve protection currently soft-caps the absolute
+  reserve floor at 50% of the available budget so very small wallets still
+  keep some spendable capital. That cap is deliberate but still heuristic.
 - a narrow post-selection route-mix cleanup seam now exists, but the current
   narrow `replay_snapshot.json` rerun did not previously produce a live removal
   after the latest market-quality calibration; the cleanup is now slightly more
@@ -378,9 +522,24 @@ Files that indicate this focus:
 - Character context is optional by design. Live sync now falls back to cache or
   generic defaults, but order exposure is currently surfaced as a diagnostic
   signal only, not a route-ranking penalty.
+- the new web active-character seam is intentionally local and single-user:
+  it persists saved character slots under `cache/character_context/` and
+  switches by replacing the existing active token/profile files. It is not a
+  multi-user/session model and does not arbitrate concurrent operators.
+- local character switching still only works across characters that have been
+  logged in at least once. This session fixed the practical blocker by adding a
+  forced relogin path, but the switcher itself still does not invent unseen
+  characters.
+- the new web active-profile seam is intentionally local and single-user too:
+  it persists only a small browser-side default for existing built-in profiles
+  and does not replace CLI/profile config precedence outside the web flow
 - Journal reconciliation is also optional by design. Without wallet data, the
   manual journal remains usable and reconciliation does not persist empty
   results over existing entries.
+- the new journal sell-order block is intentionally narrow: it uses the active
+  character's cached open-order snapshot and matches local journal entries by
+  `item_type_id` plus optional `character_id` where present. It does not yet
+  build a deeper order-to-entry linkage model.
 - Wallet reconciliation now exposes snapshot freshness, page coverage, and
   truncation warnings in the journal views. This reduces false confidence, but
   does not create a historical backfill system.
@@ -401,6 +560,21 @@ Files that indicate this focus:
   exposed by `runtime_runner.py`.
 - Browser analysis no longer depends on heartbeat semantics; the local web app
   stays alive until it is stopped explicitly.
+- the focused live run on 2026-03-14 wrote `replay_snapshot.json` quickly but
+  did not finish after more than 20 minutes, while replay on that fresh
+  snapshot completed quickly. That makes it reasonably likely that the current
+  slow path sits after snapshot creation in the live path, but this was not yet
+  fully localized in code.
+- a real cleanup run was executed on 2026-03-14 through `python .\main.py clean`
+  and removed generated runtime artifacts while preserving
+  `cache/token.json`, `cache/trade_journal.sqlite3`, and
+  `cache/character_context/`
+- focused replay evidence from 2026-03-14 indicates that many empty internal
+  nullsec routes are caused first by weak internal market coverage
+  (`non_positive_profit`, thin books, unreliable planned-sell pricing), while a
+  smaller subset does produce a candidate that is later removed by the active
+  profile on confidence or quality. This session improved the diagnosis path
+  but did not relax those market-quality gates.
 - The local journal remains plan-centric by design: overview/open/closed/report/
   personal/calibration still depend on imported or recorded journal entries.
   The web UI now makes that clearer by showing character snapshot counts and by

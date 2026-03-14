@@ -12,6 +12,8 @@ This map is based on focused output and test inspection, not a full audit.
 - categorizes picks and generates warnings
 - handles compact/detail output differences
 - renders compact character/history metadata in the plan header
+- can render a compact top-of-plan actionable buy block for profiles that ask
+  for one
 - renders applied personal-layer scope/effect lines when a route actually used them
 - distinguishes per-route actionable summaries from aggregate-alternative totals
 - surfaces internal-route operational floor notes and suppressed low-profit routes
@@ -19,6 +21,18 @@ This map is based on focused output and test inspection, not a full audit.
   final route selection
 - exposes profit-basis context for price-sensitive / materially repriced picks
   so visible quote vs displayed profit stays explainable
+- renders short route-diagnosis lines for non-actionable routes when runtime
+  metadata provides a concise explanation
+- can render corridor-ordered route sections when runtime metadata provides a
+  display-only direct-leg vs longer-span / Jita-connector grouping without
+  changing ranking, and without dropping longer profitable spans from view
+- can render compact internal travel metadata when runtime metadata provides
+  gate/ansiblex leg counts, ansiblex logistics cost, profit before/after
+  logistics, and visible ansiblex travel legs
+- can render compact candidate-node summaries when runtime metadata marks a
+  start/end/corridor hit for a configured watch node
+- can render protected-budget metadata such as spendable budget and held-back
+  reserve when runtime metadata provides it
 
 ## Inputs
 
@@ -67,10 +81,20 @@ This map is based on focused output and test inspection, not a full audit.
 - add or adjust warnings
 - change compact/detail behavior
 - surface new route or profile metadata
+- keep non-actionable route diagnosis concise and presentation-only, without
+  re-deriving candidate logic inside the plan writer
+- keep any profile-specific compact summary honest and actionable instead of
+  duplicating the whole plan in a second format
 - surface personal-layer state and explainability without inventing business logic
 - keep "best actionable route" vs "aggregate alternatives" semantics honest
 - keep internal-route floor messaging scoped to real internal routes only
 - keep price-basis transparency honest for PRICE-SENS picks
+- keep corridor presentation aligned with route-chain logic without changing
+  the ranking path
+- keep ansiblex travel visibility concise and presentation-only, without
+  turning the plan writer into a second routing engine
+- keep candidate-node messaging descriptive only, without implying that a watch
+  node is automatically a proven trade hub
 
 ## Risk Areas
 

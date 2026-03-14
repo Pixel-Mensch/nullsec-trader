@@ -12,5 +12,11 @@
   },
   "replay": {
     "enabled": false
+  },
+  "webapp": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "access_username": "trader",
+    "access_password": "set_only_in_local_config_or_use_NULLSEC_WEBAPP_PASSWORD"
   }
 }
