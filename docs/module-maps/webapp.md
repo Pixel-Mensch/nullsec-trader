@@ -21,6 +21,9 @@ journal, character, and config workflows without replacing the CLI.
   may switch between locally saved characters, but it should do so by
   replacing the existing active runtime token/profile files rather than
   inventing a parallel multi-user runtime model
+- allow the Character page to force a fresh EVE login when the operator wants
+  to add another local character slot; otherwise a still-valid token would
+  prevent the switcher from ever learning about the second character
 - keep one equally small active-profile seam for private single-user use: the
   web UI may switch between existing built-in risk profiles, but it should do
   so through a tiny local default-state file instead of inventing a session or
@@ -103,6 +106,8 @@ journal, character, and config workflows without replacing the CLI.
   needed
 - surface active-character state globally and switch it without bypassing the
   existing runtime/journal character-context files
+- keep the Character page explicit about the difference between checking the
+  current token and forcing a new login for another character
 - surface active-profile state globally and keep browser analysis defaults
   aligned with that selected built-in profile
 - make the journal web flow clearly distinguish local journal entries from
@@ -129,6 +134,9 @@ journal, character, and config workflows without replacing the CLI.
 - active-character switching must not leave mismatched token/profile state
   behind; when a saved character lacks one side of the data, the web seam
   should clear the stale active file rather than silently mixing characters
+- if auth actions only ever reuse a valid token, the active-character switcher
+  can appear broken even though the real issue is that only one local slot was
+  ever captured
 - active-profile switching must stay sourced from `BUILTIN_PROFILES`; the web
   layer should not grow a second profile registry or drift from runtime names
 - templates can drift from real service payloads if not covered by tests,

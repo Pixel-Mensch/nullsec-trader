@@ -147,13 +147,19 @@ def run_auth_action(action: str) -> dict:
     if sso is None:
         return get_character_page(action_error="ESI client_id fehlt fuer EVE SSO.")
     try:
-        if str(action or "").strip().lower() == "login":
+        action_name = str(action or "").strip().lower()
+        if action_name in {"login", "relogin"}:
             all_scopes = _all_scopes(cfg_for_auth)
-            sso.ensure_token(all_scopes, allow_login=True)
+            if action_name == "relogin":
+                sso.oauth_authorize(all_scopes)
+            else:
+                sso.ensure_token(all_scopes, allow_login=True)
             # Mirror the token to TOKEN_PATH so the runtime uses the same character.
             char_cfg = resolve_character_context_cfg(cfg_for_auth)
             _sync_market_token(str(char_cfg.get("token_path", "") or ""))
             active_character_service.capture_current_character()
+        if action_name == "relogin":
+            return get_character_page(action_message="Neuer Character-Login abgeschlossen.")
         return get_character_page(action_message=f"Auth action '{action}' abgeschlossen.")
     except Exception as exc:
         return get_character_page(action_error=f"Auth action fehlgeschlagen: {exc}")

@@ -1,60 +1,69 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 36 web launcher quoting fix)
+Date: 2026-03-14 (session 37 character relogin slot fix)
 Branch: `dev`
 
 ## Completed This Session
 
-Fixed the broken Windows web launcher path from the previous session.
+Fixed the practical reason why the web UI could not switch characters in the
+reported setup.
 
-The original `start_webapp.bat` used a nested inline `python -c` command and
-failed on Windows quoting before the server ever started. The launcher now
-starts the server through a dedicated helper batch file and waits for a real
-HTTP response from `127.0.0.1:8000` before opening the browser.
+The switcher itself was functioning, but the local state only contained one
+saved character slot (`Navi Selerith`). The real blocker was that the
+Character-page `Auth login` path reused the current valid token and therefore
+did not force a fresh browser login for another character. The page now has a
+dedicated `Login other character` action that performs a new EVE SSO login and
+captures the resulting character as another switchable local slot.
 
 ## Root Cause
 
-- the previous click-first launcher embedded `from webapp.app import
-  run_dev_server; run_dev_server()` inside a deeply quoted `cmd /k` string
-- that quoting broke under Windows `cmd`, producing the `SyntaxError:
-  invalid syntax` shown by the user and leaving no web server behind
+- local inspection showed exactly one saved character in
+  `cache/character_context/web_character_registry.json`
+- the header switcher can only switch among already saved local slots
+- `webapp/services/character_service.py` called
+  `sso.ensure_token(..., allow_login=True)` for `Auth login`, which returns the
+  existing valid token without opening a new EVE SSO login flow
 
 ## What Changed
 
-- `start_webapp.bat`
-  - removed the fragile nested inline Python launch
-  - now starts `start_webapp_server.bat` in its own console window
-  - waits for a real local HTTP response before opening the browser
-  - exits cleanly with `0` once the local page is reachable
-- `start_webapp_server.bat`
-  - new tiny helper that runs the actual local server with
-    `python -m uvicorn webapp.app:create_app --factory --host 127.0.0.1 --port 8000`
+- `webapp/services/character_service.py`
+  - added a forced relogin path for action `relogin`
+  - `relogin` now calls `sso.oauth_authorize(...)` directly instead of
+    reusing the current valid token
+  - still mirrors the resulting token to the runtime path and captures the new
+    character into the saved-character registry
+- `webapp/templates/character.html`
+  - added a `Login other character` button
+  - added a small hint when only one saved character exists
+- `tests/test_webapp.py`
+  - now checks that the Character page shows `Login other character`
+  - adds a focused regression proving `relogin` forces the fresh SSO login
+    path instead of using `ensure_token(...)`
 - `README.md`
-  - clarifies that the launcher waits for the server before opening the browser
+  - documents the new `Login other character` flow
 - `PROJECT_STATE.md`
-  - records the launcher quoting fix and the helper batch file
+  - records the forced-relogin slot-addition fix
 - `ARCHITECTURE.md`
-  - updates the click-first web startup path to the helper-batch structure
+  - documents the small forced-relogin seam in `character_service.py`
 - `TASK_QUEUE.md`
-  - records the quoting-fix follow-up on the launcher task
+  - marks the fix as done
 - `docs/module-maps/webapp.md`
-  - notes the helper batch file and the Windows quoting guidance
+  - documents why the relogin path exists and what problem it solves
 
 ## Tests And Verification
 
-- real launcher verification:
-  - `cmd /c start_webapp.bat`
-  - launcher exit code: `0`
-- real local HTTP verification immediately after launch:
-  - `Invoke-WebRequest http://127.0.0.1:8000/`
-  - status: `200`
-- process verification:
-  - confirmed `python -m uvicorn webapp.app:create_app --factory --host 127.0.0.1 --port 8000`
-    was running after the launcher started
+- local state verification before the fix:
+  - `cache/character_context/web_character_registry.json` contained only one
+    character slot
+  - `cache/character_context/saved_characters/` contained only one directory
+- focused regression:
+  - `python -m pytest -q tests/test_webapp.py`
+  - **25 passed**
 
 ## Remaining Limits
 
-- the launcher remains Windows-first and single-user focused
+- the switcher still only works across characters that have been logged in at
+  least once and therefore exist as local saved slots
 - unrelated user/worktree changes remain present in:
   `config.json`, `docs/module-maps/candidate_nodes.md`, `risk_profiles.py`,
   `runtime_runner.py`, `tests/test_candidate_nodes.py`,
@@ -62,13 +71,15 @@ HTTP response from `127.0.0.1:8000` before opening the browser.
 
 ## Next Recommended Task
 
-If desired, add the same click-first convenience for the normal live CLI run,
-or a tiny desktop shortcut generator outside the repo.
+If desired, add a tiny browser-visible status line in the global header when
+only one saved character exists, so the operator immediately knows why the
+switcher has nothing else to offer.
 
 ## Files Touched
 
-- `start_webapp.bat`
-- `start_webapp_server.bat`
+- `webapp/services/character_service.py`
+- `webapp/templates/character.html`
+- `tests/test_webapp.py`
 - `README.md`
 - `PROJECT_STATE.md`
 - `ARCHITECTURE.md`

@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14 (session 36 web launcher quoting fix)
+Last updated: 2026-03-14 (session 37 character relogin slot fix)
 
 ## Evidence And Limits
 
@@ -176,6 +176,10 @@ The web entry also owns a small private-deploy security seam:
 - `webapp/services/config_service.py` and
   `webapp/services/character_service.py` now pass redacted/sanitized
   view-models into templates instead of the broader raw config/context payloads
+- `webapp/services/character_service.py` also owns the small forced-relogin
+  seam used by the Character page: `Auth login` may reuse a valid token, while
+  `Login other character` forces a fresh EVE SSO browser login so a second
+  local saved character slot can be captured
 
 The journal web path has two distinct data sources on purpose:
 

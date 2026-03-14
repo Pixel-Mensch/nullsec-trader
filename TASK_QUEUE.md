@@ -1,12 +1,35 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 36 web launcher quoting fix)
+Last updated: 2026-03-14 (session 37 character relogin slot fix)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0p: Let the web UI add a second character even when the current token is still valid
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/services/character_service.py`,
+  `webapp/templates/character.html`, `tests/test_webapp.py`,
+  `README.md`, `PROJECT_STATE.md`, `ARCHITECTURE.md`,
+  `SESSION_HANDOFF.md`, `docs/module-maps/webapp.md`
+- What was done:
+  - confirmed the user's local switcher only had one saved character slot, so
+    there was nothing to switch to
+  - identified the practical blocker: `Auth login` reused a valid token and
+    therefore did not force a new browser login for a different character
+  - added `Login other character` on the Character page, wired to a forced
+    `oauth_authorize(...)` path so another character can actually be saved and
+    then switched from the global header
+  - added a focused regression proving `relogin` bypasses `ensure_token(...)`
+    and forces the fresh SSO login path
+  - focused regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **25 passed**
 
 ### Task 0o: Add a click-first Windows launcher for the local web UI
 

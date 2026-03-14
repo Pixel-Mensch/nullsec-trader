@@ -54,6 +54,7 @@
     </div>
     <div class="action-grid">
       <form method="post" action="/character/auth/login"><button class="button primary" type="submit">Auth login</button></form>
+      <form method="post" action="/character/auth/relogin"><button class="button secondary" type="submit">Login other character</button></form>
       <form method="post" action="/character/auth/status"><button class="button secondary" type="submit">Auth status</button></form>
       <form method="post" action="/character/context/sync"><button class="button primary" type="submit">Character sync</button></form>
       <form method="post" action="/character/context/status"><button class="button secondary" type="submit">Character status</button></form>
@@ -103,6 +104,9 @@
     </article>
     {% endfor %}
   </div>
+  {% if data.saved_characters|length == 1 %}
+  <p class="muted" style="margin-top:12px;">Only one saved character is available right now. Use <strong>Login other character</strong> once to add another switchable character slot.</p>
+  {% endif %}
   {% else %}
   <p class="muted">No saved characters yet. Log in and sync a character once to make it switchable in the UI.</p>
   {% endif %}

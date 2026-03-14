@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 36 web launcher quoting fix)
+Last updated: 2026-03-14 (session 37 character relogin slot fix)
 
 ## Snapshot
 
@@ -258,6 +258,10 @@ Not fully re-audited this session:
   small single-user registry of locally seen characters and activates one by
   copying that character's saved token/profile into the existing runtime
   active paths instead of inventing a second character-selection stack
+- the Character page now also has an explicit `Login other character` path
+  that forces a fresh EVE SSO browser login even when the current token is
+  still valid, so additional local character slots can actually be added and
+  then switched in the header
 - browser analysis runs now explicitly state which active character slot is
   used; subsequent runtime calls still flow through the same CLI/runtime seam
   and therefore really use that selected character basis
@@ -411,6 +415,9 @@ centered on:
 - active-character switching in the local web UI so analysis and journal views
   can pivot between locally saved single-user character slots without changing
   the CLI/runtime architecture
+- friction-free addition of new local character slots from the Character page,
+  so the active-character switcher is not stuck on the one currently valid SSO
+  token
 - active built-in risk-profile switching in the local web UI so analysis runs
   can pivot between `balanced`, `small_wallet_hub_safe`, and other existing
   profiles without changing CLI/config wiring
@@ -519,6 +526,10 @@ Files that indicate this focus:
   it persists saved character slots under `cache/character_context/` and
   switches by replacing the existing active token/profile files. It is not a
   multi-user/session model and does not arbitrate concurrent operators.
+- local character switching still only works across characters that have been
+  logged in at least once. This session fixed the practical blocker by adding a
+  forced relogin path, but the switcher itself still does not invent unseen
+  characters.
 - the new web active-profile seam is intentionally local and single-user too:
   it persists only a small browser-side default for existing built-in profiles
   and does not replace CLI/profile config precedence outside the web flow

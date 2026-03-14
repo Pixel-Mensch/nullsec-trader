@@ -503,6 +503,7 @@ def test_character_page_and_actions_render(monkeypatch) -> None:
     assert "Character / Auth" in page.text
     assert "character context disabled" in page.text
     assert "Saved characters" in page.text
+    assert "Login other character" in page.text
     assert "auth status" in auth.text
     assert "character status" in sync.text
 
@@ -754,6 +755,33 @@ def test_character_service_omits_raw_config_and_sanitizes_context(monkeypatch) -
     assert page["character_summary"] == {"character_name": "Capsuleer", "source": "cache"}
     assert "esi-secret" not in payload
     assert "wallet-secret" not in payload
+
+
+def test_character_relogin_forces_fresh_oauth_login(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class _FakeSSO:
+        def oauth_authorize(self, scopes) -> dict:
+            calls.append(("oauth_authorize", list(scopes)))
+            return {"access_token": "new-token"}
+
+        def ensure_token(self, scopes, allow_login=True) -> dict:
+            calls.append(("ensure_token", {"scopes": list(scopes), "allow_login": bool(allow_login)}))
+            return {"access_token": "cached-token"}
+
+    monkeypatch.setattr(character_service_module, "load_config", lambda: {"esi": {"client_id": "id"}, "character_context": {}})
+    monkeypatch.setattr(character_service_module, "_build_sso", lambda cfg: _FakeSSO())
+    monkeypatch.setattr(character_service_module, "_all_scopes", lambda cfg: ["scope.one", "scope.two"])
+    monkeypatch.setattr(character_service_module, "resolve_character_context_cfg", lambda cfg: {"token_path": "cache/character_context/sso_token.json"})
+    monkeypatch.setattr(character_service_module, "_sync_market_token", lambda path: calls.append(("sync_market_token", path)))
+    monkeypatch.setattr(character_service_module.active_character_service, "capture_current_character", lambda: calls.append(("capture_current_character", None)))
+    monkeypatch.setattr(character_service_module, "get_character_page", lambda **kwargs: {"action_message": kwargs.get("action_message", ""), "action_error": kwargs.get("action_error", "")})
+
+    result = character_service_module.run_auth_action("relogin")
+
+    assert result["action_message"] == "Neuer Character-Login abgeschlossen."
+    assert ("oauth_authorize", ["scope.one", "scope.two"]) in calls
+    assert not any(item[0] == "ensure_token" for item in calls)
 
 
 def test_character_sync_action_sanitizes_context(monkeypatch) -> None:

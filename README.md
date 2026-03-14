@@ -182,6 +182,10 @@ Web Character / Profile seams:
 - lokal bekannte Characters werden aus bereits gesehenen Token/Profile-Slots
   angeboten; ein Wechsel kopiert den gewaehlten Token/Profile-Slot in die
   bestehenden aktiven Runtime-Pfade statt einen zweiten Analysepfad zu bauen
+- auf der `Character`-Seite gibt es jetzt zusaetzlich `Login other character`:
+  das erzwingt einen frischen EVE-SSO-Login auch dann, wenn der aktuelle Token
+  noch gueltig ist, damit ein zweiter Character ueberhaupt als lokaler
+  switchbarer Slot gespeichert werden kann
 - neue Analysen, Character-Status und Journal-/Reconcile-Ansichten nutzen
   damit denselben aktiv gewaehlten Character-Basiszustand
 - die Journal-Seite zeigt zusaetzlich offene Sell-Order-Exponierung des
