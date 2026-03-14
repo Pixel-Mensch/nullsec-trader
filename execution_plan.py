@@ -157,6 +157,34 @@ def _internal_route_metadata_applicable(record: dict) -> bool:
     return bool(str(record.get("operational_filter_note", "") or "").strip())
 
 
+def _route_display_meta(record: dict) -> dict:
+    raw = record.get("_route_display", {})
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _ordered_route_results_for_display(route_results: list[dict]) -> list[dict]:
+    indexed = list(enumerate(list(route_results or [])))
+
+    def sort_key(entry: tuple[int, dict]) -> tuple:
+        idx, record = entry
+        meta = _route_display_meta(record)
+        if not meta:
+            return (9999, 9999, idx)
+        summary = summarize_route_for_ranking(record)
+        expected_profit = float(
+            meta.get("expected_profit", summary.get("total_expected_realized_profit", record.get("profit_total", 0.0))) or 0.0
+        )
+        return (
+            int(meta.get("section_order", 9999) or 9999),
+            int(meta.get("item_order", 9999) or 9999),
+            0 if bool(summary.get("actionable", False)) else 1,
+            -float(expected_profit),
+            idx,
+        )
+
+    return [record for _, record in sorted(indexed, key=sort_key)]
+
+
 def _categorize_pick(p: dict) -> str:
     """Return _CAT_MANDATORY, _CAT_OPTIONAL, or _CAT_SPECULATIVE for a pick."""
     is_instant = _pick_is_instant(p)
@@ -649,6 +677,8 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     if compact_mode:
         lines.append("Mode:      COMPACT (shopping list only - use --detail for full breakdown)")
     lines.append("")
+    lines.append("Display:   Corridor order for plan sections; direct legs stay before longer spans, Jita connectors stay separate.")
+    lines.append("")
 
     total_cost = 0.0
     total_revenue = 0.0
@@ -657,10 +687,23 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     total_shipping_cost = 0.0
     total_route_costs = 0.0
 
-    for idx, leg in enumerate(route_results, start=1):
+    display_route_results = _ordered_route_results_for_display(route_results)
+    current_section_key = ""
+
+    for idx, leg in enumerate(display_route_results, start=1):
         picks = list(leg.get("picks", []) or [])
         route_summary = summarize_route_for_ranking(leg)
         actionable = bool(route_summary.get("actionable", False))
+        display_meta = _route_display_meta(leg)
+        if display_meta:
+            section_key = str(display_meta.get("section_key", "") or "")
+            if section_key and section_key != current_section_key:
+                current_section_key = section_key
+                lines.append(f"ROUTE SECTION: {str(display_meta.get('section_label', 'Routes') or 'Routes')}")
+                section_note = str(display_meta.get("section_note", "") or "").strip()
+                if section_note:
+                    lines.append(f"  {section_note}")
+                lines.append("")
 
         # Categorise all picks for this leg
         categorized: dict = {_CAT_MANDATORY: [], _CAT_OPTIONAL: [], _CAT_SPECULATIVE: []}
@@ -681,6 +724,10 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         route_id = str(leg.get("route_id", leg.get("route_tag", "")) or "")
         if route_id:
             lines.append(f"Route ID: {route_id}")
+        if display_meta:
+            route_logic = str(display_meta.get("logic_label", "") or "").strip()
+            if route_logic:
+                lines.append(f"Route Logic: {route_logic}")
         personal_effect = dict(leg.get("_personal_history_effect_summary", {}) or {})
         if personal_summary and personal_layer and (
             bool(personal_layer.get("active", False)) or bool(personal_effect.get("applied", False))

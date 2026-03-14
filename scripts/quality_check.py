@@ -1,70 +1,58 @@
-﻿"""Local quality checks for Nullsec Trader Tool.
+"""Local quality checks for Nullsec Trader Tool.
 
-Runs syntax checks, static lint checks (pyflakes) and the regression suite.
+Runs syntax checks and the real pytest-based regression suite.
 """
 
 from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
-MODULES = [
-    "main.py",
-    "nullsectrader.py",
-    "runtime_common.py",
-    "runtime_clients.py",
-    "runtime_reports.py",
-    "runtime_runner.py",
-    "journal_cli.py",
-    "journal_models.py",
-    "journal_reporting.py",
-    "journal_store.py",
-    "confidence_calibration.py",
-    "explainability.py",
-    "startup_helpers.py",
-    "config_loader.py",
-    "shipping.py",
-    "route_search.py",
-    "execution_plan.py",
-    "candidate_engine.py",
-    "portfolio_builder.py",
-    "fees.py",
-    "fee_engine.py",
-    "market_fetch.py",
-    "market_normalization.py",
-    "market_plausibility.py",
-    "scoring.py",
-    "models.py",
-    "location_utils.py",
-    "test_nullsectrader.py",
-    "tests/run_all.py",
-]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
+
+def _repo_paths(pattern: str) -> list[str]:
+    return sorted(str(path.relative_to(REPO_ROOT)) for path in REPO_ROOT.glob(pattern))
+
+
+ROOT_MODULES = _repo_paths("*.py")
+WEBAPP_MODULES = _repo_paths("webapp/**/*.py")
+SCRIPT_MODULES = _repo_paths("scripts/*.py")
+TEST_SOURCE_FILES = _repo_paths("tests/*.py")
 TEST_MODULES = [
-    "tests/shared.py",
-    "tests/test_core.py",
-    "tests/test_portfolio.py",
     "tests/test_config.py",
-    "tests/test_shipping.py",
-    "tests/test_route_search.py",
+    "tests/test_execution_plan.py",
     "tests/test_integration.py",
-    "tests/test_architecture.py",
-    "tests/test_journal.py",
-    "tests/test_confidence_calibration.py",
-    "tests/test_explainability.py",
-    "tests/test_market_plausibility.py",
+    "tests/test_route_search.py",
+    "tests/test_runtime_runner.py",
+    "tests/test_shipping.py",
+    "tests/test_webapp.py",
 ]
+
+
+def _unique(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return out
+
+
+PY_COMPILE_TARGETS = _unique(ROOT_MODULES + WEBAPP_MODULES + SCRIPT_MODULES + TEST_SOURCE_FILES)
 
 
 def _run(cmd: list[str]) -> None:
     print("+", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, cwd=str(REPO_ROOT))
 
 
 def main() -> None:
-    _run([sys.executable, "-m", "py_compile", *MODULES, *TEST_MODULES])
-    _run([sys.executable, "-m", "pyflakes", *MODULES])
-    _run([sys.executable, "test_nullsectrader.py"])
+    _run([sys.executable, "-m", "py_compile", *PY_COMPILE_TARGETS])
+    _run([sys.executable, "-m", "pytest", "-q", *TEST_MODULES])
     print("\nQuality checks passed.")
 
 

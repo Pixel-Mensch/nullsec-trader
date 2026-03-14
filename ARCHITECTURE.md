@@ -134,6 +134,7 @@ route results
 Local web flow is separate from the CLI and intentionally thin:
 
 `webapp/app.py`
+-> small request-level access guard in `webapp/security.py`
 -> `webapp/routes/pages.py`
 -> `webapp/services/*`
 -> direct calls into `character_profile.py`, `journal_reporting.py`,
@@ -145,6 +146,15 @@ Local web flow is separate from the CLI and intentionally thin:
 `webapp.app` is now a plain local FastAPI app without browser-heartbeat or
 idle auto-shutdown behavior. The local web process stays up until it is
 stopped explicitly.
+
+The web entry also owns a small private-deploy security seam:
+
+- if `NULLSEC_WEBAPP_PASSWORD` or `webapp.access_password` is configured, the
+  whole browser surface requires HTTP Basic Auth
+- if no password is configured, remote/non-local requests are blocked instead
+  of exposing the app unguarded
+- `/character` and `/config` are treated as sensitive pages and emit
+  `Cache-Control: no-store`
 
 The journal web path has two distinct data sources on purpose:
 
@@ -193,6 +203,9 @@ transport and confidence calibration:
 - the same post-build seam also derives clearer `route_prune_reason` buckets
   and applies the internal-self-haul operational route floor before artifacts
   are emitted
+- the route-profile path now also attaches `_route_display` metadata per route
+  result so presentation consumers can group direct legs, longer spans, and
+  Jita connectors without changing ranking
 
 Trade quality now has one central seam instead of separate ad-hoc penalties:
 
@@ -217,6 +230,8 @@ Trade quality now has one central seam instead of separate ad-hoc penalties:
 - internal-route operational floor metadata is now presentation-scoped to
   `internal_self_haul` routes instead of any route result that merely carried a
   floor value
+- execution-plan plan sections can now render corridor-ordered groups when
+  `_route_display` metadata is present
 
 Volume validity is now intentionally conservative across the runtime path:
 
@@ -253,6 +268,8 @@ Confirmed output families from the current docs and entry modules:
 - `*_to_*_<timestamp>.csv`
 - `*_top_candidates_<timestamp>.txt`
 - `trade_plan_<plan_id>.json`
+- route entries inside `trade_plan_<plan_id>.json` can now also carry a
+  `display` block used by the browser results page for corridor grouping parity
 - `snapshot_<timestamp>.json`
 - `market_snapshot.json`
 - `replay_snapshot.json`
@@ -291,7 +308,9 @@ Known test and quality entry points:
 - `python scripts/quality_check.py`
 
 `tests/run_all.py` currently imports targeted test modules instead of scanning
-the repository dynamically.
+the repository dynamically. `scripts/quality_check.py` now compiles the full
+Python source set but runs the maintained pytest subset for the web /
+execution-plan / corridor-display surface.
 
 ## Current Hotspots
 

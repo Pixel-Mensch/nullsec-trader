@@ -23,6 +23,21 @@
         </nav>
       </header>
 
+      {% if security %}
+      <section class="security-banner {% if security.password_configured %}is-protected{% else %}is-local-only{% endif %}">
+        {% if security.password_configured %}
+        <strong>Web access is password protected.</strong>
+        <span>Browser requests require Basic Auth before any page content is shown.</span>
+        {% else %}
+        <strong>Web access is local-only by default.</strong>
+        <span>Remote requests without a configured web password are blocked.</span>
+        {% endif %}
+        {% if security.sensitive_path %}
+        <span class="security-tag">Sensitive page</span>
+        {% endif %}
+      </section>
+      {% endif %}
+
       <main class="page-content">
         {% block content %}{% endblock %}
       </main>

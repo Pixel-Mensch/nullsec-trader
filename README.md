@@ -163,10 +163,21 @@ Aktuelle Seiten:
 - Character
 - Config
 
+Kleine Zugriffssicherung fuer private Deploys:
+
+- ohne gesetztes Web-Passwort blockt die App nicht-lokale Requests explizit,
+  statt sie still offen zu lassen
+- fuer private Deploys kann ein kleines Basic-Auth-Gate gesetzt werden:
+  `NULLSEC_WEBAPP_PASSWORD=...` oder lokal `webapp.access_password`
+- `run_dev_server()` bleibt standardmaessig auf `127.0.0.1:8000`; `host` und
+  `port` koennen optional lokal oder per Env ueberschrieben werden
+- `Character` und `Config` gelten browserseitig als sensibel und werden mit
+  `Cache-Control: no-store` ausgeliefert
+
 Wichtige Grenzen:
 
 - lokal gedacht, keine oeffentliche Deployment-Architektur
-- keine neue Nutzerverwaltung
+- keine neue Nutzerverwaltung; nur kleines Passwort-Gate fuer private Deploys
 - keine Shell-Wrapper im Browser; die Web-Schicht nutzt kleine Services und
   fuer Vollruns einen in-process Runtime-Bridge auf `runtime_runner.run_cli()`
 - CLI, Route-Ranking, Candidate-Scoring, `no_trade`, Reconciliation und
@@ -582,6 +593,9 @@ Wichtig beim Lesen:
 - `instant` ist normalerweise belastbarer als `planned` oder `speculative`.
 - Lange `expected_days_to_sell`, schwache Confidence oder hohe Queue sprechen gegen den Trade.
 - `[NOT ACTIONABLE]` bedeutet: nicht normal handeln, auch wenn irgendwo noch ein theoretischer Spread sichtbar ist.
+- Route-Profile-Ausgaben sind jetzt zusaetzlich nach Streckenlogik lesbar:
+  direkte Legs stehen vor laengeren profitablen Spannweiten derselben Corridor-
+  Quelle, und Jita-Connectoren bleiben als eigene Gruppe sichtbar
 
 ### Weitere Dateien
 

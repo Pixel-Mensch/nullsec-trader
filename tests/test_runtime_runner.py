@@ -198,3 +198,46 @@ def test_route_mix_cleanup_removes_weak_speculative_price_sensitive_tail_pick() 
     assert out["route_mix_cleanup_applied"] is True
     assert "Weak Spec Tail" in str(out["route_mix_cleanup_notes"][0])
     assert "price-sensitive" in str(out["route_mix_cleanup_notes"][0])
+
+
+def test_attach_route_display_meta_marks_direct_span_and_jita_connector() -> None:
+    routes = [
+        {
+            **_route_result(picks=[_route_pick(expected_profit=4_000_000.0)]),
+            "route_label": "O4T -> R-ARKN",
+            "source_label": "O4T",
+            "dest_label": "R-ARKN",
+        },
+        {
+            **_route_result(picks=[_route_pick(expected_profit=9_000_000.0)]),
+            "route_label": "O4T -> 1st Taj Mahgoon",
+            "source_label": "O4T",
+            "dest_label": "1st Taj Mahgoon",
+        },
+        {
+            **_route_result(picks=[_route_pick(expected_profit=12_000_000.0)]),
+            "route_label": "jita_44 -> O4T",
+            "source_label": "jita_44",
+            "dest_label": "O4T",
+            "transport_mode": "shipping_lane",
+        },
+    ]
+    cfg = {
+        "route_chain": {
+            "legs": [
+                {"id": 1, "label": "O4T"},
+                {"id": 2, "label": "R-ARKN"},
+                {"id": 3, "label": "UALX-3"},
+                {"id": 4, "label": "1st Taj Mahgoon"},
+            ]
+        }
+    }
+
+    out = nst._attach_route_display_meta(routes, cfg)
+    display_by_label = {str(route["route_label"]): dict(route.get("_route_display", {}) or {}) for route in out}
+
+    assert len(out) == 3
+    assert display_by_label["O4T -> R-ARKN"]["logic_label"] == "direct leg"
+    assert int(display_by_label["O4T -> 1st Taj Mahgoon"]["span_hops"]) == 3
+    assert display_by_label["O4T -> 1st Taj Mahgoon"]["logic_label"] == "3-leg span"
+    assert display_by_label["jita_44 -> O4T"]["section_label"] == "Jita connectors @ O4T"

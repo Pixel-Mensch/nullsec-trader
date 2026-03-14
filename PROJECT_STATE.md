@@ -148,6 +148,9 @@ Not fully re-audited this session:
   analysis, journal, character, and config pages
 - the web UI reuses existing runtime, journal, calibration, and character
   functions through a service layer; it does not replace or break the CLI
+- the local web UI now has a small private-deploy access seam: if a web
+  password is configured it requires HTTP Basic Auth, otherwise non-local
+  requests are blocked instead of exposing the app unguarded
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
@@ -170,6 +173,8 @@ Not fully re-audited this session:
   normalization continues to understand `cj6`, `c-j6mt`, and `1st`
 - `trade_plan_*.json` now preserves route budget/cargo/cost metrics for browser
   parity and no longer serializes `instant` picks with `proposed_sell_price=0`
+- `trade_plan_*.json` route entries now also preserve presentation-only
+  corridor display metadata for browser parity with execution-plan text output
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
@@ -314,6 +319,8 @@ centered on:
 - compact runtime visibility for personal-history quality, fallback reasons,
   and applied scoped personal adjustments
 - a first local browser UI over the existing runtime and journal workflows
+- local browser hardening plus corridor-ordered route presentation near the
+  web entry and execution-plan path
 
 Files that indicate this focus:
 
@@ -349,6 +356,8 @@ Files that indicate this focus:
 - Route-profile, chain, roundtrip, leaderboard, and no-trade text outputs now
   share the same honest aggregate semantics and preserve internal-route floor
   messaging, but browser/UI surfaces were not re-audited in this session.
+- the new web protection seam is intentionally small and private-deploy
+  oriented; it is not a full multi-user auth/session system
 - replay calibration used the focused O4T/Jita fixture plus a narrow
   `replay_snapshot.json` route search. Those checks confirmed that prior bait
   picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage

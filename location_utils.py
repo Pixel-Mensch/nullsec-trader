@@ -11,7 +11,7 @@ def normalize_location_label(label: str) -> str:
     norm = " ".join("".join(out).split())
     if norm in ("jita", "jita iv moon 4 caldari navy assembly plant", "jita 44", "jita 4 4", "jita44"):
         return "jita"
-    if norm.startswith("1st"):
+    if norm == "1st" or norm.startswith("1st "):
         return "1st"
     if norm in ("ualx", "ualx 3", "ualx3"):
         return "ualx"

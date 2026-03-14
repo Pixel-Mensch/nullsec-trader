@@ -19,6 +19,8 @@ This map is based on focused output and test inspection, not a full audit.
   final route selection
 - exposes profit-basis context for price-sensitive / materially repriced picks
   so visible quote vs displayed profit stays explainable
+- can render corridor-ordered route sections when runtime metadata provides a
+  direct-leg vs span / Jita-connector display grouping
 
 ## Inputs
 
@@ -71,6 +73,8 @@ This map is based on focused output and test inspection, not a full audit.
 - keep "best actionable route" vs "aggregate alternatives" semantics honest
 - keep internal-route floor messaging scoped to real internal routes only
 - keep price-basis transparency honest for PRICE-SENS picks
+- keep corridor presentation aligned with route-chain logic without changing
+  the ranking path
 
 ## Risk Areas
 

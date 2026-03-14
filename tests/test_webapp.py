@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 from fastapi.testclient import TestClient
 
 from webapp.app import create_app
@@ -54,6 +56,116 @@ def _analysis_form() -> dict:
 
 
 def _analysis_result() -> dict:
+    corridor_routes = [
+        {
+            "route_label": "O4T -> R-ARKN",
+            "route_id": "route-direct",
+            "actionable": True,
+            "route_confidence": 0.74,
+            "transport_confidence": 0.90,
+            "capital_lock_risk": 0.10,
+            "budget_util_pct": 45.3,
+            "cargo_util_pct": 37.7,
+            "isk_used": 226373819.86,
+            "expected_profit_total": 12000000.0,
+            "full_sell_profit_total": 15000000.0,
+            "pick_count": 1,
+            "warnings": ["calibration fallback"],
+            "calibration_warning": "",
+            "route_prune_reason": "",
+            "route_logic_label": "direct leg",
+            "display": {
+                "section_key": "corridor_forward_0",
+                "section_label": "Corridor O4T outbound",
+                "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+                "section_order": 100,
+                "item_order": 11,
+                "logic_label": "direct leg",
+            },
+            "picks": [
+                {
+                    "name": "Tritanium",
+                    "proposed_qty": 1000,
+                    "proposed_exit_type": "sell",
+                    "proposed_expected_days_to_sell": 3.5,
+                    "proposed_overall_confidence_raw": 0.66,
+                    "proposed_expected_profit": 4500000.0,
+                }
+            ],
+        },
+        {
+            "route_label": "O4T -> 1st Taj Mahgoon",
+            "route_id": "route-span",
+            "actionable": True,
+            "route_confidence": 0.68,
+            "transport_confidence": 0.88,
+            "capital_lock_risk": 0.22,
+            "budget_util_pct": 54.9,
+            "cargo_util_pct": 42.0,
+            "isk_used": 286373819.86,
+            "expected_profit_total": 18000000.0,
+            "full_sell_profit_total": 22000000.0,
+            "pick_count": 1,
+            "warnings": [],
+            "calibration_warning": "",
+            "route_prune_reason": "",
+            "route_logic_label": "3-leg span",
+            "display": {
+                "section_key": "corridor_forward_0",
+                "section_label": "Corridor O4T outbound",
+                "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+                "section_order": 100,
+                "item_order": 33,
+                "logic_label": "3-leg span",
+            },
+            "picks": [
+                {
+                    "name": "Isogen",
+                    "proposed_qty": 500,
+                    "proposed_exit_type": "planned_sell",
+                    "proposed_expected_days_to_sell": 9.0,
+                    "proposed_overall_confidence_raw": 0.59,
+                    "proposed_expected_profit": 8200000.0,
+                }
+            ],
+        },
+        {
+            "route_label": "jita_44 -> O4T",
+            "route_id": "route-jita",
+            "actionable": False,
+            "route_confidence": 0.40,
+            "transport_confidence": 0.84,
+            "capital_lock_risk": 0.18,
+            "budget_util_pct": 12.0,
+            "cargo_util_pct": 8.5,
+            "isk_used": 60373819.86,
+            "expected_profit_total": 2500000.0,
+            "full_sell_profit_total": 3100000.0,
+            "pick_count": 1,
+            "warnings": ["shipping warning"],
+            "calibration_warning": "",
+            "route_prune_reason": "confidence",
+            "route_logic_label": "Jita outbound connector",
+            "display": {
+                "section_key": "jita_0_from_jita",
+                "section_label": "Jita connectors @ O4T",
+                "section_note": "Jita routes stay visible as external connectors and are not folded into corridor spans.",
+                "section_order": 300,
+                "item_order": 0,
+                "logic_label": "Jita outbound connector",
+            },
+            "picks": [
+                {
+                    "name": "Mexallon",
+                    "proposed_qty": 800,
+                    "proposed_exit_type": "instant",
+                    "proposed_expected_days_to_sell": 1.0,
+                    "proposed_overall_confidence_raw": 0.44,
+                    "proposed_expected_profit": 1500000.0,
+                }
+            ],
+        },
+    ]
     return {
         "ok": True,
         "error": "",
@@ -61,9 +173,9 @@ def _analysis_result() -> dict:
         "runtime_mode": "roundtrip",
         "selected_profile": "balanced",
         "plan_id": "plan-123",
-        "route_count": 1,
-        "pick_count": 2,
-        "actionable_route_count": 1,
+        "route_count": 3,
+        "pick_count": 3,
+        "actionable_route_count": 2,
         "used_replay": False,
         "snapshot_path": "C:/tmp/replay_snapshot.json",
         "created_files": ["execution_plan_2026.txt", "trade_plan_plan-123.json"],
@@ -71,34 +183,20 @@ def _analysis_result() -> dict:
             "Personal Layer: ADVISORY | quality USABLE | generic only",
             "Fallback: generic only | advisory mode keeps the generic decision path",
         ],
-        "route_cards": [
+        "route_cards": corridor_routes,
+        "route_sections": [
             {
-                "route_label": "Jita -> Amarr",
-                "route_id": "route-1",
-                "actionable": True,
-                "route_confidence": 0.72,
-                "transport_confidence": 0.84,
-                "capital_lock_risk": 0.18,
-                "budget_util_pct": 45.3,
-                "cargo_util_pct": 37.7,
-                "isk_used": 226373819.86,
-                "expected_profit_total": 12000000.0,
-                "full_sell_profit_total": 15000000.0,
-                "pick_count": 2,
-                "warnings": ["calibration fallback"],
-                "calibration_warning": "",
-                "route_prune_reason": "",
-                "picks": [
-                    {
-                        "name": "Tritanium",
-                        "proposed_qty": 1000,
-                        "proposed_exit_type": "sell",
-                        "proposed_expected_days_to_sell": 3.5,
-                        "proposed_overall_confidence_raw": 0.66,
-                        "proposed_expected_profit": 4500000.0,
-                    }
-                ],
-            }
+                "key": "corridor_forward_0",
+                "label": "Corridor O4T outbound",
+                "note": "Direct legs first, then longer profitable spans along the corridor.",
+                "routes": corridor_routes[:2],
+            },
+            {
+                "key": "jita_0_from_jita",
+                "label": "Jita connectors @ O4T",
+                "note": "Jita routes stay visible as external connectors and are not folded into corridor spans.",
+                "routes": corridor_routes[2:],
+            },
         ],
         "manifest": {"route_count": 1},
         "summary_text": "Summary",
@@ -158,6 +256,11 @@ def _config_page() -> dict:
         "config_valid": True,
         "config_errors": [],
         "config_warnings": [],
+        "webapp_security": {
+            "password_configured": False,
+            "username": "trader",
+            "sensitive_paths": ["/character", "/config"],
+        },
         "paths": {
             "config_path": "config.json",
             "journal_db_path": "cache/trade_journal.sqlite3",
@@ -204,7 +307,10 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     response = client.post("/analysis/run", data={"budget_isk": "500m", "cargo_m3": "12000", "risk_profile": "balanced"})
     assert response.status_code == 200
     assert "Analysis results" in response.text
-    assert "Jita -&gt; Amarr" in response.text
+    assert "Corridor O4T outbound" in response.text
+    assert "O4T -&gt; R-ARKN" in response.text
+    assert "3-leg span" in response.text
+    assert "Jita connectors @ O4T" in response.text
     assert "Personal Layer" in response.text
     assert "Budget 45.3%" in response.text
     assert "Snapshot C:/tmp/replay_snapshot.json" in response.text
@@ -277,3 +383,28 @@ def test_webapp_has_no_heartbeat_endpoint(monkeypatch) -> None:
     client = _client(monkeypatch)
     response = client.post("/heartbeat")
     assert response.status_code == 404
+
+
+def test_remote_access_without_password_is_blocked(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    response = client.get("/config", headers={"Host": "remote.example", "X-Forwarded-For": "203.0.113.10"})
+    assert response.status_code == 403
+    assert "Remote access blocked" in response.text
+    assert "NULLSEC_WEBAPP_PASSWORD" in response.text
+
+
+def test_password_protection_requires_basic_auth(monkeypatch) -> None:
+    monkeypatch.setenv("NULLSEC_WEBAPP_PASSWORD", "secret-pass")
+    client = _client(monkeypatch)
+    response = client.get("/")
+    assert response.status_code == 401
+    assert "WWW-Authenticate" in response.headers
+
+
+def test_password_protection_allows_authorized_request(monkeypatch) -> None:
+    monkeypatch.setenv("NULLSEC_WEBAPP_PASSWORD", "secret-pass")
+    client = _client(monkeypatch)
+    auth = base64.b64encode(b"trader:secret-pass").decode("ascii")
+    response = client.get("/character", headers={"Authorization": f"Basic {auth}"})
+    assert response.status_code == 200
+    assert "Character / Auth" in response.text

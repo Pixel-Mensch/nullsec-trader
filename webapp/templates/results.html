@@ -91,64 +91,79 @@
 </section>
 
 {% if result.route_cards %}
-<section class="route-stack">
-  {% for route in result.route_cards %}
-  <article class="route-card">
-    <div class="route-head">
+<section class="route-group-stack">
+  {% for section in result.route_sections %}
+  <section class="panel route-group">
+    <div class="panel-header">
       <div>
-        <p class="card-label">Route</p>
-        <h3>{{ route.route_label or route.route_id or "Unnamed route" }}</h3>
+        <p class="card-label">Route section</p>
+        <h3>{{ section.label }}</h3>
+        {% if section.note %}<p class="muted route-section-note">{{ section.note }}</p>{% endif %}
       </div>
-      <span class="pill {% if route.actionable %}good{% else %}muted{% endif %}">{% if route.actionable %}Actionable{% else %}No trade{% endif %}</span>
+      <span class="pill muted">{{ section.routes|length }} route{% if section.routes|length != 1 %}s{% endif %}</span>
     </div>
-    <div class="route-metrics">
-      <span>Confidence {{ "%.2f"|format(route.route_confidence or 0) }}</span>
-      <span>Transport {{ "%.2f"|format(route.transport_confidence or 0) }}</span>
-      <span>Capital lock {{ "%.2f"|format(route.capital_lock_risk or 0) }}</span>
-      <span>Budget {{ "%.1f"|format(route.budget_util_pct or 0) }}%</span>
-      <span>Cargo {{ "%.1f"|format(route.cargo_util_pct or 0) }}%</span>
-      <span>Total cost {{ "%.0f"|format(route.isk_used or 0) }} ISK</span>
-      <span>Expected profit {{ "%.0f"|format(route.expected_profit_total or 0) }} ISK</span>
-      <span>Full sell {{ "%.0f"|format(route.full_sell_profit_total or 0) }} ISK</span>
-      <span>Picks {{ route.pick_count }}</span>
-    </div>
-    {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason %}
-    <ul class="plain-list">
-      {% for warning in route.warnings %}
-      <li class="warning-item">{{ warning }}</li>
-      {% endfor %}
-      {% if route.cost_model_warning and route.cost_model_warning not in route.warnings %}<li class="warning-item">{{ route.cost_model_warning }}</li>{% endif %}
-      {% if route.calibration_warning and route.calibration_warning not in route.warnings %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
-      {% if route.route_prune_reason and route.route_prune_reason not in route.warnings %}<li>{{ route.route_prune_reason }}</li>{% endif %}
-    </ul>
-    {% endif %}
-    <div class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>Exit</th>
-            <th>Expected days</th>
-            <th>Confidence</th>
-            <th>Expected profit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for pick in route.picks %}
-          <tr>
-            <td>{{ pick.name or pick.item_name or "Unknown" }}</td>
-            <td>{{ pick.proposed_qty or pick.qty or "-" }}</td>
-            <td>{{ pick.proposed_exit_type or pick.exit_type or "-" }}</td>
-            <td>{{ pick.proposed_expected_days_to_sell or pick.expected_days_to_sell or "-" }}</td>
-            <td>{{ "%.2f"|format(pick.proposed_overall_confidence_raw or pick.overall_confidence or pick.strict_confidence_score or 0) }}</td>
-            <td>{{ "%.0f"|format(pick.proposed_expected_profit or pick.expected_realized_profit_90d or pick.profit or 0) }}</td>
-          </tr>
+    <div class="route-stack">
+      {% for route in section.routes %}
+      <article class="route-card">
+        <div class="route-head">
+          <div>
+            <p class="card-label">Route</p>
+            <h3>{{ route.route_label or route.route_id or "Unnamed route" }}</h3>
+            {% if route.route_logic_label %}<p class="muted route-logic">{{ route.route_logic_label }}</p>{% endif %}
+          </div>
+          <span class="pill {% if route.actionable %}good{% else %}muted{% endif %}">{% if route.actionable %}Actionable{% else %}No trade{% endif %}</span>
+        </div>
+        <div class="route-metrics">
+          <span>Confidence {{ "%.2f"|format(route.route_confidence or 0) }}</span>
+          <span>Transport {{ "%.2f"|format(route.transport_confidence or 0) }}</span>
+          <span>Capital lock {{ "%.2f"|format(route.capital_lock_risk or 0) }}</span>
+          <span>Budget {{ "%.1f"|format(route.budget_util_pct or 0) }}%</span>
+          <span>Cargo {{ "%.1f"|format(route.cargo_util_pct or 0) }}%</span>
+          <span>Total cost {{ "%.0f"|format(route.isk_used or 0) }} ISK</span>
+          <span>Expected profit {{ "%.0f"|format(route.expected_profit_total or 0) }} ISK</span>
+          <span>Full sell {{ "%.0f"|format(route.full_sell_profit_total or 0) }} ISK</span>
+          <span>Picks {{ route.pick_count }}</span>
+        </div>
+        {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason %}
+        <ul class="plain-list">
+          {% for warning in route.warnings %}
+          <li class="warning-item">{{ warning }}</li>
           {% endfor %}
-        </tbody>
-      </table>
+          {% if route.cost_model_warning and route.cost_model_warning not in route.warnings %}<li class="warning-item">{{ route.cost_model_warning }}</li>{% endif %}
+          {% if route.calibration_warning and route.calibration_warning not in route.warnings %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
+          {% if route.route_prune_reason and route.route_prune_reason not in route.warnings %}<li>{{ route.route_prune_reason }}</li>{% endif %}
+        </ul>
+        {% endif %}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Qty</th>
+                <th>Exit</th>
+                <th>Expected days</th>
+                <th>Confidence</th>
+                <th>Expected profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for pick in route.picks %}
+              <tr>
+                <td>{{ pick.name or pick.item_name or "Unknown" }}</td>
+                <td>{{ pick.proposed_qty or pick.qty or "-" }}</td>
+                <td>{{ pick.proposed_exit_type or pick.exit_type or "-" }}</td>
+                <td>{{ pick.proposed_expected_days_to_sell or pick.expected_days_to_sell or "-" }}</td>
+                <td>{{ "%.2f"|format(pick.proposed_overall_confidence_raw or pick.overall_confidence or pick.strict_confidence_score or 0) }}</td>
+                <td>{{ "%.0f"|format(pick.proposed_expected_profit or pick.expected_realized_profit_90d or pick.profit or 0) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </article>
+      {% endfor %}
     </div>
-  </article>
+  </section>
   {% endfor %}
 </section>
 {% else %}

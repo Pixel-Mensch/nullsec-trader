@@ -3,6 +3,13 @@
 from tests.shared import *  # noqa: F401,F403
 from route_search import summarize_route_for_ranking
 
+
+def test_normalize_location_label_keeps_1st_distinct_from_cj6_alias() -> None:
+    assert nst.normalize_location_label("1st") == "1st"
+    assert nst.normalize_location_label("1st Taj Mahgoon") == "1st"
+    assert nst.normalize_location_label("CJ6") == "c_j6mt"
+
+
 def test_build_adjacent_pairs_forward() -> None:
     chain_nodes = [
         {"id": 1, "label": "O4T"},
@@ -142,6 +149,43 @@ def test_route_search_allowed_pairs_can_whitelist_non_policy_pair() -> None:
     profiles = nst.build_route_search_profiles(node_catalog, cfg)
     pairs = {(p["from"], p["to"]) for p in profiles}
     assert pairs == {("jita_44", "o4t")}
+
+
+def test_route_search_keeps_1st_span_and_jita_connector_visible() -> None:
+    node_catalog = {
+        "o4t": {"label": "O4T", "id": 1, "kind": "structure"},
+        "first": {"label": "1st Taj Mahgoon", "id": 2, "kind": "structure"},
+        "jita_44": {"label": "jita_44", "id": 60003760, "kind": "location", "location_id": 60003760, "region_id": 10000002},
+    }
+    cfg = {
+        "route_search": {
+            "enabled": True,
+            "allow_all_structures_internal": True,
+            "allow_shipping_lanes": True,
+            "allowed_pairs": [
+                {"from": "O4T", "to": "1st"},
+                {"from": "jita_44", "to": "1st", "shipping_lane_id": "itl_jita_1st"},
+            ],
+        },
+        "shipping_lanes": {
+            "itl_jita_1st": {
+                "enabled": True,
+                "from_location_id": 60003760,
+                "to_structure_id": 2,
+                "from": "jita_44",
+                "to": "1st",
+                "pricing_model": "itl_max",
+                "per_m3_rate": 100.0,
+                "minimum_reward": 1_000_000.0,
+                "full_load_reward": 100_000_000.0,
+            },
+        },
+    }
+
+    profiles = nst.build_route_search_profiles(node_catalog, cfg)
+    pairs = {(p["from"], p["to"]) for p in profiles}
+    assert ("O4T", "1st Taj Mahgoon") in pairs
+    assert ("jita_44", "1st Taj Mahgoon") in pairs
 
 def test_route_search_skips_pairs_with_same_node_id() -> None:
     node_catalog = {

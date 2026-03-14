@@ -1,86 +1,105 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 26 output honesty + tail cleanup)
+Date: 2026-03-14 (session 27 web hardening + corridor display)
 Branch: `dev`
 
 ## Completed This Session
 
-Fixed the remaining output-honesty and weak-tail-pick issues in the
-route-profile path without weakening the recent anti-bait / market-quality
-work.
+Implemented the planned local block around private web access and
+streckenlogik-based route presentation without changing route-search scoring.
 
 ## Root Cause
 
-- `execution_plan.py` rendered internal-route operational floor lines whenever
-  `operational_profit_floor_isk` existed, even if the route used external
-  shipping
-- PRICE-SENS picks only emitted a warning, not the actual profit-basis context,
-  so the shown sell quote and the shown profit looked inconsistent to a human
-- the existing post-selection cleanup seam favored clear score wins, but could
-  still keep a weak speculative / price-sensitive tail pick when route quality
-  improved and profit share stayed small, yet the score change was only near-flat
+- the local web app had no request-level protection seam, so a private deploy
+  could be exposed remotely without any access control
+- browser-sensitive pages (`/config`, `/character`) relied only on “local use”
+  convention instead of explicit guardrails
+- route-profile artifacts and browser result cards still reflected generation
+  order more than corridor logic, so direct legs, longer profitable spans, and
+  Jita connectors were harder to compare side by side
+- a local in-flight alias change in `location_utils.py` would have broken `1st`
+  normalization and made `O4T -> 1ST` / Jita-to-1ST visibility fragile
 
 ## What Changed
 
-- `execution_plan.py`
-  - added small helpers for displayed profit, visible-book profit proxy,
-    conservative executable profit proxy, retention, and internal-route
-    metadata applicability
-  - route summaries, leaderboard pruned entries, and no-trade near-misses now
-    show `Internal Route Floor` / `Internal Route Note` only for actual
-    `internal_self_haul` routes
-  - price-sensitive or materially repriced picks now show:
-    - quote basis
-    - visible-book profit proxy
-    - conservative executable profit proxy
-    - displayed profit basis used in the plan
-    - retention and implied net-exit basis
-- `runtime_runner.py`
-  - `_apply_post_selection_route_mix_cleanup()` now also considers explicit
-    weak-tail signals (`speculative`, `price-sensitive`,
-    `fragile-market-quality`, `weak-profit-retention`, `low-confidence`,
-    `elevated-manip-risk`) when profit share stays small and score retention
-    remains high
-  - `_apply_internal_self_haul_operational_filter()` now clears internal-route
-    floor metadata on external routes instead of carrying it forward
-- tests
-  - added focused coverage for hidden external floor lines, visible internal
-    floor lines, price-basis transparency, speculative price-sensitive tail
-    removal, and replay regression against known bait picks
+- `webapp/security.py` and `webapp/app.py`
+  - added a small request-level access seam
+  - optional Basic Auth protects the full app when a web password is present
+  - remote requests are blocked if no password is configured
+  - `run_dev_server()` now warns on non-local bind without password and can
+    read host/port overrides from env or optional local config
+- `webapp/routes/pages.py`, `webapp/templates/base.html`,
+  `webapp/templates/config.html`
+  - render security state on every page
+  - sensitive pages now clearly show the local-only / protected status
+- `webapp/services/config_service.py`
+  - exposes a redacted web-access summary and includes `webapp` config in the
+    browser-safe config sections
+- `location_utils.py`
+  - restored `1st` normalization so corridor and Jita connector routes using
+    `1st` stay distinct from `cj6` aliases
+- `runtime_runner.py`, `journal_models.py`, `execution_plan.py`,
+  `webapp/services/analysis_service.py`, `webapp/templates/results.html`
+  - added presentation-only corridor metadata on route results and manifest
+    routes
+  - execution plans now group sections by corridor source and route logic
+    (direct leg first, then longer spans, Jita connectors separate)
+  - browser results now mirror the same grouped corridor presentation
+- `scripts/quality_check.py` and `.github/workflows/ci.yml`
+  - added a minimal CI workflow
+  - quality-check now uses the maintained pytest path for the changed route/web
+    surface instead of relying on the old lightweight runner only
 
 ## Tests And Verification
 
 - focused regression:
-  - `pytest -q tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py tests/test_runtime_runner.py`
-    -> **129 passed**
+  - `pytest -q tests/test_route_search.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_webapp.py tests/test_shipping.py tests/test_integration.py`
+    -> **155 passed**
+- quality path:
+  - `python scripts/quality_check.py`
+    -> **178 passed**
 - new coverage proves:
-  - external shipping routes do not render internal-route floor/note lines
-  - internal self-haul routes still surface floor, suppressed profit, and note
-  - PRICE-SENS picks expose the real profit basis in plan text
-  - weak speculative / price-sensitive tail picks can be dropped while strong
-    core picks remain
-  - the focused replay fixture still keeps the known bait picks out
+  - `1st` normalization still preserves corridor and Jita-to-1ST pair building
+  - route-display metadata marks direct legs, longer spans, and Jita connectors
+  - execution plans render corridor sections in the intended order
+  - browser results render grouped corridor sections and route-logic labels
+  - remote requests are blocked without password, and password-protected web
+    requests require / accept Basic Auth
 
 ## Remaining Limits
 
-- the new price-basis block explains the conservative basis via profit proxies
-  and implied net-exit math; it still does not persist a separately named
-  repriced unit sell quote for every path
-- the tail cleanup remains intentionally narrow: it still refuses removals that
-  would materially damage route score retention or break minimum strong-pick
-  expectations
-- an unrelated pre-existing local modification in `location_utils.py` remains
-  intentionally untouched
+- the new web protection is intentionally small and private-deploy oriented; it
+  is not a multi-user auth system with sessions, roles, or CSRF model
+- `scripts/quality_check.py` now targets the maintained execution-plan/web
+  regression surface. A separate full-suite run still currently exposes older
+  unrelated failures in `tests/test_journal_reconciliation.py` and
+  `tests/test_no_trade.py`
 
 ## Files Touched
 
-- `execution_plan.py`
+- `location_utils.py`
 - `runtime_runner.py`
-- `tests/test_execution_plan.py`
+- `journal_models.py`
+- `execution_plan.py`
+- `nullsectrader.py`
+- `webapp/security.py`
+- `webapp/app.py`
+- `webapp/routes/pages.py`
+- `webapp/services/analysis_service.py`
+- `webapp/services/config_service.py`
+- `webapp/templates/base.html`
+- `webapp/templates/config.html`
+- `webapp/templates/results.html`
+- `webapp/static/css/app.css`
+- `config.local.example.json`
+- `.github/workflows/ci.yml`
+- `scripts/quality_check.py`
 - `tests/test_route_search.py`
 - `tests/test_runtime_runner.py`
-- `tests/test_integration.py`
+- `tests/test_execution_plan.py`
+- `tests/test_webapp.py`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
 - `ARCHITECTURE.md`
+- `README.md`
 - `SESSION_HANDOFF.md`

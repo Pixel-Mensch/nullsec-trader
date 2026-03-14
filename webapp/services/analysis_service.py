@@ -39,6 +39,7 @@ def _route_cards(manifest: dict) -> list[dict]:
         if not isinstance(route, dict):
             continue
         picks = [pick for pick in list(route.get("picks", []) or []) if isinstance(pick, dict)]
+        display = dict(route.get("display", {}) or {}) if isinstance(route.get("display", {}), dict) else {}
         expected_total = float(route.get("expected_realized_profit_total", 0.0) or 0.0)
         if expected_total <= 0.0:
             expected_total = sum(float(pick.get("proposed_expected_profit", 0.0) or 0.0) for pick in picks)
@@ -71,10 +72,41 @@ def _route_cards(manifest: dict) -> list[dict]:
                 "expected_profit_total": expected_total,
                 "full_sell_profit_total": full_total,
                 "warnings": [str(item).strip() for item in list(route.get("warnings", []) or []) if str(item).strip()],
+                "display": display,
+                "route_logic_label": str(display.get("logic_label", "") or ""),
                 "picks": picks,
             }
         )
-    return cards
+    indexed = list(enumerate(cards))
+    indexed.sort(
+        key=lambda entry: (
+            int(entry[1].get("display", {}).get("section_order", 9999) or 9999),
+            int(entry[1].get("display", {}).get("item_order", 9999) or 9999),
+            0 if bool(entry[1].get("actionable", False)) else 1,
+            -float(entry[1].get("expected_profit_total", 0.0) or 0.0),
+            entry[0],
+        )
+    )
+    return [card for _, card in indexed]
+
+
+def _route_sections(route_cards: list[dict]) -> list[dict]:
+    sections: list[dict] = []
+    current_section: dict | None = None
+    for card in list(route_cards or []):
+        display = dict(card.get("display", {}) or {}) if isinstance(card.get("display", {}), dict) else {}
+        section_key = str(display.get("section_key", "") or "")
+        section_label = str(display.get("section_label", "") or "").strip()
+        section_note = str(display.get("section_note", "") or "").strip()
+        if not section_key or not section_label:
+            section_key = "routes"
+            section_label = "Routes"
+            section_note = ""
+        if current_section is None or str(current_section.get("key", "")) != section_key:
+            current_section = {"key": section_key, "label": section_label, "note": section_note, "routes": []}
+            sections.append(current_section)
+        current_section["routes"].append(card)
+    return sections
 
 
 def get_analysis_form_data() -> dict:
@@ -157,6 +189,7 @@ def run_analysis(
             leaderboard_text = content
     manifest = dict(runtime_result.get("manifest", {}) or {})
     route_cards = _route_cards(manifest)
+    route_sections = _route_sections(route_cards)
     personal_layer_lines = extract_personal_layer_lines(execution_plan_text or runtime_result.get("stdout", ""))
     return {
         "ok": bool(runtime_result.get("ok", False)),
@@ -169,6 +202,7 @@ def run_analysis(
         "manifest": manifest,
         "runtime_mode": str(manifest.get("runtime_mode", "snapshot_only" if snapshot_only else "") or ""),
         "route_cards": route_cards,
+        "route_sections": route_sections,
         "route_count": int(manifest.get("route_count", len(route_cards)) or len(route_cards)),
         "pick_count": int(manifest.get("pick_count", sum(len(route.get("picks", [])) for route in route_cards)) or 0),
         "actionable_route_count": sum(1 for route in route_cards if bool(route.get("actionable", False))),

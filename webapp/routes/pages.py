@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 from webapp.services import analysis_service, character_service, config_service, dashboard_service, journal_service
+from webapp.security import describe_request_access
 
 
 router = APIRouter()
@@ -14,7 +15,10 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent.parent
 
 
 def _render(request: Request, template_name: str, **context):
-    return templates.TemplateResponse(request, template_name, {"request": request, **context})
+    security = getattr(request.state, "web_access", None)
+    if not isinstance(security, dict):
+        security = describe_request_access(request, getattr(request.app.state, "web_access_settings", {}))
+    return templates.TemplateResponse(request, template_name, {"request": request, "security": security, **context})
 
 
 @router.get("/", response_class=HTMLResponse)

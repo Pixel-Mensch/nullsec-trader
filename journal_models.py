@@ -196,6 +196,9 @@ def build_trade_plan_manifest(
             if text:
                 route_warning_lines.append(text)
         route_warning_lines = list(dict.fromkeys(route_warning_lines))
+        display_meta = route.get("_route_display", {})
+        if not isinstance(display_meta, dict):
+            display_meta = {}
         picks_out: list[dict] = []
         for pick in list(route.get("picks", []) or []):
             if not isinstance(pick, dict):
@@ -312,6 +315,7 @@ def build_trade_plan_manifest(
                 "transport_mode_note": str(route.get("transport_mode_note", "") or ""),
                 "budget_left_reason": str(route.get("budget_left_reason", "") or ""),
                 "warnings": json.loads(json.dumps(route_warning_lines, ensure_ascii=False)),
+                "display": json.loads(json.dumps(display_meta, ensure_ascii=False)),
                 "picks": picks_out,
             }
         )

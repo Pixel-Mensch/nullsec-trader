@@ -431,6 +431,154 @@ def enforce_route_destination(picks: list[dict], expected_dest_label: str) -> li
     return out
 
 
+def _route_display_chain_entries(cfg: dict) -> list[dict]:
+    chain_cfg = cfg.get("route_chain", {}) if isinstance(cfg.get("route_chain", {}), dict) else {}
+    legs = chain_cfg.get("legs", [])
+    if not isinstance(legs, list):
+        return []
+    out: list[dict] = []
+    seen_norms: set[str] = set()
+    for leg in legs:
+        if not isinstance(leg, dict):
+            continue
+        label = str(leg.get("label", leg.get("system", "")) or "").strip()
+        norm = normalize_location_label(label)
+        if not label or not norm or norm in seen_norms:
+            continue
+        out.append({"index": len(out), "label": label, "norm": norm})
+        seen_norms.add(norm)
+    return out
+
+
+def _route_expected_profit_for_display(route: dict) -> float:
+    total = float(route.get("expected_realized_profit_total", route.get("profit_total", 0.0)) or 0.0)
+    if total > 0.0:
+        return total
+    return sum(
+        float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0)
+        for p in list(route.get("picks", []) or [])
+        if isinstance(p, dict)
+    )
+
+
+def _build_route_display_meta(route: dict, cfg: dict, chain_entries: list[dict] | None = None) -> dict:
+    chain_entries = list(chain_entries or [])
+    by_norm = {str(entry.get("norm", "")): entry for entry in chain_entries if str(entry.get("norm", ""))}
+    chain_len = len(chain_entries)
+    source_label = str(route.get("source_label", route.get("source_market", "")) or "").strip()
+    dest_label = str(route.get("dest_label", route.get("target_market", "")) or "").strip()
+    source_norm = normalize_location_label(source_label)
+    dest_norm = normalize_location_label(dest_label)
+    expected_profit = _route_expected_profit_for_display(route)
+    base = {
+        "kind": "other",
+        "direction": "",
+        "section_key": "other_routes",
+        "section_label": "Other routes",
+        "section_note": "Routes outside the configured corridor stay visible after corridor and Jita sections.",
+        "section_order": 900,
+        "item_order": 900,
+        "logic_label": "free route",
+        "span_hops": 0,
+        "is_direct_leg": False,
+        "source_index": -1,
+        "dest_index": -1,
+        "expected_profit": float(expected_profit),
+    }
+
+    source_entry = by_norm.get(source_norm)
+    dest_entry = by_norm.get(dest_norm)
+
+    if source_norm == "jita" or dest_norm == "jita":
+        anchor_entry = dest_entry if source_norm == "jita" else source_entry
+        anchor_label = str(anchor_entry.get("label", "")) if anchor_entry else (dest_label if source_norm == "jita" else source_label)
+        anchor_index = int(anchor_entry.get("index", 99)) if anchor_entry else 99
+        direction = "from_jita" if source_norm == "jita" else "to_jita"
+        base.update(
+            {
+                "kind": "jita_connector",
+                "direction": direction,
+                "section_key": f"jita_{anchor_index}_{direction}",
+                "section_label": f"Jita connectors @ {anchor_label}" if anchor_label else "Jita connectors",
+                "section_note": "Jita routes stay visible as external connectors and are not folded into corridor spans.",
+                "section_order": 300 + (anchor_index * 2) + (0 if direction == "from_jita" else 1),
+                "item_order": 0 if direction == "from_jita" else 1,
+                "logic_label": "Jita outbound connector" if direction == "from_jita" else "Jita return connector",
+            }
+        )
+        if anchor_entry:
+            base["source_index"] = int(anchor_entry.get("index", -1))
+        return base
+
+    if source_entry is not None and dest_entry is not None:
+        source_index = int(source_entry.get("index", -1))
+        dest_index = int(dest_entry.get("index", -1))
+        span_hops = abs(dest_index - source_index)
+        is_direct = span_hops == 1
+        logic_label = "direct leg" if is_direct else f"{span_hops}-leg span"
+        base.update(
+            {
+                "kind": "corridor",
+                "span_hops": int(span_hops),
+                "is_direct_leg": bool(is_direct),
+                "source_index": source_index,
+                "dest_index": dest_index,
+                "logic_label": logic_label,
+            }
+        )
+        if source_index < dest_index:
+            base.update(
+                {
+                    "direction": "forward",
+                    "section_key": f"corridor_forward_{source_index}",
+                    "section_label": f"Corridor {source_entry.get('label', source_label)} outbound",
+                    "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+                    "section_order": 100 + source_index,
+                    "item_order": (span_hops * 10) + dest_index,
+                }
+            )
+        else:
+            base.update(
+                {
+                    "direction": "reverse",
+                    "section_key": f"corridor_reverse_{source_index}",
+                    "section_label": f"Corridor {source_entry.get('label', source_label)} return",
+                    "section_note": "Return routes stay grouped separately, with direct returns before longer spans.",
+                    "section_order": 200 + max(0, chain_len - 1 - source_index),
+                    "item_order": (span_hops * 10) + max(0, chain_len - 1 - dest_index),
+                }
+            )
+        return base
+
+    anchor_entry = source_entry if source_entry is not None else dest_entry
+    if anchor_entry is not None:
+        anchor_index = int(anchor_entry.get("index", 99))
+        anchor_label = str(anchor_entry.get("label", "") or "")
+        base.update(
+            {
+                "kind": "external_connector",
+                "direction": "external",
+                "section_key": f"external_{anchor_index}",
+                "section_label": f"External connectors @ {anchor_label}",
+                "section_note": "Non-corridor routes anchored on a corridor node stay visible after direct corridor sections.",
+                "section_order": 400 + anchor_index,
+                "item_order": 0,
+                "logic_label": "external connector",
+                "source_index": int(anchor_entry.get("index", -1)),
+            }
+        )
+    return base
+
+
+def _attach_route_display_meta(route_results: list[dict], cfg: dict) -> list[dict]:
+    chain_entries = _route_display_chain_entries(cfg)
+    for route in list(route_results or []):
+        if not isinstance(route, dict):
+            continue
+        route["_route_display"] = _build_route_display_meta(route, cfg, chain_entries)
+    return route_results
+
+
 def _resolve_route_wide_scan_cfg(cfg: dict) -> dict:
     rw = cfg.get("route_wide_scan", {})
     if not isinstance(rw, dict):
@@ -2327,6 +2475,7 @@ def run_cli() -> None:
 
         if route_results:
             route_profiles_active = True
+            _attach_route_display_meta(route_results, cfg)
             attach_plan_metadata(route_results, plan_id=plan_id, created_at=plan_created_at)
 
             # --- Do Not Trade evaluation ---

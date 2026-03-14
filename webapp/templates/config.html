@@ -17,6 +17,12 @@
     <p class="muted">Warnings {{ data.config_warnings|length }}</p>
   </article>
   <article class="info-card">
+    <p class="card-label">Web access</p>
+    <h3>{% if data.webapp_security.password_configured %}Password protected{% else %}Local-only{% endif %}</h3>
+    <p class="stat-line">{% if data.webapp_security.password_configured %}User {{ data.webapp_security.username }}{% else %}Remote access blocked without password{% endif %}</p>
+    <p class="muted">Sensitive paths {{ data.webapp_security.sensitive_paths|join(", ") }}</p>
+  </article>
+  <article class="info-card">
     <p class="card-label">Paths</p>
     <h3>Local files</h3>
     <p class="muted">{{ data.paths.config_path }}</p>

@@ -1,12 +1,42 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 26 output honesty + tail cleanup)
+Last updated: 2026-03-14 (session 27 web hardening + corridor display)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0h: Add small private web protection and corridor-ordered route display
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/app.py`, `webapp/security.py`,
+  `webapp/routes/pages.py`, `webapp/services/analysis_service.py`,
+  `webapp/services/config_service.py`, `webapp/templates/results.html`,
+  `webapp/templates/base.html`, `execution_plan.py`, `runtime_runner.py`,
+  `journal_models.py`, `location_utils.py`, `tests/`,
+  `scripts/quality_check.py`, `.github/workflows/ci.yml`
+- What was done:
+  - added a small web access seam: optional Basic Auth when a web password is
+    configured, otherwise explicit blocking of non-local requests
+  - sensitive browser pages (`/character`, `/config`) now run behind the same
+    seam and emit `Cache-Control: no-store`
+  - restored `1st` normalization so corridor routes such as `O4T -> 1ST` and
+    Jita-to-1ST connectors remain visible
+  - route-profile results now carry presentation-only corridor metadata;
+    execution plans and browser results group direct legs before longer spans
+    and keep Jita connectors separate without touching route-search scoring
+  - synchronized `scripts/quality_check.py` with the pytest-based quality path
+    used by this block and added a minimal CI workflow
+  - focused regression:
+    `pytest -q tests/test_route_search.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_webapp.py tests/test_shipping.py tests/test_integration.py`
+    -> **155 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **178 passed**
 
 ### Task 0: Restore execution-plan consistency for route profiles
 

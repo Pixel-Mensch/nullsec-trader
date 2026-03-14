@@ -14,6 +14,8 @@ journal, character, and config workflows without replacing the CLI.
 - stay local-only and optional
 - keep process lifetime simple; the local server no longer uses browser
   heartbeat or idle auto-shutdown logic
+- enforce a small private-deploy access seam: optional Basic Auth when a web
+  password exists, otherwise explicit blocking of non-local requests
 
 ## Inputs
 
@@ -76,6 +78,8 @@ journal, character, and config workflows without replacing the CLI.
 - expose more status metadata without changing trading logic
 - make the journal web flow clearly distinguish local journal entries from
   current character snapshot / reconcile data
+- keep browser route presentation aligned with runtime corridor-display
+  metadata instead of inventing a second ranking view
 
 ## Risk Areas
 

@@ -95,6 +95,42 @@ body.page-analysis {
   border-color: rgba(242, 184, 74, 0.45);
 }
 
+.security-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  margin-bottom: 18px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--line);
+  background: rgba(8, 14, 24, 0.76);
+  color: var(--muted);
+}
+
+.security-banner strong {
+  color: var(--text);
+}
+
+.security-banner.is-protected {
+  border-color: rgba(76, 195, 138, 0.28);
+}
+
+.security-banner.is-local-only {
+  border-color: rgba(242, 184, 74, 0.32);
+}
+
+.security-tag {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(240, 115, 115, 0.14);
+  border: 1px solid rgba(240, 115, 115, 0.24);
+  color: #ffd2d2;
+  font-size: 0.82rem;
+}
+
 .page-content {
   display: grid;
   gap: 20px;
@@ -298,6 +334,20 @@ th {
 .route-stack {
   display: grid;
   gap: 18px;
+}
+
+.route-group-stack {
+  display: grid;
+  gap: 20px;
+}
+
+.route-group {
+  min-width: 0;
+}
+
+.route-section-note,
+.route-logic {
+  margin: 0;
 }
 
 .route-metrics {

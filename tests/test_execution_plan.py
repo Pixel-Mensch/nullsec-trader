@@ -726,6 +726,59 @@ class TestWriteExecutionPlanProfiles:
         assert "PLAN 1:" in content
         assert "PLAN 2:" in content
 
+    def test_corridor_sections_sort_direct_then_span_then_jita_connector(self):
+        direct = _make_route_result(picks=[_instant_pick(name="Direct Pick")])
+        direct["route_label"] = "O4T -> R-ARKN"
+        direct["source_label"] = "O4T"
+        direct["dest_label"] = "R-ARKN"
+        direct["_route_display"] = {
+            "section_key": "corridor_forward_0",
+            "section_label": "Corridor O4T outbound",
+            "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+            "section_order": 100,
+            "item_order": 11,
+            "logic_label": "direct leg",
+            "expected_profit": 5_000_000.0,
+        }
+
+        span = _make_route_result(picks=[_planned_pick(name="Span Pick")])
+        span["route_label"] = "O4T -> 1st Taj Mahgoon"
+        span["source_label"] = "O4T"
+        span["dest_label"] = "1st Taj Mahgoon"
+        span["_route_display"] = {
+            "section_key": "corridor_forward_0",
+            "section_label": "Corridor O4T outbound",
+            "section_note": "Direct legs first, then longer profitable spans along the corridor.",
+            "section_order": 100,
+            "item_order": 33,
+            "logic_label": "3-leg span",
+            "expected_profit": 7_000_000.0,
+        }
+
+        jita = _make_route_result(picks=[_instant_pick(name="Jita Pick")])
+        jita["route_label"] = "jita_44 -> O4T"
+        jita["source_label"] = "jita_44"
+        jita["dest_label"] = "O4T"
+        jita["_route_display"] = {
+            "section_key": "jita_0_from_jita",
+            "section_label": "Jita connectors @ O4T",
+            "section_note": "Jita routes stay visible as external connectors and are not folded into corridor spans.",
+            "section_order": 300,
+            "item_order": 0,
+            "logic_label": "Jita outbound connector",
+            "expected_profit": 9_000_000.0,
+        }
+
+        content = self._write_and_read([span, jita, direct])
+
+        assert "ROUTE SECTION: Corridor O4T outbound" in content
+        assert "ROUTE SECTION: Jita connectors @ O4T" in content
+        assert content.index("PLAN 1: O4T -> R-ARKN") < content.index("PLAN 2: O4T -> 1st Taj Mahgoon")
+        assert content.index("PLAN 2: O4T -> 1st Taj Mahgoon") < content.index("PLAN 3: jita_44 -> O4T")
+        assert "Route Logic: direct leg" in content
+        assert "Route Logic: 3-leg span" in content
+        assert "Route Logic: Jita outbound connector" in content
+
 
 # ---------------------------------------------------------------------------
 # Test --compact flag in parse_cli_args
