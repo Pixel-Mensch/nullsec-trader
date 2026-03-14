@@ -322,6 +322,17 @@ class TestPortfolioProfile:
         assert out["max_items"] == BUILTIN_PROFILES["conservative"]["max_items"]
         assert out["max_item_share_of_budget"] == pytest.approx(BUILTIN_PROFILES["conservative"]["max_item_share_of_budget"])
 
+    def test_profile_caps_cargo_fill_item_share_to_visible_budget_rule(self):
+        cfg_loose = {
+            "max_item_share_of_budget": 1.0,
+            "cargo_fill_max_item_share_of_budget": 0.75,
+            "max_items": 999,
+            "max_liquidation_days_per_position": 99_999.0,
+        }
+        out = apply_profile_to_portfolio_cfg(BUILTIN_PROFILES["balanced"], cfg_loose)
+        assert out["max_item_share_of_budget"] == pytest.approx(0.40)
+        assert out["cargo_fill_max_item_share_of_budget"] == pytest.approx(0.40)
+
 
 # ---------------------------------------------------------------------------
 # 7. filter_picks_by_profile (post-build min_profit_per_m3)
@@ -345,6 +356,50 @@ class TestFilterPicksByProfile:
         assert len(kept) == 1
         assert len(rejected) == 1
         assert "profile_rejection_reason" in rejected[0] or "_profile_rejection_reason" in rejected[0]
+
+    def test_min_profit_gate_rejects_instant_pick_on_pick_level(self):
+        picks = [
+            _make_pick(1, "MandatoryInstant", expected_realized_profit_90d=750_000.0, instant=True, mode="instant"),
+            _make_pick(2, "StrongInstant", expected_realized_profit_90d=1_500_000.0, instant=True, mode="instant"),
+        ]
+        filters_used = {"_profile_min_expected_profit_isk": 1_000_000.0, "_profile_name": "balanced"}
+        kept, rejected = filter_picks_by_profile(picks, filters_used, budget_isk=100_000_000.0)
+        assert [p["name"] for p in kept] == ["StrongInstant"]
+        assert [p["name"] for p in rejected] == ["MandatoryInstant"]
+        assert "profile_min_expected_profit_isk" in rejected[0]["_profile_rejection_codes"]
+
+    def test_min_profit_gate_rejects_optional_pick_on_pick_level(self):
+        picks = [
+            _make_pick(1, "OptionalPlanned", expected_realized_profit_90d=400_000.0, instant=False, mode="planned_sell"),
+            _make_pick(2, "HealthyPlanned", expected_realized_profit_90d=1_200_000.0, instant=False, mode="planned_sell"),
+        ]
+        filters_used = {"_profile_min_expected_profit_isk": 1_000_000.0, "_profile_name": "balanced"}
+        kept, rejected = filter_picks_by_profile(picks, filters_used, budget_isk=100_000_000.0)
+        assert [p["name"] for p in kept] == ["HealthyPlanned"]
+        assert [p["name"] for p in rejected] == ["OptionalPlanned"]
+
+    def test_max_budget_per_item_rejects_overweight_pick(self):
+        picks = [
+            _make_pick(1, "TooLarge", expected_realized_profit_90d=5_000_000.0),
+            _make_pick(2, "WithinCap", expected_realized_profit_90d=5_000_000.0),
+        ]
+        picks[0]["cost"] = 225_000_000.0
+        picks[1]["cost"] = 120_000_000.0
+        filters_used = {"_profile_max_item_share_of_budget": 0.40, "_profile_name": "balanced"}
+        kept, rejected = filter_picks_by_profile(picks, filters_used, budget_isk=500_000_000.0)
+        assert [p["name"] for p in kept] == ["WithinCap"]
+        assert [p["name"] for p in rejected] == ["TooLarge"]
+        assert "profile_max_item_share_of_budget" in rejected[0]["_profile_rejection_codes"]
+
+    def test_route_total_does_not_hide_low_profit_pick(self):
+        picks = [
+            _make_pick(1, "BigWinner", expected_realized_profit_90d=8_000_000.0),
+            _make_pick(2, "CargoFillWeak", expected_realized_profit_90d=250_000.0),
+        ]
+        filters_used = {"_profile_min_expected_profit_isk": 500_000.0, "_profile_name": "balanced"}
+        kept, rejected = filter_picks_by_profile(picks, filters_used, budget_isk=100_000_000.0)
+        assert [p["name"] for p in kept] == ["BigWinner"]
+        assert [p["name"] for p in rejected] == ["CargoFillWeak"]
 
 
 # ---------------------------------------------------------------------------
@@ -463,8 +518,8 @@ class TestProfileEndToEnd:
     def test_conservative_removes_low_profit_per_m3_picks(self):
         """conservative min_profit_per_m3=2000 should remove a pick at 100 ISK/m3."""
         picks = [
-            _make_pick(1, "Dense Item", expected_realized_profit_per_m3_90d=5_000.0),
-            _make_pick(2, "Thin Item", expected_realized_profit_per_m3_90d=100.0),
+            _make_pick(1, "Dense Item", expected_realized_profit_per_m3_90d=5_000.0, overall_confidence=0.85, decision_overall_confidence=0.85),
+            _make_pick(2, "Thin Item", expected_realized_profit_per_m3_90d=100.0, overall_confidence=0.85, decision_overall_confidence=0.85),
         ]
         filters_con = apply_profile_to_filters("conservative", BUILTIN_PROFILES["conservative"], _base_filters())
         kept, rejected = filter_picks_by_profile(picks, filters_con)

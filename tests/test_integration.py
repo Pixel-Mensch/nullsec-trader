@@ -338,7 +338,7 @@ def test_replay_live_focused_fixture_keeps_real_pick_set() -> None:
     assert "Replay-Mode aktiv." in proc.stdout
     assert manifest["runtime_mode"] == "route_profiles"
     assert int(manifest["route_count"]) == 2
-    assert int(manifest["pick_count"]) == 3
+    assert int(manifest["pick_count"]) == 2
     route_labels = [str(route.get("route_label", "")) for route in manifest["routes"]]
     assert route_labels == ["jita_44 -> o4t", "o4t -> jita_44"]
     actionable = [route for route in manifest["routes"] if bool(route.get("actionable", False))]
@@ -346,11 +346,24 @@ def test_replay_live_focused_fixture_keeps_real_pick_set() -> None:
     pick_names = [str(pick.get("item_name", "")) for pick in actionable[0].get("picks", [])]
     assert pick_names == [
         "Noise-25 'Needlejack' Filament",
-        "Large Warhead Calefaction Catalyst II",
         "Polarized Heavy Neutron Blaster",
     ]
     assert all(float(pick.get("proposed_sell_price", 0.0) or 0.0) > 0.0 for pick in actionable[0].get("picks", []))
     assert sum(float(pick.get("proposed_expected_profit", 0.0) or 0.0) for pick in actionable[0].get("picks", [])) > 200_000_000.0
+
+
+def test_replay_live_focused_fixture_keeps_known_bait_picks_out() -> None:
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fixture_path = os.path.join(repo_root, "tests", "fixtures", "replay_live_focused_o4t_jita_20260308.json")
+    _, manifest = _run_replay_with_local_cfg(_focused_replay_local_cfg(fixture_path))
+    pick_names = [str(pick.get("item_name", "")) for route in manifest["routes"] for pick in route.get("picks", [])]
+    for banned in [
+        "Large Warhead Calefaction Catalyst II",
+        "IFFA Compact Damage Control",
+        "Heavy Gremlin Compact Energy Neutralizer",
+        "Drone Mutaplasmid Residue",
+    ]:
+        assert banned not in pick_names
 
 
 def test_replay_same_snapshot_keeps_stable_plan_and_pick_ids() -> None:

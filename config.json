@@ -155,6 +155,7 @@
         "ranking_metric": "risk_adjusted_expected_profit",
         "allow_all_structures_internal": true,
         "allow_shipping_lanes": true,
+        "internal_self_haul_min_expected_profit_isk": 2000000,
         "allow_zero_transport_cost_for_routes": [],
         "allowed_pairs": [
             {

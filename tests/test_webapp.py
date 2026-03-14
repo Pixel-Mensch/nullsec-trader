@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-import webapp.app as web_app
 from webapp.app import create_app
 from webapp.routes import pages
 from webapp.services import runtime_bridge
@@ -119,6 +118,19 @@ def _journal_page(tab: str = "overview") -> dict:
         "entry_count": 4,
         "journal_db_path": "cache/trade_journal.sqlite3",
         "has_reconciliation_result": tab in {"reconcile", "unmatched"},
+        "character_summary": {
+            "character_name": "Capsuleer",
+            "source": "cache",
+            "warnings": [],
+            "open_orders_count": 7,
+            "sell_order_count": 5,
+            "buy_order_count": 2,
+            "wallet_transactions_count": 42,
+            "wallet_journal_count": 84,
+            "wallet_data_freshness": "fresh",
+            "wallet_history_quality": "usable",
+        },
+        "empty_notice": "",
     }
 
 
@@ -202,12 +214,18 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
 def test_journal_views_render(monkeypatch) -> None:
     client = _client(monkeypatch)
     overview = client.get("/journal?tab=overview")
+    reconcile_get = client.get("/journal/reconcile?limit=20")
     reconcile = client.post("/journal/reconcile", data={"limit": 20})
     unmatched = client.get("/journal/unmatched")
     assert overview.status_code == 200
+    assert reconcile_get.status_code == 200
     assert reconcile.status_code == 200
     assert unmatched.status_code == 200
     assert "content for overview" in overview.text
+    assert "Capsuleer" in overview.text
+    assert "Open orders" in overview.text
+    assert "42 tx" in overview.text
+    assert "content for reconcile" in reconcile_get.text
     assert "content for reconcile" in reconcile.text
     assert "content for unmatched" in unmatched.text
 
@@ -255,15 +273,7 @@ def test_runtime_bridge_extracts_replay_snapshot_path() -> None:
     assert runtime_bridge._extract_snapshot_path(output) == "C:/tmp/live_snapshot.json"
 
 
-def test_webapp_shutdown_waits_for_active_request() -> None:
-    old_last_ping = web_app._last_ping
-    old_active_request_count = web_app._active_request_count
-    try:
-        web_app._last_ping = 0.0
-        web_app._active_request_count = 1
-        assert web_app._should_auto_shutdown(now=999.0) is False
-        web_app._active_request_count = 0
-        assert web_app._should_auto_shutdown(now=999.0) is True
-    finally:
-        web_app._last_ping = old_last_ping
-        web_app._active_request_count = old_active_request_count
+def test_webapp_has_no_heartbeat_endpoint(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    response = client.post("/heartbeat")
+    assert response.status_code == 404

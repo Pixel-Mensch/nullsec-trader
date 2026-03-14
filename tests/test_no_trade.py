@@ -467,6 +467,23 @@ class TestWriteNoTradeReport:
             content = self._write_and_read(result, "conservative", BUILTIN_PROFILES["conservative"])
             assert "BEINAHE" in content or "FAST GUT" in content or "near" in content.lower()
 
+    def test_report_surfaces_internal_route_floor_for_near_miss(self):
+        name, params = _balanced()
+        route = _route(
+            actionable=False,
+            picks=[],
+            total_candidates=6,
+            prune_reason="internal_route_profit_below_operational_floor",
+        )
+        route["operational_profit_floor_isk"] = 2_000_000.0
+        route["suppressed_expected_realized_profit_total"] = 1_300_000.0
+        route["operational_filter_note"] = "Internal nullsec routes require at least 2.0m ISK expected realized profit."
+        result = evaluate_no_trade([route], name, params, all_profiles=BUILTIN_PROFILES)
+        content = self._write_and_read(result, name, params)
+        assert "internal_route_profit_below_operational_floor" in content
+        assert "Internal Route Floor" in content
+        assert "Suppressed Expected Profit" in content
+
     def test_report_contains_profile_name(self):
         result = self._dnt_result()
         content = self._write_and_read(result, "conservative", BUILTIN_PROFILES["conservative"])

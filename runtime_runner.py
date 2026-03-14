@@ -86,6 +86,7 @@ from runtime_reports import (
     write_top_candidate_dump,
 )
 from eve_sso import EveSSOAuth
+from runtime_cleanup import run_safe_cleanup
 
 
 def run_snapshot_only(cfg: dict, structure_ids: list[int], snapshot_out: str | None = None) -> None:
@@ -677,6 +678,513 @@ def make_skipped_chain_leg(
     }
 
 
+def _merge_reason_counts(dst: dict, src: dict) -> None:
+    if not isinstance(dst, dict) or not isinstance(src, dict):
+        return
+    for key, value in src.items():
+        try:
+            count = int(value or 0)
+        except Exception:
+            continue
+        if count == 0:
+            continue
+        reason = str(key or "").strip()
+        if not reason:
+            continue
+        dst[reason] = int(dst.get(reason, 0) or 0) + count
+
+
+def _profile_rejection_metrics(pick: dict, filters_used: dict, budget_isk: float) -> dict:
+    cost = float(pick.get("cost", 0.0) or 0.0)
+    budget_total = float(budget_isk or 0.0)
+    return {
+        "expected_realized_profit_90d": float(
+            pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0
+        ),
+        "expected_realized_profit_per_m3_90d": float(
+            pick.get("expected_realized_profit_per_m3_90d", pick.get("expected_profit_per_m3_90d", pick.get("profit_per_m3", 0.0))) or 0.0
+        ),
+        "decision_overall_confidence": float(
+            pick.get("decision_overall_confidence", pick.get("calibrated_overall_confidence", pick.get("overall_confidence", 0.0))) or 0.0
+        ),
+        "profile_min_expected_profit_isk": float(filters_used.get("_profile_min_expected_profit_isk", 0.0) or 0.0),
+        "profile_min_profit_per_m3": float(
+            filters_used.get("_profile_min_profit_density_isk_per_m3", filters_used.get("_profile_min_profit_per_m3", 0.0)) or 0.0
+        ),
+        "profile_min_confidence": float(filters_used.get("_profile_min_confidence", 0.0) or 0.0),
+        "profile_max_item_share_of_budget": float(filters_used.get("_profile_max_item_share_of_budget", 0.0) or 0.0),
+        "budget_share": (cost / budget_total) if budget_total > 0.0 else 0.0,
+    }
+
+
+def _append_profile_rejections_to_explain(
+    explain: dict,
+    rejected_picks: list[dict],
+    filters_used: dict,
+    budget_isk: float,
+) -> None:
+    if not isinstance(explain, dict) or not rejected_picks:
+        return
+    reason_counts = explain.get("reason_counts", {})
+    if not isinstance(reason_counts, dict):
+        reason_counts = {}
+        explain["reason_counts"] = reason_counts
+    rejected_entries = explain.get("rejected", [])
+    if not isinstance(rejected_entries, list):
+        rejected_entries = []
+        explain["rejected"] = rejected_entries
+
+    for pick in list(rejected_picks or []):
+        codes = [str(code or "").strip() for code in list(pick.get("_profile_rejection_codes", []) or []) if str(code or "").strip()]
+        if not codes:
+            continue
+        for code in codes:
+            reason_counts[code] = int(reason_counts.get(code, 0) or 0) + 1
+        rejected_entries.append(
+            {
+                "type_id": int(pick.get("type_id", 0) or 0),
+                "name": str(pick.get("name", "") or ""),
+                "reason": codes[0],
+                "reason_code": codes[0],
+                "metrics": _profile_rejection_metrics(pick, filters_used, budget_isk),
+            }
+        )
+
+
+def _apply_post_build_profile_filters(
+    picks: list[dict],
+    filters_used: dict,
+    *,
+    explain: dict,
+    budget_isk: float,
+    route_label: str,
+) -> list[dict]:
+    from risk_profiles import filter_picks_by_profile
+
+    kept, rejected = filter_picks_by_profile(picks, filters_used, budget_isk=budget_isk)
+    if not rejected:
+        return list(kept)
+
+    _append_profile_rejections_to_explain(explain, rejected, filters_used, budget_isk)
+    profile_name = str(filters_used.get("_profile_name", "") or "")
+    print(f"    [Profile:{profile_name}] {len(rejected)} Pick(s) nach finalen Profilregeln entfernt ({route_label}).")
+    return list(kept)
+
+
+def _prune_reason_bucket(reason: str) -> str:
+    key = str(reason or "").strip().lower()
+    if not key:
+        return ""
+    if key in {
+        "no_candidates",
+        "candidates_below_profit_floor",
+        "candidates_failed_confidence",
+        "candidates_failed_budget_rule",
+        "candidates_failed_fill_probability",
+        "candidates_failed_sell_time",
+        "candidates_invalid_volume",
+        "no_picks_after_portfolio_constraints",
+        "internal_route_profit_below_operational_floor",
+    }:
+        return key
+    if key in {
+        "expected_profit_too_low",
+        "expected_profit_too_low_after_shipping",
+        "min_profit_pct",
+        "min_profit_pct_after_shipping",
+        "non_positive_profit",
+        "non_positive_profit_90d",
+        "profit_threshold",
+        "orderbook_min_source_sell_price",
+        "profile_min_expected_profit_isk",
+        "profile_min_profit_per_m3",
+    }:
+        return "candidates_below_profit_floor"
+    if key in {"profile_min_confidence", "planned_low_confidence"}:
+        return "candidates_failed_confidence"
+    if key in {"profile_max_item_share_of_budget"}:
+        return "candidates_failed_budget_rule"
+    if key in {
+        "fill_probability",
+        "dest_buy_depth_units",
+        "min_depth_units",
+        "orderbook_window_units_too_low",
+    }:
+        return "candidates_failed_fill_probability"
+    if key in {
+        "expected_days_too_high",
+        "strict_expected_days_too_high",
+        "sell_through_too_low",
+        "strict_sell_through_too_low",
+        "avg_daily_volume_too_low",
+        "strict_avg_daily_volume_7d_too_low",
+        "planned_queue_ahead_too_heavy",
+        "planned_demand_cap_zero",
+        "planned_demand_cap_too_low",
+        "planned_structure_micro_liquidity",
+        "planned_history_order_count",
+        "no_history_volume",
+        "strict_no_fallback_volume",
+    }:
+        return "candidates_failed_sell_time"
+    if key in {"invalid_volume"}:
+        return "candidates_invalid_volume"
+    return ""
+
+
+def _derive_route_prune_reason(result: dict) -> str:
+    current_reason = str(result.get("route_prune_reason", "") or "").strip()
+    if bool(result.get("route_blocked_due_to_transport", False)):
+        return current_reason or "missing_transport_cost_model"
+    if list(result.get("picks", []) or []):
+        return current_reason if current_reason not in {"", "no_picks"} else ""
+    if current_reason and current_reason != "no_picks":
+        return current_reason
+
+    reason_counts = result.get("why_out_summary", {})
+    if not isinstance(reason_counts, dict):
+        reason_counts = {}
+    bucket_counts: dict[str, int] = {}
+    for reason, count in reason_counts.items():
+        bucket = _prune_reason_bucket(reason)
+        if not bucket:
+            continue
+        try:
+            n = int(count or 0)
+        except Exception:
+            n = 0
+        if n <= 0:
+            continue
+        bucket_counts[bucket] = int(bucket_counts.get(bucket, 0) or 0) + n
+    if bucket_counts:
+        return max(bucket_counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+    total_candidates = int(result.get("total_candidates", 0) or 0)
+    passed_all = int(result.get("passed_all_filters", 0) or 0)
+    if passed_all > 0:
+        return "no_picks_after_portfolio_constraints"
+    if total_candidates <= 0:
+        return "no_candidates"
+    return current_reason or "no_picks"
+
+
+def _refresh_route_result_from_current_picks(result: dict) -> dict:
+    picks = list(result.get("picks", []) or [])
+    budget_total = float(result.get("budget_total", 0.0) or 0.0)
+    cargo_total = float(result.get("cargo_total", result.get("cargo_m3", 0.0)) or 0.0)
+
+    total_cost = sum(float(p.get("cost", 0.0) or 0.0) for p in picks)
+    total_revenue = sum(float(p.get("revenue_net", 0.0) or 0.0) for p in picks)
+    total_profit = sum(float(p.get("profit", 0.0) or 0.0) for p in picks)
+    total_fees_taxes = sum(pick_total_fees_taxes(p) for p in picks)
+    total_m3 = sum(float(p.get("unit_volume", 0.0) or 0.0) * float(p.get("qty", 0) or 0.0) for p in picks)
+    total_shipping_cost = sum(float(p.get("shipping_cost", 0.0) or 0.0) for p in picks)
+    total_route_cost = sum(float(p.get("route_cost", 0.0) or 0.0) for p in picks)
+    total_transport_cost = sum(float(p.get("transport_cost", 0.0) or 0.0) for p in picks)
+    expected_realized_total = sum(
+        float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0)
+        for p in picks
+    )
+    full_sell_total = sum(float(p.get("gross_profit_if_full_sell", p.get("profit", 0.0)) or 0.0) for p in picks)
+
+    result["items_count"] = int(len(picks))
+    result["isk_used"] = float(total_cost)
+    result["net_revenue_total"] = float(total_revenue)
+    result["profit_total"] = float(total_profit)
+    result["total_fees_taxes"] = float(total_fees_taxes)
+    result["m3_used"] = float(total_m3)
+    result["cargo_total"] = float(cargo_total)
+    result["total_route_m3"] = float(total_m3)
+    result["cargo_util_pct"] = (float(total_m3) / cargo_total * 100.0) if cargo_total > 0.0 else 0.0
+    result["budget_total"] = float(budget_total)
+    result["budget_util_pct"] = (float(total_cost) / budget_total * 100.0) if budget_total > 0.0 else 0.0
+    result["expected_realized_profit_total"] = float(expected_realized_total)
+    result["full_sell_profit_total"] = float(full_sell_total)
+    result["total_shipping_cost"] = float(total_shipping_cost)
+    result["shipping_cost_total"] = float(total_shipping_cost)
+    result["total_route_cost"] = float(total_route_cost)
+    result["total_transport_cost"] = float(total_transport_cost)
+    result["route_actionable"] = bool(picks and not bool(result.get("route_blocked_due_to_transport", False)))
+    result["budget_left_reason"] = (
+        "Keine weiteren Picks erfuellen Profit-Floors nach Gebuehren und Routenkosten."
+        if budget_total > 0.0 and (budget_total - total_cost) / budget_total >= 0.05
+        else ""
+    )
+    result["route_prune_reason"] = _derive_route_prune_reason(result)
+
+    csv_path = str(result.get("csv_path", "") or "").strip()
+    if csv_path:
+        write_csv(csv_path, picks)
+    return result
+
+
+def _pick_expected_realized_profit(pick: dict) -> float:
+    return float(pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0)
+
+
+def _resolve_internal_route_operational_profit_floor(cfg: dict, filters_used: dict) -> float:
+    route_search_cfg = cfg.get("route_search", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(route_search_cfg, dict):
+        route_search_cfg = {}
+    explicit_floor = float(route_search_cfg.get("internal_self_haul_min_expected_profit_isk", 0.0) or 0.0)
+    if explicit_floor > 0.0:
+        return float(explicit_floor)
+    strict_floor = float(_resolve_strict_mode_cfg(cfg).get("planned_profit_floor_isk", 0.0) or 0.0)
+    profile_floor = float(filters_used.get("_profile_min_expected_profit_isk", 0.0) or 0.0)
+    return float(max(strict_floor, profile_floor, 0.0))
+
+
+def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
+    picks = list(result.get("picks", []) or [])
+    result["route_mix_cleanup_applied"] = False
+    result["route_mix_cleanup_removed_count"] = 0
+    result["route_mix_cleanup_removed_picks"] = []
+    result["route_mix_cleanup_notes"] = []
+    if len(picks) < 2:
+        return result
+
+    from execution_plan import _CAT_MANDATORY, _CAT_SPECULATIVE, _categorize_pick, _is_price_sensitive
+    from no_trade import _profile_min_strong_picks
+    from route_search import summarize_route_for_ranking
+
+    filters_used = result.get("filters_used", {})
+    if not isinstance(filters_used, dict):
+        filters_used = {}
+    profile_name = str(filters_used.get("_profile_name", "") or "")
+    min_strong_picks = int(_profile_min_strong_picks(profile_name)) if profile_name else 1
+    transport_mode = str(result.get("transport_mode", "") or "").strip().lower()
+    internal_floor = _resolve_internal_route_operational_profit_floor(cfg, filters_used)
+
+    # Replay on 2026-03-13 showed weak optional add-on picks contributing only
+    # a few percent of expected profit while dragging route confidence down by
+    # ~0.06. Keep this pass narrow: only remove non-mandatory add-ons when the
+    # route score improves, confidence or market quality recover materially,
+    # and the lost profit share stays small.
+    max_profit_share_by_category = {
+        _CAT_SPECULATIVE: 0.15,
+        "optional": 0.10,
+    }
+    min_gain_by_category = {
+        _CAT_SPECULATIVE: 0.03,
+        "optional": 0.04,
+    }
+
+    removed_entries: list[dict] = []
+    notes: list[str] = []
+    while True:
+        current_picks = list(result.get("picks", []) or [])
+        if len(current_picks) < 2:
+            break
+        current_summary = summarize_route_for_ranking(result)
+        current_total_profit = max(1.0, float(current_summary.get("total_expected_realized_profit", 0.0) or 0.0))
+        current_score = float(current_summary.get("risk_adjusted_score", 0.0) or 0.0)
+        current_conf = float(current_summary.get("route_confidence", 0.0) or 0.0)
+        current_quality = float(current_summary.get("market_quality_factor", 0.0) or 0.0)
+        current_strong_picks = sum(1 for p in current_picks if _categorize_pick(p) != _CAT_SPECULATIVE)
+
+        best_candidate: dict | None = None
+        for idx, pick in enumerate(current_picks):
+            category = str(_categorize_pick(pick))
+            if category == _CAT_MANDATORY:
+                continue
+            pick_conf = float(
+                pick.get(
+                    "decision_overall_confidence",
+                    pick.get("overall_confidence", pick.get("strict_confidence_score", pick.get("fill_probability", 0.0))),
+                )
+                or 0.0
+            )
+            pick_quality = float(pick.get("market_quality_score", pick.get("market_plausibility_score", 1.0)) or 1.0)
+            pick_manip = float(pick.get("manipulation_risk_score", 0.0) or 0.0)
+            pick_retention = float(pick.get("profit_retention_ratio", 0.0) or 0.0)
+            if pick_retention <= 0.0:
+                top_profit = float(pick.get("profit_at_top_of_book", 0.0) or 0.0)
+                conservative_profit = float(
+                    pick.get("profit_at_conservative_executable_price", _pick_expected_realized_profit(pick)) or 0.0
+                )
+                pick_retention = (conservative_profit / top_profit) if top_profit > 0.0 else 1.0
+            weak_signals: list[str] = []
+            if category == _CAT_SPECULATIVE:
+                weak_signals.append("speculative")
+            if _is_price_sensitive(pick):
+                weak_signals.append("price-sensitive")
+            if pick_quality < 0.62:
+                weak_signals.append("fragile-market-quality")
+            if pick_conf < 0.58:
+                weak_signals.append("low-confidence")
+            if 0.0 < pick_retention < 0.72:
+                weak_signals.append("weak-profit-retention")
+            if pick_manip >= 0.35:
+                weak_signals.append("elevated-manip-risk")
+
+            trial_picks = current_picks[:idx] + current_picks[idx + 1 :]
+            if not trial_picks:
+                continue
+
+            trial_strong_picks = sum(1 for p in trial_picks if _categorize_pick(p) != _CAT_SPECULATIVE)
+            if current_strong_picks >= min_strong_picks and trial_strong_picks < min_strong_picks:
+                continue
+
+            trial_result = dict(result)
+            trial_result["picks"] = list(trial_picks)
+            _refresh_route_result_from_current_picks(trial_result)
+            if (
+                transport_mode == "internal_self_haul"
+                and internal_floor > 0.0
+                and float(trial_result.get("expected_realized_profit_total", 0.0) or 0.0) + 1e-6 < internal_floor
+            ):
+                continue
+
+            trial_summary = summarize_route_for_ranking(trial_result)
+            if not bool(trial_summary.get("actionable", False)):
+                continue
+
+            removed_profit = _pick_expected_realized_profit(pick)
+            profit_share = removed_profit / current_total_profit
+            conf_gain = float(trial_summary.get("route_confidence", 0.0) or 0.0) - current_conf
+            quality_gain = float(trial_summary.get("market_quality_factor", 0.0) or 0.0) - current_quality
+            trial_score = float(trial_summary.get("risk_adjusted_score", 0.0) or 0.0)
+            score_gain_ratio = (trial_score - current_score) / max(abs(current_score), 1.0)
+
+            max_profit_share = float(max_profit_share_by_category.get(category, 0.10))
+            min_gain = float(min_gain_by_category.get(category, 0.04))
+            score_retained = trial_score / max(abs(current_score), 1.0)
+            if profit_share > max_profit_share + 1e-9:
+                continue
+            if conf_gain + 1e-9 < min_gain and quality_gain + 1e-9 < min_gain:
+                continue
+            clearly_better_route = score_gain_ratio > 0.01
+            near_same_score_but_cleaner = (
+                profit_share <= 0.05 + 1e-9
+                and score_retained >= 0.98
+                and (conf_gain >= (min_gain + 0.01) or quality_gain >= (min_gain + 0.01))
+            )
+            weak_tail_cleanup = (
+                len(weak_signals) >= 2
+                and profit_share <= (0.10 if category == _CAT_SPECULATIVE else 0.07)
+                and score_retained >= (0.96 if category == _CAT_SPECULATIVE else 0.97)
+                and (conf_gain >= 0.015 or quality_gain >= 0.015)
+                and ((conf_gain + quality_gain) >= 0.03)
+            )
+            if not clearly_better_route and not near_same_score_but_cleaner and not weak_tail_cleanup:
+                continue
+
+            candidate = {
+                "idx": idx,
+                "pick": dict(pick),
+                "category": category,
+                "profit_share": float(profit_share),
+                "conf_gain": float(conf_gain),
+                "quality_gain": float(quality_gain),
+                "score_gain_ratio": float(score_gain_ratio),
+                "weak_signals": list(weak_signals),
+                "score_retained": float(score_retained),
+            }
+            if best_candidate is None or (
+                candidate["score_gain_ratio"],
+                candidate["conf_gain"] + candidate["quality_gain"],
+                -candidate["profit_share"],
+            ) > (
+                best_candidate["score_gain_ratio"],
+                best_candidate["conf_gain"] + best_candidate["quality_gain"],
+                -best_candidate["profit_share"],
+            ):
+                best_candidate = candidate
+
+        if best_candidate is None:
+            break
+
+        removed_pick = dict(best_candidate["pick"])
+        current_picks.pop(int(best_candidate["idx"]))
+        result["picks"] = list(current_picks)
+        weak_signal_text = ", ".join(str(sig) for sig in list(best_candidate.get("weak_signals", []) or []))
+        note = (
+            f"Removed weak {best_candidate['category']} add-on pick {removed_pick.get('name', '?')}: "
+            f"+{best_candidate['conf_gain']:.2f} route confidence, "
+            f"+{best_candidate['quality_gain']:.2f} market quality, "
+            f"-{best_candidate['profit_share']:.1%} expected profit share."
+        )
+        if weak_signal_text:
+            note += f" Signals: {weak_signal_text}."
+        removed_entries.append(
+            {
+                "type_id": int(removed_pick.get("type_id", 0) or 0),
+                "name": str(removed_pick.get("name", "") or ""),
+                "category": str(best_candidate["category"]),
+                "expected_profit_removed": float(_pick_expected_realized_profit(removed_pick)),
+                "profit_share_removed": float(best_candidate["profit_share"]),
+                "route_confidence_gain": float(best_candidate["conf_gain"]),
+                "market_quality_gain": float(best_candidate["quality_gain"]),
+                "risk_adjusted_score_gain_ratio": float(best_candidate["score_gain_ratio"]),
+                "reason": "route_mix_cleanup_tradeoff",
+                "note": note,
+            }
+        )
+        notes.append(note)
+        _refresh_route_result_from_current_picks(result)
+
+    if not removed_entries:
+        return result
+
+    explain = result.get("explain", {})
+    if not isinstance(explain, dict):
+        explain = {}
+    explain["route_mix_cleanup_removed"] = list(removed_entries)
+    result["explain"] = explain
+    result["route_mix_cleanup_applied"] = True
+    result["route_mix_cleanup_removed_count"] = int(len(removed_entries))
+    result["route_mix_cleanup_removed_picks"] = list(removed_entries)
+    result["route_mix_cleanup_notes"] = list(notes)
+    return _refresh_route_result_from_current_picks(result)
+
+
+def _apply_internal_self_haul_operational_filter(result: dict, cfg: dict) -> dict:
+    transport_mode = str(result.get("transport_mode", "") or "").strip().lower()
+    filters_used = result.get("filters_used", {})
+    if not isinstance(filters_used, dict):
+        filters_used = {}
+    floor = _resolve_internal_route_operational_profit_floor(cfg, filters_used)
+    if transport_mode != "internal_self_haul":
+        result["operational_profit_floor_isk"] = 0.0
+        result["operational_filter_note"] = ""
+        result["operational_filter_applied"] = False
+        result["operational_filter_reason"] = ""
+        result["suppressed_expected_realized_profit_total"] = 0.0
+        result["suppressed_full_sell_profit_total"] = 0.0
+        result["suppressed_isk_used"] = 0.0
+        return result
+    result["operational_profit_floor_isk"] = float(floor)
+    if floor <= 0.0:
+        return result
+
+    result["operational_filter_note"] = (
+        f"Internal nullsec routes require at least {floor / 1_000_000:.1f}m ISK expected realized profit."
+    )
+    if not bool(result.get("route_actionable", False)):
+        result["operational_filter_applied"] = False
+        return result
+
+    expected_profit = float(result.get("expected_realized_profit_total", 0.0) or 0.0)
+    if expected_profit + 1e-6 >= floor:
+        result["operational_filter_applied"] = False
+        return result
+
+    result["operational_filter_applied"] = True
+    result["operational_filter_reason"] = "internal_route_profit_below_operational_floor"
+    result["suppressed_expected_realized_profit_total"] = float(expected_profit)
+    result["suppressed_full_sell_profit_total"] = float(result.get("full_sell_profit_total", result.get("profit_total", 0.0)) or 0.0)
+    result["suppressed_isk_used"] = float(result.get("isk_used", 0.0) or 0.0)
+    result["picks"] = []
+    result["route_prune_reason"] = "internal_route_profit_below_operational_floor"
+    return _refresh_route_result_from_current_picks(result)
+
+
+def _finalize_route_result_runtime_state(result: dict, cfg: dict) -> dict:
+    _refresh_route_result_from_current_picks(result)
+    _apply_post_selection_route_mix_cleanup(result, cfg)
+    return _apply_internal_self_haul_operational_filter(result, cfg)
+
+
 def _choose_portfolio_from_candidates_only(
     route_label: str,
     candidates: list[TradeCandidate],
@@ -1083,6 +1591,23 @@ def run_route_wide_leg(
         target_market=str(immediate_dest_node["label"]),
         transport_confidence=transport_summary.get("cost_model_confidence", "normal"),
     )
+    pre_profile_pick_count = len(picks)
+    picks = _apply_post_build_profile_filters(
+        picks,
+        filters_used,
+        explain=explain,
+        budget_isk=float(budget_isk),
+        route_label=route_label,
+    )
+    if len(picks) != pre_profile_pick_count:
+        if picks:
+            picks, transport_summary = apply_route_costs_and_prune(picks, route_context, filters_used)
+        else:
+            transport_summary = dict(transport_summary)
+            transport_summary["total_shipping_cost"] = 0.0
+            transport_summary["total_route_cost"] = 0.0
+            transport_summary["total_transport_cost"] = 0.0
+            transport_summary["total_route_m3"] = 0.0
     result = _finalize_route_result(
         route_tag=route_tag,
         route_label=route_label,
@@ -1103,7 +1628,8 @@ def run_route_wide_leg(
         explain=explain,
         funnel=FilterFunnel(),
     )
-    return _apply_confidence_calibration_to_route_result(result, cfg)
+    result = _apply_confidence_calibration_to_route_result(result, cfg)
+    return _finalize_route_result_runtime_state(result, cfg)
 
 
 def run_route(
@@ -1321,31 +1847,24 @@ def run_route(
 
     # --- Profile post-build filters (applied after calibration so confidence is final) ---
     # Gap 1: min_profit_per_m3 gate (set by apply_profile_to_filters as _profile_min_profit_per_m3)
-    from risk_profiles import filter_picks_by_profile
-    picks, _profile_rejected_picks = filter_picks_by_profile(picks, filters_used)
-    if _profile_rejected_picks:
-        _profile_name = str(filters_used.get("_profile_name", "") or "")
-        print(f"    [Profile:{_profile_name}] {len(_profile_rejected_picks)} Pick(s) nach Profit/m3-Gate entfernt.")
+    pre_profile_pick_count = len(picks)
+    picks = _apply_post_build_profile_filters(
+        picks,
+        filters_used,
+        explain=explain,
+        budget_isk=float(budget_isk),
+        route_label=route_label,
+    )
+    if len(picks) != pre_profile_pick_count:
+        if picks:
+            picks, transport_summary = apply_route_costs_and_prune(picks, route_context, filters_used)
+        else:
+            transport_summary = dict(transport_summary)
+            transport_summary["total_shipping_cost"] = 0.0
+            transport_summary["total_route_cost"] = 0.0
+            transport_summary["total_transport_cost"] = 0.0
+            transport_summary["total_route_m3"] = 0.0
 
-    # Gap 2: min_confidence gate — confidence values are final after calibration
-    _profile_min_conf = float(filters_used.get("_profile_min_confidence", 0.0) or 0.0)
-    if _profile_min_conf > 0.0:
-        _conf_kept: list[dict] = []
-        _conf_dropped = 0
-        for _p in picks:
-            _conf = float(
-                _p.get("decision_overall_confidence",
-                    _p.get("calibrated_overall_confidence",
-                        _p.get("overall_confidence", 0.0))) or 0.0
-            )
-            if _conf >= _profile_min_conf:
-                _conf_kept.append(_p)
-            else:
-                _conf_dropped += 1
-        if _conf_dropped:
-            _profile_name = str(filters_used.get("_profile_name", "") or "")
-            print(f"    [Profile:{_profile_name}] {_conf_dropped} Pick(s) unter min_confidence={_profile_min_conf:.0%} entfernt.")
-        picks = _conf_kept
     # ---------------------------------------------------------------------------------
 
     result = _finalize_route_result(
@@ -1370,7 +1889,8 @@ def run_route(
         dest_node_meta=dest_node_meta,
         funnel=funnel,
     )
-    return _apply_confidence_calibration_to_route_result(result, cfg)
+    result = _apply_confidence_calibration_to_route_result(result, cfg)
+    return _finalize_route_result_runtime_state(result, cfg)
 
 
 def _cfg_with_enabled_character_context(cfg: dict) -> dict:
@@ -1440,6 +1960,19 @@ def run_cli() -> None:
     command = str(cli.get("command", "run") or "run").strip().lower()
     if command == "journal":
         run_journal_cli(list(cli.get("journal_argv", []) or []))
+        return
+    if command == "clean":
+        result = run_safe_cleanup()
+        print("Clean-Start Bereinigung abgeschlossen.")
+        print(f"  Dateien entfernt: {len(list(result.get('removed_files', []) or []))}")
+        print(f"  Verzeichnisse entfernt: {len(list(result.get('removed_dirs', []) or []))}")
+        print("  Behalten: cache/token.json, cache/trade_journal.sqlite3, cache/character_context/")
+        failures = list(result.get("failures", []) or [])
+        if failures:
+            print("  Fehler:")
+            for failure in failures:
+                print(f"    - {failure.get('path', '')}: {failure.get('error', '')}")
+            raise SystemExit(1)
         return
     cfg = load_config(CONFIG_PATH)
     if not cfg:
@@ -1779,30 +2312,12 @@ def run_cli() -> None:
             filtered_picks = enforce_route_destination(list(result.get("picks", [])), str(dst_node.get("label", "")))
             if len(filtered_picks) != len(list(result.get("picks", []))):
                 result["picks"] = filtered_picks
-                isk_used = sum(float(p.get("cost", 0.0)) for p in filtered_picks)
-                profit_total = sum(float(p.get("profit", 0.0)) for p in filtered_picks)
-                m3_used = sum(float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0)) for p in filtered_picks)
-                net_revenue_total = sum(float(p.get("revenue_net", 0.0)) for p in filtered_picks)
-                total_fees_taxes = sum(pick_total_fees_taxes(p) for p in filtered_picks)
-                expected_realized_total = sum(float(p.get("expected_realized_profit_90d", p.get("expected_profit_90d", 0.0)) or 0.0) for p in filtered_picks)
-                full_sell_total = sum(float(p.get("gross_profit_if_full_sell", p.get("profit", 0.0)) or 0.0) for p in filtered_picks)
-                budget_total = float(result.get("budget_total", budget_isk))
-                cargo_total = float(result.get("cargo_total", cargo_m3))
-                result["items_count"] = int(len(filtered_picks))
-                result["isk_used"] = float(isk_used)
-                result["profit_total"] = float(profit_total)
-                result["expected_realized_profit_total"] = float(expected_realized_total)
-                result["full_sell_profit_total"] = float(full_sell_total)
-                result["m3_used"] = float(m3_used)
-                result["net_revenue_total"] = float(net_revenue_total)
-                result["total_fees_taxes"] = float(total_fees_taxes)
-                result["budget_util_pct"] = (float(isk_used) / budget_total * 100.0) if budget_total > 0 else 0.0
-                result["cargo_util_pct"] = (float(m3_used) / cargo_total * 100.0) if cargo_total > 0 else 0.0
-                result["route_actionable"] = bool(filtered_picks and not bool(result.get("route_blocked_due_to_transport", False)))
-                result["route_prune_reason"] = str(result.get("route_prune_reason", "")) or ("no_picks" if not filtered_picks else "")
+                _refresh_route_result_from_current_picks(result)
+                _apply_internal_self_haul_operational_filter(result, cfg)
             # Apply profile-adjusted route score for leaderboard ranking
             apply_profile_to_route_result(active_profile_name, active_profile_params, result)
             result["_active_risk_profile"] = active_profile_name
+            result["_active_risk_profile_params"] = dict(active_profile_params)
             _attach_runtime_advisories_to_result(result, character_context, personal_calibration_runtime, budget_isk=budget_isk)
             route_results.append(result)
             if "csv_path" in result:
@@ -2152,6 +2667,8 @@ def run_cli() -> None:
             forward_funnel=forward_result.get("funnel"),
             return_funnel=return_result.get("funnel"),
             run_uuid=plan_id,
+            forward_result=forward_result,
+            return_result=return_result,
         )
         plan_path = _write_trade_plan_artifact(
             [forward_result, return_result],

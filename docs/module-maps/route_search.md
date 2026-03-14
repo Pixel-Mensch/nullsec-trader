@@ -8,6 +8,7 @@ profiles from config and node data. This map is based on targeted inspection.
 ## Responsibilities
 
 - owns route ranking summaries
+- caps route confidence by aggregate pick market quality
 - owns numeric route ranking values
 - owns allowed route-pair expansion and dedupe
 - normalizes route-search config
@@ -17,7 +18,8 @@ profiles from config and node data. This map is based on targeted inspection.
 - route result dicts
 - node catalog entries
 - route-search config
-- transport-confidence labels and shipping policy data
+- transport-confidence labels, pick market-quality fields, and shipping policy
+  data
 
 ## Outputs
 
@@ -56,6 +58,7 @@ profiles from config and node data. This map is based on targeted inspection.
 ## Common Change Types
 
 - adjust route scoring weights or penalties
+- change how route confidence reacts to weak pick mixes
 - change allowed-pair policy handling
 - alter node dedupe or alias behavior
 - add ranking explanation fields
@@ -63,6 +66,8 @@ profiles from config and node data. This map is based on targeted inspection.
 ## Risk Areas
 
 - ranking semantics affect both runtime choice and displayed results
+- route-confidence changes propagate into leaderboard, no-trade, and execution
+  plan artifacts
 - allowed-pair logic can silently include or exclude routes
 - transport confidence and route penalties are easy to double-count
 

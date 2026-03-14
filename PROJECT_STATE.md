@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-08
+Last updated: 2026-03-14
 
 ## Snapshot
 
@@ -18,10 +18,12 @@ Reviewed this session:
 
 - `AGENTS.md`
 - `README.md`
+- `.gitignore`
 - `ARCHITECTURE.md`
 - `pyproject.toml`
 - `config.json`
 - `main.py`
+- `runtime_cleanup.py`
 - `runtime_runner.py`
 - `candidate_engine.py`
 - `character_profile.py`
@@ -55,6 +57,7 @@ Reviewed this session:
 - `tests/test_route_search.py`
 - `tests/test_risk_profiles.py`
 - `tests/test_webapp.py`
+- `tests/test_runtime_cleanup.py`
 - current `git status`
 - `python -m pytest -q`
 - focused live CLI run on 2026-03-08 using local overlay config
@@ -78,6 +81,9 @@ Not fully re-audited this session:
 ## Confirmed Implemented Capabilities
 
 - CLI entry path: `main.py` -> `runtime_runner.run_cli()`
+- safe CLI `clean` / `cleanup` mode for removing generated reports, snapshots,
+  transient HTTP/type caches, and Python cache directories while preserving
+  local auth tokens, character cache, and journal state
 - live and replay client support
 - route profile, chain, roundtrip, and snapshot-only modes
 - candidate generation for `instant`, `fast_sell`, and `planned_sell`
@@ -88,6 +94,19 @@ Not fully re-audited this session:
 - cargo-fill density checks now compare expected-realized profit on both sides
   for planned exits
 - execution plan, leaderboard, CSV, and summary outputs
+- route-profile, chain, roundtrip, leaderboard, and no-trade text artifacts
+  now distinguish between actionable routes/legs and aggregate sequential or
+  alternative totals instead of implying one simultaneous executable spend
+- execution-plan / leaderboard rendering now only shows internal-route floor
+  metadata for actual `internal_self_haul` routes instead of leaking that
+  floor onto external shipping routes
+- price-sensitive or otherwise materially repriced picks now show an explicit
+  profit-basis block in execution plans: quote basis, visible-book profit
+  proxy, conservative executable profit proxy, retention, and the displayed
+  profit basis used in the plan
+- final route-mix cleanup in `runtime_runner.py` now removes some weak
+  speculative / price-sensitive tail picks more aggressively when route quality
+  improves, profit share stays small, and route score remains effectively intact
 - local trade journal and confidence calibration support
 - targeted test suite plus lightweight custom test runner
 - optional private character context via EVE SSO/ESI with local token storage,
@@ -153,8 +172,12 @@ Not fully re-audited this session:
   parity and no longer serializes `instant` picks with `proposed_sell_price=0`
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
-- the web app no longer auto-shuts down during a long-running analysis request;
-  active in-flight requests now block the heartbeat idle-exit path
+- the local web app no longer uses a browser heartbeat or idle auto-shutdown;
+  it now stays up until the operator stops the process explicitly
+- the web journal page now surfaces current cached character snapshot data
+  (open orders plus wallet transaction/journal counts) even when the local
+  journal DB is empty; opening the dedicated Reconcile/Unmatched tabs now
+  triggers the real reconciliation flow instead of showing an inert placeholder
 - the `/analysis` and `/analysis/run` browser layout now allows analysis cards
   and log/report blocks to shrink correctly within the viewport; long paths and
   runtime logs no longer create page-wide horizontal overflow
@@ -168,6 +191,51 @@ Not fully re-audited this session:
 - configurable risk profiles (6 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
+- route-profile pick filtering is now shared across `run_route()` and
+  `run_route_wide_leg()`: pick-level expected profit, profit density,
+  confidence, and max-budget-share rules are enforced after final transport and
+  calibration data exist
+- candidate quality is now gated more conservatively through the existing
+  market-plausibility seam: fragile book structure, weak profit retention after
+  repricing, and manipulation-heavy setups can now hard-reject a candidate even
+  when paper profit still looks attractive
+- replay-guided calibration on 2026-03-13 softened only the generic
+  `DEPTH_COLLAPSE` / `ORDERBOOK_CONCENTRATION` quality penalties and the
+  candidate-stage confidence haircut, so robust survivors with decent
+  retention can remain actionable without re-admitting fake-spread /
+  unusable-depth bait
+- `instant` candidates no longer recover artificially high overall confidence
+  after the market-quality haircut; route-level confidence now also caps itself
+  by the average pick market quality instead of only fill/transport confidence
+- final pick selection now uses the same quality-aware scoring seam in
+  portfolio ranking, local search, and cargo fill, so thin-book or
+  price-sensitive candidates are less likely to re-enter as final picks after
+  surviving initial generation
+- `mandatory` pick labeling is now stricter for instant exits: price-sensitive
+  or low market-quality picks are downgraded to optional/speculative instead of
+  being presented as first-buy convictions
+- cargo-fill picks can no longer bypass the visible profile
+  `Max Budget/Item`; profile application now clamps cargo-fill share caps to
+  the same effective item-share limit shown in the output
+- internal `internal_self_haul` routes now also pass through an explicit
+  operational expected-profit floor
+  (`route_search.internal_self_haul_min_expected_profit_isk`, default
+  `2,000,000 ISK`) so low-signal internal routes are suppressed instead of
+  shown as actionable
+- execution-plan totals now distinguish between the single best actionable
+  route and aggregate totals across alternative routes, with explicit wording
+  that the aggregate is not one combined executable plan
+- final route results now pass through a small post-selection route-mix cleanup
+  in `runtime_runner.py`: clearly weak optional/speculative add-on picks can be
+  removed after selection when they only contribute a small profit share but
+  materially improve route confidence / market-quality and do not materially
+  worsen the route score
+- route prune reasons are now more specific for common failure families:
+  no candidates, profit floor, confidence, budget rule, fill/depth, sell time,
+  invalid volume, post-portfolio constraints, and internal route floor
+- missing or invalid type volume is no longer silently normalized into a cheap
+  executable pick path; invalid volume now stays invalid and is surfaced via
+  `invalid_volume` / `candidates_invalid_volume`
 - Do Not Trade decision engine (`no_trade.py`): 11 structured reason codes,
   profile-aware thresholds, near-miss display, cross-profile comparison;
   writes `no_trade_<timestamp>.txt` and prints `[DO NOT TRADE]` on console
@@ -181,6 +249,8 @@ Not fully re-audited this session:
 - `ARCHITECTURE.md` and module naming are strong enough to build a narrow file map
 - hotspot module maps can now live under `docs/module-maps/` to reduce repeat
   source-file loading
+- the repo now has a low-risk clean-start path for report clutter and oversized
+  transient runtime caches
 - project dependencies are minimal in `pyproject.toml`
 - the runtime entry path is clear and non-magical
 - tests are split into targeted modules instead of one giant file
@@ -210,9 +280,9 @@ Not fully re-audited this session:
   limits; very old trades can stay uncertain when the loaded transaction window
   does not reach far enough back
 - personal analytics and the opt-in decision layer are now visible in journal
-  views, normal runtime output, and execution plans, but chain/roundtrip
-  summary artifacts outside `execution_plan.py` still do not mirror the same
-  compact status block
+  views, normal runtime output, execution plans, and the adjacent no-trade /
+  summary artifacts, but the non-CLI web surfaces still intentionally stay
+  lighter-weight
 - the personal decision layer is intentionally narrow: it only adjusts
   `decision_overall_confidence` with hard caps and explainability, so evidence
   for broader scope tuning is still limited
@@ -223,14 +293,17 @@ Not fully re-audited this session:
 
 ## Current Focus
 
-Observed worktree activity on 2026-03-07 suggests current feature work is
+Observed worktree activity on 2026-03-13 suggests current feature work is
 centered on:
 
-- risk-profile selection and enforcement
+- hard pick-level profile enforcement and explainable prune reasons
 - route-ranking adjustments by profile
-- execution-plan output restructuring
+- replay-based calibration of market-quality and anti-bait thresholds
+- post-selection route-mix cleanup for weak optional/speculative add-ons
+- execution-plan and summary-output restructuring with honest
+  aggregate-vs-actionable / sequential-leg semantics
 - CLI/runtime integration for profile-aware output
-- targeted core-logic cleanup in portfolio construction
+- targeted core-logic cleanup in portfolio construction and volume handling
 - optional private character-context integration and cacheable ESI sync
 - wallet-to-journal reconciliation and personal trade-history reporting
 - wallet paging, freshness visibility, and conservative fee/ref matching for
@@ -251,6 +324,7 @@ Files that indicate this focus:
 - `route_search.py`
 - `portfolio_builder.py`
 - `execution_plan.py`
+- `runtime_clients.py`
 - `character_profile.py`
 - `journal_reconciliation.py`
 - `journal_store.py`
@@ -272,11 +346,35 @@ Files that indicate this focus:
 
 ## Known Issues And Uncertainties
 
-- Risk-profile integration is confirmed end-to-end (see Confirmed Implemented
-  Capabilities below and TASK_QUEUE Task 1). No known open gaps remain.
+- Route-profile, chain, roundtrip, leaderboard, and no-trade text outputs now
+  share the same honest aggregate semantics and preserve internal-route floor
+  messaging, but browser/UI surfaces were not re-audited in this session.
+- replay calibration used the focused O4T/Jita fixture plus a narrow
+  `replay_snapshot.json` route search. Those checks confirmed that prior bait
+  picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage
+  Control`, `Heavy Gremlin Compact Energy Neutralizer`, and `Drone
+  Mutaplasmid Residue` stayed out, while robust survivors like
+  `Polarized Heavy Neutron Blaster` and `Noise-25 'Needlejack' Filament`
+  regained stronger actionable labeling.
+- route confidence can still be pulled down by a weak optional pick because
+  `route_search.py` intentionally caps by average pick market quality across
+  the whole selected route mix. That behavior was left unchanged in this
+  session.
+- a narrow post-selection route-mix cleanup seam now exists, but the current
+  narrow `replay_snapshot.json` rerun did not previously produce a live removal
+  after the latest market-quality calibration; the cleanup is now slightly more
+  willing to drop weak speculative / price-sensitive tails, but still only when
+  score retention remains high and route confidence / quality recover.
+- execution-plan profit-basis transparency is now much better for PRICE-SENS
+  picks, but it still explains the conservative basis via profit proxies and
+  implied net-exit math rather than a separately persisted repriced unit sell
+  quote.
 - `route_search.py` speculative penalty was re-reviewed on 2026-03-07. The
   small planned-share term still looks like a separate route-composition risk
   heuristic, not a confirmed double-counting defect, so no change was made.
+- Invalid type volume is now conservatively rejected instead of silently
+  coerced to a fallback value. A future follow-up may still want an active
+  cache/backfill repair path for missing volumes before candidate rejection.
 - Character context is optional by design. Live sync now falls back to cache or
   generic defaults, but order exposure is currently surfaced as a diagnostic
   signal only, not a route-ranking penalty.
@@ -301,9 +399,12 @@ Files that indicate this focus:
   `GET /analysis` 500, dashboard stat mismatches, and input parse robustness).
   Full-run analysis still depends on CLI-style stdout and artifact contracts
   exposed by `runtime_runner.py`.
-- Browser analysis now survives long runtime calls because `webapp.app` blocks
-  idle auto-shutdown while a request is still in flight, but the browser layer
-  still depends on heartbeat semantics for idle lifetime once requests finish.
+- Browser analysis no longer depends on heartbeat semantics; the local web app
+  stays alive until it is stopped explicitly.
+- The local journal remains plan-centric by design: overview/open/closed/report/
+  personal/calibration still depend on imported or recorded journal entries.
+  The web UI now makes that clearer by showing character snapshot counts and by
+  fetching real reconcile/unmatched data on the dedicated tabs.
 - Stable replay IDs now intentionally reuse the same `trade_plan_<plan_id>.json`
   filename for identical snapshot+input runs. That improves reproducibility and
   journal parity, but the canonical trade-plan file is overwritten when the
@@ -317,6 +418,10 @@ Files that indicate this focus:
   contain behavior not yet reflected here.
 - `config.local.json` exists locally but is Git-ignored; secret values were not
   inspected.
+- `clean` / `cleanup` is intentionally conservative: it preserves
+  `cache/token.json`, `cache/trade_journal.sqlite3`, and
+  `cache/character_context/` rather than doing a full local identity/history
+  reset.
 - Always check `git status --short` before editing. This repository often has
   in-flight work on core runtime and journal modules.
 

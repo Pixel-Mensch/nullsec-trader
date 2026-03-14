@@ -1,5 +1,6 @@
 from confidence_calibration import transport_confidence_to_score
 from explainability import build_route_explainability
+from market_plausibility import market_quality_score_from_metrics
 from shipping import (
     _policy_provider_for_route,
     resolve_shipping_lane_cfg,
@@ -63,6 +64,10 @@ def _route_pick_expected_profit(pick: dict) -> float:
     return float(pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0)
 
 
+def _pick_market_quality(pick: dict) -> float:
+    return float(market_quality_score_from_metrics(pick))
+
+
 def summarize_route_for_ranking(route: dict) -> dict:
     picks = list(route.get("picks", []) or [])
     expected_realized_profit = float(route.get("expected_realized_profit_total", 0.0) or 0.0)
@@ -78,9 +83,11 @@ def summarize_route_for_ranking(route: dict) -> dict:
     raw_pick_confidences = [_pick_raw_confidence(p) for p in picks]
     calibrated_pick_confidences = [_pick_calibrated_confidence(p) for p in picks]
     decision_pick_confidences = [_pick_decision_confidence(p) for p in picks]
+    pick_market_qualities = [_pick_market_quality(p) for p in picks]
     avg_pick_raw_conf = (sum(raw_pick_confidences) / len(raw_pick_confidences)) if raw_pick_confidences else 0.0
     avg_pick_calibrated_conf = (sum(calibrated_pick_confidences) / len(calibrated_pick_confidences)) if calibrated_pick_confidences else avg_pick_raw_conf
     avg_pick_conf = (sum(decision_pick_confidences) / len(decision_pick_confidences)) if decision_pick_confidences else avg_pick_calibrated_conf
+    avg_pick_market_quality = (sum(pick_market_qualities) / len(pick_market_qualities)) if pick_market_qualities else 0.0
     raw_transport_conf = transport_confidence_to_score(
         route.get("raw_transport_confidence", route.get("cost_model_confidence", "normal"))
     )
@@ -122,6 +129,8 @@ def summarize_route_for_ranking(route: dict) -> dict:
             ),
         ),
     )
+    if picks:
+        route_confidence = min(route_confidence, avg_pick_market_quality)
     capital_lock_risk = max(0.0, min(1.0, (avg_days / 90.0) + concentration_penalty))
     risk_adjusted_score = (
         float(expected_realized_profit)
@@ -144,6 +153,7 @@ def summarize_route_for_ranking(route: dict) -> dict:
         "calibrated_transport_confidence": float(calibrated_transport_conf),
         "raw_pick_confidence": float(avg_pick_raw_conf),
         "calibrated_pick_confidence": float(avg_pick_calibrated_conf),
+        "market_quality_factor": float(avg_pick_market_quality),
         "total_expected_realized_profit": float(expected_realized_profit),
         "total_full_sell_profit": float(full_sell_profit),
         "average_expected_days_to_sell": float(avg_days),
@@ -206,6 +216,7 @@ def _resolve_route_search_cfg(cfg: dict) -> dict:
         "ranking_metric": str(raw.get("ranking_metric", "risk_adjusted_expected_profit") or "risk_adjusted_expected_profit").strip().lower(),
         "allow_all_structures_internal": bool(raw.get("allow_all_structures_internal", True)),
         "allow_shipping_lanes": bool(raw.get("allow_shipping_lanes", True)),
+        "internal_self_haul_min_expected_profit_isk": max(0.0, float(raw.get("internal_self_haul_min_expected_profit_isk", 0.0) or 0.0)),
         "allowed_pairs": list(raw.get("allowed_pairs", [])) if isinstance(raw.get("allowed_pairs", []), list) else [],
     }
 

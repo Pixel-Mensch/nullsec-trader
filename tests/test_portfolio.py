@@ -109,6 +109,159 @@ def test_try_cargo_fill_topup_existing_pick() -> None:
     assert "scc_surcharge_isk" in picks[0]
     assert "relist_fee_isk" in picks[0]
 
+
+def test_build_portfolio_prefers_cleaner_market_quality_pick() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    portfolio_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 1,
+        "max_liquidation_days_per_position": 30.0,
+        "max_share_of_estimated_demand_per_position": 1.0,
+    }
+    clean = nst.TradeCandidate(
+        type_id=2001,
+        name="Clean Book",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=140.0,
+        max_units=1,
+        profit_per_unit=40.0,
+        profit_pct=0.40,
+        instant=True,
+        fill_probability=0.90,
+        turnover_factor=1.0,
+        expected_days_to_sell=1.0,
+        expected_realized_profit_90d=40.0,
+        expected_realized_profit_per_m3_90d=40.0,
+        overall_confidence=0.80,
+        liquidity_confidence=0.85,
+        exit_confidence=0.85,
+        market_plausibility_score=0.92,
+        market_quality_score=0.90,
+        manipulation_risk_score=0.05,
+        profit_at_top_of_book=40.0,
+        profit_at_conservative_executable_price=38.0,
+        profit_retention_ratio=0.95,
+    )
+    fragile = nst.TradeCandidate(
+        type_id=2002,
+        name="Fragile Book",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=145.0,
+        max_units=1,
+        profit_per_unit=45.0,
+        profit_pct=0.45,
+        instant=True,
+        fill_probability=0.90,
+        turnover_factor=1.0,
+        expected_days_to_sell=1.0,
+        expected_realized_profit_90d=45.0,
+        expected_realized_profit_per_m3_90d=45.0,
+        overall_confidence=0.80,
+        liquidity_confidence=0.85,
+        exit_confidence=0.85,
+        market_plausibility_score=0.78,
+        market_quality_score=0.58,
+        manipulation_risk_score=0.35,
+        profit_at_top_of_book=90.0,
+        profit_at_conservative_executable_price=61.0,
+        profit_retention_ratio=0.68,
+        market_plausibility={"flags": ["THIN_TOP_OF_BOOK"]},
+    )
+
+    picks, _, _, _ = nst.build_portfolio([fragile, clean], 500.0, 100.0, fees, filters, portfolio_cfg)
+    assert len(picks) == 1
+    assert picks[0]["type_id"] == 2001
+
+
+def test_try_cargo_fill_skips_market_quality_gate_rejects() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters_used = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    port_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 10,
+        "cargo_fill_max_extra_items": 8,
+        "cargo_fill_ranking_metric": "profit_per_m3",
+        "cargo_fill_allow_topup_existing": False,
+    }
+    base_picks = [{
+        "type_id": 3001,
+        "name": "Base Item",
+        "qty": 1,
+        "unit_volume": 1.0,
+        "buy_avg": 50.0,
+        "sell_avg": 60.0,
+        "cost": 50.0,
+        "revenue_net": 60.0,
+        "profit": 10.0,
+        "profit_pct": 0.20,
+        "instant": True,
+        "suggested_sell_price": 60.0,
+        "order_duration_days": 90,
+        "liquidity_score": 1.0,
+        "history_volume_30d": 100.0,
+        "daily_volume": 10.0,
+        "dest_buy_depth_units": 20,
+        "instant_fill_ratio": 1.0,
+        "competition_price_levels_near_best": 0,
+        "queue_ahead_units": 0,
+        "fill_probability": 1.0,
+        "turnover_factor": 1.0,
+        "profit_per_m3": 10.0,
+        "profit_per_m3_per_day": 10.0,
+        "mode": "instant",
+        "target_sell_price": 60.0,
+        "avg_daily_volume_30d": 10.0,
+        "expected_days_to_sell": 1.0,
+        "sell_through_ratio_90d": 1.0,
+        "risk_score": 0.0,
+        "expected_profit_90d": 10.0,
+        "expected_realized_profit_90d": 10.0,
+        "expected_profit_per_m3_90d": 10.0,
+    }]
+    fragile = nst.TradeCandidate(
+        type_id=3002,
+        name="Fragile Fill",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=170.0,
+        max_units=1,
+        profit_per_unit=70.0,
+        profit_pct=0.70,
+        instant=True,
+        fill_probability=1.0,
+        turnover_factor=1.0,
+        expected_days_to_sell=1.0,
+        expected_realized_profit_90d=70.0,
+        expected_realized_profit_per_m3_90d=70.0,
+        overall_confidence=0.80,
+        liquidity_confidence=0.80,
+        exit_confidence=0.80,
+        market_plausibility_score=0.58,
+        market_quality_score=0.44,
+        manipulation_risk_score=0.46,
+        profit_at_top_of_book=140.0,
+        profit_at_conservative_executable_price=84.0,
+        profit_retention_ratio=0.60,
+        market_plausibility={"flags": ["THIN_TOP_OF_BOOK", "ORDERBOOK_CONCENTRATION"]},
+    )
+
+    picks, _, _, _, added = nst.try_cargo_fill(
+        base_picks=base_picks,
+        candidates=[fragile],
+        budget_isk=1_000.0,
+        cargo_m3=1_000.0,
+        fees=fees,
+        filters_used=filters_used,
+        port_cfg=port_cfg,
+    )
+
+    assert len(picks) == 1
+    assert picks[0]["type_id"] == 3001
+    assert added == 0
+
 def test_candidate_scaled_expected_days_keeps_queue_component() -> None:
     from portfolio_builder import _candidate_scaled_expected_days
 
@@ -617,4 +770,152 @@ def test_planned_sell_pick_has_zero_instant_fill_ratio() -> None:
     assert len(picks) == 1
     ratio = float(picks[0].get("instant_fill_ratio", 1.0))
     assert ratio == 0.0, f"planned_sell pick should have instant_fill_ratio=0.0, got {ratio}"
+
+
+def test_build_portfolio_rejects_pick_below_min_expected_profit() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters_used = {
+        "max_turnover_factor": 3.0,
+        "min_instant_fill_ratio": 0.0,
+        "order_duration_days": 90,
+        "min_expected_profit_isk": 500.0,
+    }
+    portfolio_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 10,
+        "max_liquidation_days_per_position": 99.0,
+        "max_share_of_estimated_demand_per_position": 1.0,
+    }
+    low_profit = nst.TradeCandidate(
+        type_id=7001,
+        name="too_small",
+        unit_volume=1.0,
+        buy_avg=100.0,
+        sell_avg=140.0,
+        max_units=1,
+        profit_per_unit=40.0,
+        profit_pct=0.40,
+        instant=True,
+        fill_probability=1.0,
+        expected_realized_profit_90d=40.0,
+        expected_realized_profit_per_m3_90d=40.0,
+        overall_confidence=1.0,
+    )
+    picks, _, _, _ = nst.build_portfolio([low_profit], 10_000.0, 100.0, fees, filters_used, portfolio_cfg)
+    assert picks == []
+
+
+def test_build_portfolio_skips_zero_volume_candidate() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0, "scc_surcharge": 0.0}
+    filters_used = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    portfolio_cfg = {
+        "max_item_share_of_budget": 1.0,
+        "max_items": 10,
+        "max_liquidation_days_per_position": 99.0,
+        "max_share_of_estimated_demand_per_position": 1.0,
+    }
+    bad_volume = nst.TradeCandidate(
+        type_id=7002,
+        name="bad_volume",
+        unit_volume=0.0,
+        buy_avg=100.0,
+        sell_avg=200.0,
+        max_units=5,
+        profit_per_unit=100.0,
+        profit_pct=1.0,
+        instant=True,
+        fill_probability=1.0,
+        expected_realized_profit_90d=500.0,
+        expected_realized_profit_per_m3_90d=0.0,
+        overall_confidence=1.0,
+    )
+    picks, _, _, _ = nst.build_portfolio([bad_volume], 10_000.0, 100.0, fees, filters_used, portfolio_cfg)
+    assert picks == []
+
+
+def test_compute_candidates_marks_invalid_volume_data() -> None:
+    class _ZeroVolumeESI(_FakeESI):
+        def resolve_type_volume(self, tid):
+            return 0.0
+
+    esi = _ZeroVolumeESI(history_30=100, history_7=20, reference_price=100.0)
+    source_orders, dest_orders = _simple_orders(dest_price=160.0)
+    explain = {}
+    candidates = nst.compute_candidates(
+        esi=esi,
+        source_orders=source_orders,
+        dest_orders=dest_orders,
+        fees={"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0},
+        filters=_strict_filters(),
+        dest_structure_id=123,
+        explain=explain,
+    )
+    assert candidates == []
+    assert int(explain.get("reason_counts", {}).get("invalid_volume", 0)) >= 1
+
+
+def test_cargo_fill_respects_profile_item_budget_cap() -> None:
+    fees = {"buy_broker_fee": 0.0, "sell_broker_fee": 0.0, "sales_tax": 0.0}
+    filters_used = {"max_turnover_factor": 3.0, "min_instant_fill_ratio": 0.0, "order_duration_days": 90}
+    port_cfg = nst.apply_profile_to_portfolio_cfg(
+        nst.BUILTIN_PROFILES["balanced"],
+        {
+            "max_item_share_of_budget": 1.0,
+            "cargo_fill_max_item_share_of_budget": 0.75,
+            "max_items": 10,
+            "cargo_fill_max_extra_items": 4,
+            "cargo_fill_ranking_metric": "profit_per_m3",
+            "cargo_fill_allow_topup_existing": False,
+        },
+    )
+    base_picks = [{
+        "type_id": 8001,
+        "name": "Base",
+        "qty": 1,
+        "unit_volume": 5.0,
+        "buy_avg": 50_000_000.0,
+        "sell_avg": 60_000_000.0,
+        "cost": 50_000_000.0,
+        "revenue_net": 60_000_000.0,
+        "profit": 10_000_000.0,
+        "expected_realized_profit_90d": 10_000_000.0,
+        "instant": True,
+        "mode": "instant",
+        "target_sell_price": 60_000_000.0,
+        "fill_probability": 1.0,
+        "turnover_factor": 1.0,
+        "profit_per_m3": 2_000_000.0,
+        "profit_per_m3_per_day": 2_000_000.0,
+        "expected_days_to_sell": 1.0,
+        "sell_through_ratio_90d": 1.0,
+    }]
+    overweight_fill = nst.TradeCandidate(
+        type_id=8002,
+        name="TooBigFill",
+        unit_volume=5.0,
+        buy_avg=225_000_000.0,
+        sell_avg=255_000_000.0,
+        max_units=1,
+        profit_per_unit=30_000_000.0,
+        profit_pct=0.1333,
+        instant=True,
+        fill_probability=1.0,
+        turnover_factor=1.0,
+        profit_per_m3=6_000_000.0,
+        profit_per_m3_per_day=6_000_000.0,
+        expected_realized_profit_90d=30_000_000.0,
+        expected_realized_profit_per_m3_90d=6_000_000.0,
+    )
+
+    picks, _, _, _, added = nst.try_cargo_fill(
+        base_picks=base_picks,
+        candidates=[overweight_fill],
+        budget_isk=500_000_000.0,
+        cargo_m3=10_000.0,
+        fees=fees,
+        filters_used=filters_used,
+        port_cfg=port_cfg,
+    )
+    assert added == 0
+    assert [p["type_id"] for p in picks] == [8001]
 

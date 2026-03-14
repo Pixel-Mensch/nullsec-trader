@@ -107,6 +107,56 @@ def _pick_manipulation_risk(p: dict) -> float:
     return float(p.get("manipulation_risk_score", 0.0) or 0.0)
 
 
+def _pick_market_quality(p: dict) -> float:
+    return float(p.get("market_quality_score", p.get("market_plausibility_score", 1.0)) or 1.0)
+
+
+def _pick_displayed_profit(p: dict) -> float:
+    return float(
+        p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0
+    )
+
+
+def _pick_visible_book_profit(p: dict) -> float:
+    return float(p.get("profit_at_top_of_book", p.get("gross_profit_if_full_sell", p.get("profit", 0.0))) or 0.0)
+
+
+def _pick_conservative_profit(p: dict) -> float:
+    return float(p.get("profit_at_conservative_executable_price", _pick_displayed_profit(p)) or 0.0)
+
+
+def _pick_profit_retention_ratio(p: dict) -> float:
+    raw_ratio = float(p.get("profit_retention_ratio", 0.0) or 0.0)
+    if raw_ratio > 0.0:
+        return max(0.0, min(1.0, raw_ratio))
+    profit_book = _pick_visible_book_profit(p)
+    profit_cons = _pick_conservative_profit(p)
+    if profit_book <= 0.0:
+        return 1.0 if profit_cons <= 0.0 else 0.0
+    return max(0.0, min(1.0, profit_cons / profit_book))
+
+
+def _show_profit_basis_block(p: dict) -> bool:
+    if _is_price_sensitive(p):
+        return True
+    profit_book = _pick_visible_book_profit(p)
+    displayed_profit = _pick_displayed_profit(p)
+    if profit_book <= 0.0:
+        return False
+    return abs(profit_book - displayed_profit) / max(1.0, abs(profit_book)) >= 0.15
+
+
+def _internal_route_metadata_applicable(record: dict) -> bool:
+    transport_mode = str(record.get("transport_mode", "") or "").strip().lower()
+    if transport_mode != "internal_self_haul":
+        return False
+    if float(record.get("operational_profit_floor_isk", 0.0) or 0.0) > 0.0:
+        return True
+    if float(record.get("suppressed_expected_realized_profit_total", 0.0) or 0.0) > 0.0:
+        return True
+    return bool(str(record.get("operational_filter_note", "") or "").strip())
+
+
 def _categorize_pick(p: dict) -> str:
     """Return _CAT_MANDATORY, _CAT_OPTIONAL, or _CAT_SPECULATIVE for a pick."""
     is_instant = _pick_is_instant(p)
@@ -114,7 +164,9 @@ def _categorize_pick(p: dict) -> str:
     liq_conf = _pick_liquidity_confidence(p)
     exp_days = _pick_expected_days(p)
     plausibility = _pick_plausibility(p)
+    market_quality = _pick_market_quality(p)
     manip_risk = _pick_manipulation_risk(p)
+    price_sensitive = _is_price_sensitive(p)
 
     # SPECULATIVE: low confidence, thin/suspicious market, or very long wait
     if overall_conf < 0.40:
@@ -123,11 +175,22 @@ def _categorize_pick(p: dict) -> str:
         return _CAT_SPECULATIVE
     if plausibility < 0.55:
         return _CAT_SPECULATIVE
+    if market_quality < 0.50:
+        return _CAT_SPECULATIVE
     if manip_risk > 0.50:
+        return _CAT_SPECULATIVE
+    if price_sensitive and (market_quality < 0.65 or manip_risk >= 0.35 or overall_conf < 0.55):
         return _CAT_SPECULATIVE
 
     # MANDATORY: instant exit with solid confidence and liquidity
-    if is_instant and overall_conf >= 0.60 and liq_conf >= 0.60:
+    if (
+        is_instant
+        and overall_conf >= 0.60
+        and liq_conf >= 0.60
+        and market_quality >= 0.72
+        and manip_risk < 0.35
+        and not price_sensitive
+    ):
         return _CAT_MANDATORY
 
     return _CAT_OPTIONAL
@@ -135,12 +198,8 @@ def _categorize_pick(p: dict) -> str:
 
 def _is_price_sensitive(p: dict) -> bool:
     """Return True if repricing to book-top erodes profit by >35%."""
-    profit_book = float(p.get("profit_at_top_of_book", 0.0) or 0.0)
-    profit_cons = float(
-        p.get("profit_at_conservative_executable_price",
-              p.get("expected_realized_profit_90d",
-                    p.get("profit", 0.0))) or 0.0
-    )
+    profit_book = _pick_visible_book_profit(p)
+    profit_cons = _pick_conservative_profit(p)
     if profit_book <= 0.0:
         return False
     return profit_cons < 0.65 * profit_book
@@ -152,25 +211,23 @@ def _pick_action_warnings(p: dict) -> list[str]:
     liq_conf = _pick_liquidity_confidence(p)
     manip = _pick_manipulation_risk(p)
     plaus = _pick_plausibility(p)
+    market_quality = _pick_market_quality(p)
     exp_days = _pick_expected_days(p)
     is_instant = _pick_is_instant(p)
 
     if liq_conf < 0.40:
-        warnings.append(f"Thin market — fill probability {liq_conf:.0%}")
+        warnings.append(f"Thin market - fill probability {liq_conf:.0%}")
     if manip > 0.40:
-        warnings.append(f"Manipulation risk {manip:.0%} — verify order book")
+        warnings.append(f"Manipulation risk {manip:.0%} - verify order book")
     if plaus < 0.65:
-        warnings.append(f"Low market plausibility {plaus:.2f} — check price history")
+        warnings.append(f"Low market plausibility {plaus:.2f} - check price history")
+    if market_quality < 0.60:
+        warnings.append(f"Fragile market quality {market_quality:.2f} - edge may depend on thin book conditions")
     if not is_instant and exp_days > 45.0:
-        warnings.append(f"Long capital lock — expected {exp_days:.0f}d to sell")
+        warnings.append(f"Long capital lock - expected {exp_days:.0f}d to sell")
     if _is_price_sensitive(p):
-        profit_book = float(p.get("profit_at_top_of_book", 0.0) or 0.0)
-        profit_cons = float(
-            p.get("profit_at_conservative_executable_price",
-                  p.get("expected_realized_profit_90d", p.get("profit", 0.0))) or 0.0
-        )
-        drop_pct = max(0.0, (1.0 - profit_cons / profit_book) * 100.0) if profit_book > 0 else 0.0
-        warnings.append(f"Price-sensitive — profit drops ~{drop_pct:.0f}% if repriced to best offer")
+        retention = _pick_profit_retention_ratio(p)
+        warnings.append(f"Price-sensitive - displayed profit retains only ~{retention:.0%} of visible-book profit")
     return warnings
 
 
@@ -180,17 +237,25 @@ def _route_level_warnings(picks: list[dict], route_summary: dict) -> list[str]:
 
     route_conf = float(route_summary.get("route_confidence", 0.0))
     if route_conf < 0.55:
-        warnings.append(f"Low route confidence ({route_conf:.2f}) — consider skipping this route")
+        warnings.append(f"Low route confidence ({route_conf:.2f}) - consider skipping this route")
 
     lock_risk = float(route_summary.get("capital_lock_risk", 0.0))
     if lock_risk > 0.50:
-        warnings.append(f"High capital lock risk ({lock_risk:.2f}) — budget may be frozen for weeks")
+        instant_picks = sum(1 for p in picks if _pick_is_instant(p))
+        instant_share = (float(instant_picks) / float(len(picks))) if picks else 0.0
+        avg_days = float(route_summary.get("average_expected_days_to_sell", 0.0) or 0.0)
+        if picks and (instant_share >= 0.67 or avg_days <= 3.0):
+            warnings.append(
+                f"High capital concentration risk ({lock_risk:.2f}) - route is fast to exit, but profit is concentrated in few picks"
+            )
+        else:
+            warnings.append(f"High capital lock risk ({lock_risk:.2f}) - planned exits may tie up budget for weeks")
 
     spec_picks = [p for p in picks if _categorize_pick(p) == _CAT_SPECULATIVE]
     if spec_picks:
         names = ", ".join(str(p.get("name", "?")) for p in spec_picks[:3])
         suffix = f" (+{len(spec_picks) - 3} more)" if len(spec_picks) > 3 else ""
-        warnings.append(f"{len(spec_picks)} speculative pick(s) — verify market depth: {names}{suffix}")
+        warnings.append(f"{len(spec_picks)} speculative pick(s) - verify market depth: {names}{suffix}")
 
     profits = sorted(
         [max(0.0, float(p.get("expected_realized_profit_90d", p.get("profit", 0.0)) or 0.0)) for p in picks],
@@ -226,9 +291,9 @@ def _write_shopping_list(lines: list[str], categorized: dict, fmt_isk_de) -> Non
     lines.append("SHOPPING LIST")
     lines.append("-" * 42)
     cat_labels = [
-        (_CAT_MANDATORY, "Mandatory — buy these first:"),
-        (_CAT_OPTIONAL, "Optional — fill remaining budget:"),
-        (_CAT_SPECULATIVE, "Speculative — verify market depth first:"),
+        (_CAT_MANDATORY, "Mandatory - buy these first:"),
+        (_CAT_OPTIONAL, "Optional - lower priority or slower exits:"),
+        (_CAT_SPECULATIVE, "Speculative - verify market depth first:"),
     ]
     global_idx = 1
     any_picks = False
@@ -268,7 +333,7 @@ def _write_route_trip_summary(
     budget_total = float(leg.get("budget_total", 0.0))
     budget_used = float(leg.get("isk_used", 0.0))
     budget_left = max(0.0, budget_total - budget_used)
-    cargo_total = float(leg.get("cargo_m3", leg.get("cargo_capacity_m3", 0.0)) or 0.0)
+    cargo_total = float(leg.get("cargo_total", leg.get("cargo_m3", leg.get("cargo_capacity_m3", 0.0))) or 0.0)
     m3_used = float(leg.get("total_route_m3", leg.get("m3_used", 0.0)) or 0.0)
     profit = float(route_summary.get("total_expected_realized_profit", leg.get("profit_total", 0.0)))
     route_conf = float(route_summary.get("route_confidence", 0.0))
@@ -296,7 +361,7 @@ def _write_route_trip_summary(
         f"|  Transport Confidence: {transport_conf:.2f}"
     )
     lines.append(
-        f"  Picks:     {n_total} total — "
+        f"  Picks:     {n_total} total - "
         f"{n_mandatory} MANDATORY, {n_optional} OPTIONAL, {n_speculative} SPECULATIVE"
     )
     transport_mode = str(leg.get("transport_mode", "") or "").strip()
@@ -311,8 +376,21 @@ def _write_route_trip_summary(
     leg_shipping_costs = float(leg.get("total_shipping_cost", 0.0) or 0.0)
     if leg_shipping_costs > 0.0:
         lines.append(f"  Shipping:  {fmt_isk_de(leg_shipping_costs)} (transport cost)")
+    if _internal_route_metadata_applicable(leg):
+        operational_floor = float(leg.get("operational_profit_floor_isk", 0.0) or 0.0)
+        if operational_floor > 0.0:
+            lines.append(f"  Internal Route Floor: {fmt_isk_de(operational_floor)}")
+        suppressed_profit = float(leg.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+        if suppressed_profit > 0.0:
+            lines.append(f"  Suppressed Profit:    {fmt_isk_de(suppressed_profit)}")
+        operational_note = str(leg.get("operational_filter_note", "") or "").strip()
+        if operational_note:
+            lines.append(f"  Internal Route Note: {operational_note}")
     if active_profile:
         lines.append(f"  Profile:   {active_profile.upper()}")
+    removed_count = int(leg.get("route_mix_cleanup_removed_count", 0) or 0)
+    if removed_count > 0:
+        lines.append(f"  Route Mix Cleanup: removed {removed_count} weak add-on pick(s)")
     lines.append("")
 
 
@@ -340,9 +418,7 @@ def _write_pick_block(
     exp_days = _pick_expected_days(p)
     fill_prob = _pick_liquidity_confidence(p) * 100.0
     overall_conf = _pick_overall_confidence(p)
-    profit = float(
-        p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0
-    )
+    profit = _pick_displayed_profit(p)
     pick_m3 = float(p.get("unit_volume", 0.0) or 0.0) * float(qty)
     unit_m3 = float(p.get("unit_volume", 0.0) or 0.0)
 
@@ -364,7 +440,7 @@ def _write_pick_block(
     # Price action threshold: alert if buy price would erode profitability
     if buy_avg > 0:
         lines.append(
-            f"     >>> MAX BUY: {fmt_isk_de(buy_avg)}/unit — skip if market asks more"
+            f"     >>> MAX BUY: {fmt_isk_de(buy_avg)}/unit - skip if market asks more"
         )
     if is_instant:
         lines.append(
@@ -379,8 +455,31 @@ def _write_pick_block(
         # Minimum viable sell price for planned orders
         if sell_unit > 0:
             lines.append(
-                f"     >>> MIN SELL: {fmt_isk_de(sell_unit)}/unit — skip if market collapsed below this"
+                f"     >>> MIN SELL: {fmt_isk_de(sell_unit)}/unit - skip if market collapsed below this"
             )
+    if _show_profit_basis_block(p):
+        quote_basis = str(p.get("target_price_basis", "") or "").strip().replace("_", " ")
+        if not quote_basis:
+            quote_basis = "visible exit quote"
+        visible_book_profit = _pick_visible_book_profit(p)
+        conservative_profit = _pick_conservative_profit(p)
+        retention = _pick_profit_retention_ratio(p)
+        transport_cost = float(p.get("transport_cost", 0.0) or 0.0)
+        cost_net = float(p.get("cost", buy_total) or buy_total)
+        implied_net_exit = cost_net + transport_cost + profit
+        lines.append(
+            f"     Quote Basis: {fmt_isk_de(sell_unit)}/unit ({quote_basis})"
+        )
+        lines.append(
+            f"     Profit Basis: visible-book {fmt_isk_de(visible_book_profit)}"
+            f" | conservative executable {fmt_isk_de(conservative_profit)}"
+            f" | displayed uses {fmt_isk_de(profit)}"
+            f" | retention {retention:.0%}"
+        )
+        lines.append(
+            f"     Net Exit Basis Used: {fmt_isk_de(implied_net_exit)} after fees/taxes"
+            f" (buy net {fmt_isk_de(cost_net)}, transport {fmt_isk_de(transport_cost)})"
+        )
     lines.append(
         f"     Expected: {exp_days:.1f}d  | Fill {fill_prob:.0f}%  | Confidence {overall_conf:.2f}"
         f"  |  Profit: {fmt_isk_de(profit)}"
@@ -422,7 +521,9 @@ def _write_pick_block(
         lines.append(f"     Expected Units Sold: {float(p.get('expected_units_sold_90d', 0.0) or 0.0):.2f}")
         lines.append(f"     Expected Units Unsold: {float(p.get('expected_units_unsold_90d', 0.0) or 0.0):.2f}")
         lines.append(f"     market_plausibility_score: {float(p.get('market_plausibility_score', 1.0) or 1.0):.2f}")
+        lines.append(f"     market_quality_score: {float(p.get('market_quality_score', p.get('market_plausibility_score', 1.0)) or 1.0):.2f}")
         lines.append(f"     manipulation_risk_score: {float(p.get('manipulation_risk_score', 0.0) or 0.0):.2f}")
+        lines.append(f"     profit_retention_ratio: {float(p.get('profit_retention_ratio', 1.0) or 1.0):.2f}")
         lines.append(f"     profit_at_top_of_book: {fmt_isk_de(float(p.get('profit_at_top_of_book', p.get('profit', 0.0)) or 0.0))}")
         lines.append(
             f"     profit_at_conservative_executable_price: "
@@ -478,14 +579,18 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     if plan_id:
         lines.append(f"Plan ID: {plan_id}")
     active_profile = ""
+    active_profile_params: dict = {}
     for leg in list(route_results or []):
         active_profile = str(leg.get("_active_risk_profile", "") or "")
         if active_profile:
+            raw_params = leg.get("_active_risk_profile_params", {})
+            if isinstance(raw_params, dict) and raw_params:
+                active_profile_params = dict(raw_params)
             break
     if active_profile:
         from risk_profiles import BUILTIN_PROFILES, profile_restrictions_summary
-        profile_params = BUILTIN_PROFILES.get(active_profile, {})
-        lines.append(f"Profile:   {active_profile.upper()}  —  {profile_params.get('description', '')}")
+        profile_params = active_profile_params or BUILTIN_PROFILES.get(active_profile, {})
+        lines.append(f"Profile:   {active_profile.upper()}  -  {profile_params.get('description', '')}")
         lines.append(f"           {profile_restrictions_summary(active_profile, profile_params)}")
     character_summary = {}
     for leg in list(route_results or []):
@@ -497,7 +602,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         status = str(character_summary.get("source", "default") or "default").upper()
         if bool(character_summary.get("available", False)):
             lines.append(
-                f"Character: {status}  â€”  {character_summary.get('character_name', '')} "
+                f"Character: {status}  -  {character_summary.get('character_name', '')} "
                 f"({int(character_summary.get('character_id', 0) or 0)})"
             )
             lines.append(
@@ -523,7 +628,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
                     f"{fmt_isk_de(float(character_summary.get('budget_gap_isk', 0.0) or 0.0))}"
                 )
         else:
-            lines.append(f"Character: {status}  â€”  no private character data")
+            lines.append(f"Character: {status}  -  no private character data")
         for warning in list(character_summary.get("warnings", []) or []):
             lines.append(f"           [WARN] {warning}")
     personal_summary = {}
@@ -542,7 +647,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         for idx, line in enumerate(personal_history_layer_status_lines(personal_summary, personal_layer)):
             lines.append(line if idx == 0 else f"                  {line}")
     if compact_mode:
-        lines.append("Mode:      COMPACT (shopping list only — use --detail for full breakdown)")
+        lines.append("Mode:      COMPACT (shopping list only - use --detail for full breakdown)")
     lines.append("")
 
     total_cost = 0.0
@@ -718,15 +823,19 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         budget_total_val = float(leg.get("budget_total", 0.0))
         budget_used_val = float(leg.get("isk_used", 0.0))
         budget_left_val = max(0.0, budget_total_val - budget_used_val)
-        if budget_total_val > 0 and (budget_left_val / budget_total_val) >= 0.05:
+        if picks and budget_total_val > 0 and (budget_left_val / budget_total_val) >= 0.05:
             lines.append(
-                f"  Budget Rest: {fmt_isk_de(budget_left_val)} — "
+                f"  Budget Rest: {fmt_isk_de(budget_left_val)} - "
                 "no further picks met profit floors after fees and route costs."
             )
             lines.append("")
 
         # ── Route-level warnings block ────────────────────────────────────────
         route_warns = _route_level_warnings(picks, route_summary)
+        for note in list(leg.get("route_mix_cleanup_notes", []) or []):
+            text = str(note or "").strip()
+            if text:
+                route_warns.append(text)
         if route_warns:
             lines.append("WARNINGS")
             for w in route_warns:
@@ -744,9 +853,9 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
                 lines.append("")
             else:
                 cat_sections = [
-                    (_CAT_MANDATORY, "MANDATORY — instant exits, high confidence (execute first)"),
-                    (_CAT_OPTIONAL, "OPTIONAL — planned sells, moderate confidence"),
-                    (_CAT_SPECULATIVE, "SPECULATIVE — verify market depth before buying!"),
+                    (_CAT_MANDATORY, "MANDATORY - instant exits, high confidence (execute first)"),
+                    (_CAT_OPTIONAL, "OPTIONAL - lower priority or slower exits"),
+                    (_CAT_SPECULATIVE, "SPECULATIVE - verify market depth before buying!"),
                 ]
                 global_pick_idx = 1
                 for cat, section_label in cat_sections:
@@ -780,14 +889,42 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         lines.append(SEP)
         lines.append("")
 
+    actionable_entries = [
+        (leg, summarize_route_for_ranking(leg))
+        for leg in list(route_results or [])
+        if bool(summarize_route_for_ranking(leg).get("actionable", False))
+    ]
     lines.append(SEP)
-    lines.append(f"TOTAL COST:                    {fmt_isk_de(total_cost)}")
-    lines.append(f"TOTAL NET REVENUE:             {fmt_isk_de(total_revenue)}")
-    lines.append(f"TOTAL EXPECTED REALIZED PROFIT:{fmt_isk_de(total_profit)}")
-    lines.append(f"TOTAL FEES AND TAXES:          {fmt_isk_de(total_fees_taxes)}")
+    lines.append("BEST ACTIONABLE ROUTE")
+    lines.append(SEP)
+    if actionable_entries:
+        best_leg, best_summary = max(
+            actionable_entries,
+            key=lambda entry: (
+                _route_ranking_value(entry[0], "risk_adjusted_expected_profit"),
+                float(entry[1].get("total_expected_realized_profit", 0.0) or 0.0),
+            ),
+        )
+        lines.append(f"Route:                         {best_leg.get('route_label', '')}")
+        lines.append(f"Budget Used:                   {fmt_isk_de(float(best_leg.get('isk_used', 0.0) or 0.0))}")
+        lines.append(
+            f"Expected Realized Profit:      "
+            f"{fmt_isk_de(float(best_summary.get('total_expected_realized_profit', 0.0) or 0.0))}"
+        )
+        lines.append(f"Route Confidence:              {float(best_summary.get('route_confidence', 0.0) or 0.0):.2f}")
+        lines.append(f"Capital Lock Risk:             {float(best_summary.get('capital_lock_risk', 0.0) or 0.0):.2f}")
+    else:
+        lines.append("No actionable route under the current filters.")
+    lines.append("")
+    lines.append("AGGREGATE ACROSS DISPLAYED ROUTE ALTERNATIVES")
+    lines.append("This is NOT a combined executable plan. These totals sum alternative routes and can exceed your budget.")
+    lines.append(f"Aggregate Cost Across Routes:  {fmt_isk_de(total_cost)}")
+    lines.append(f"Aggregate Net Revenue:         {fmt_isk_de(total_revenue)}")
+    lines.append(f"Aggregate Expected Profit:     {fmt_isk_de(total_profit)}")
+    lines.append(f"Aggregate Fees and Taxes:      {fmt_isk_de(total_fees_taxes)}")
     if total_shipping_cost > 0.0:
-        lines.append(f"TOTAL SHIPPING COST:           {fmt_isk_de(total_shipping_cost)}")
-    lines.append(f"TOTAL ROUTE COSTS:             {fmt_isk_de(total_route_costs)}")
+        lines.append(f"Aggregate Shipping Cost:       {fmt_isk_de(total_shipping_cost)}")
+    lines.append(f"Aggregate Route Costs:         {fmt_isk_de(total_route_costs)}")
     lines.append(SEP)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -851,6 +988,10 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         _append_reason_lines(lines, "   ", list(summary.get("positive_reasons", []) or []), "positive_reasons", detail_mode=detail_mode)
         _append_reason_lines(lines, "   ", list(summary.get("negative_reasons", []) or []), "negative_reasons", detail_mode=detail_mode)
         _append_reason_lines(lines, "   ", list(summary.get("warnings", []) or []), "warnings", detail_mode=detail_mode)
+        for note in list(r.get("route_mix_cleanup_notes", []) or []):
+            text = str(note or "").strip()
+            if text:
+                lines.append(f"   route_mix_cleanup: {text}")
         cost_model_confidence = str(r.get("cost_model_confidence", "normal") or "normal")
         if cost_model_confidence != "normal":
             lines.append(f"   transport_cost_confidence: {cost_model_confidence}")
@@ -902,6 +1043,16 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
                 reason_code = str(pruned_reason.get("code", "") or "")
             suffix = f" [{reason_code}]" if reason_code else ""
             lines.append(f"- {r.get('route_label', '')}: {reason}{suffix}")
+            if _internal_route_metadata_applicable(r):
+                operational_floor = float(r.get("operational_profit_floor_isk", 0.0) or 0.0)
+                if operational_floor > 0.0:
+                    lines.append(f"  internal_route_floor: {fmt_isk_de(operational_floor)}")
+                suppressed_profit = float(r.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+                if suppressed_profit > 0.0:
+                    lines.append(f"  suppressed_expected_profit: {fmt_isk_de(suppressed_profit)}")
+                operational_note = str(r.get("operational_filter_note", "") or "")
+                if operational_note:
+                    lines.append(f"  internal_route_note: {operational_note}")
         lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -937,11 +1088,11 @@ def write_no_trade_report(
     # Reason codes
     reason_codes = list(no_trade_result.get("reason_codes", []) or [])
     if reason_codes:
-        lines.append("GRÜNDE / REASONS")
+        lines.append("GRUENDE / REASONS")
         lines.append("-" * 40)
         for r in reason_codes:
             sev = str(r.get("severity", "")).upper()
-            lines.append(f"  [{sev}]  {r.get('code', '')}  —  {r.get('text', '')}")
+            lines.append(f"  [{sev}]  {r.get('code', '')}  -  {r.get('text', '')}")
             detail = str(r.get("detail", "") or "")
             if detail:
                 lines.append(f"           {detail}")
@@ -962,7 +1113,7 @@ def write_no_trade_report(
             f"{int(best.get('optional_picks', 0))} OPTIONAL  "
             f"{int(best.get('speculative_picks', 0))} SPECULATIVE"
         )
-        lines.append("  Status: BEOBACHTEN — nicht jetzt handeln")
+        lines.append("  Status: BEOBACHTEN - nicht jetzt handeln")
         lines.append("")
 
     # Near-misses
@@ -971,19 +1122,29 @@ def write_no_trade_report(
         lines.append("BEINAHE BRAUCHBARE ROUTEN (FAST GUT)")
         lines.append("-" * 40)
         for nm in near_misses:
-            label = str(nm.get("route_label", "") or "—")
+            label = str(nm.get("route_label", "") or "-")
             reason = str(nm.get("prune_reason", "") or "no_picks")
             candidates = int(nm.get("total_candidates", 0) or 0)
             blocked = bool(nm.get("transport_blocked", False))
             lines.append(f"  {label}")
-            lines.append(f"    Grund: {reason}  |  Kandidaten geprüft: {candidates}")
+            lines.append(f"    Grund: {reason}  |  Kandidaten geprueft: {candidates}")
             if blocked:
-                lines.append("    [Transport blockiert — keine Shipping Lane verfügbar]")
+                lines.append("    [Transport blockiert - keine Shipping Lane verfuegbar]")
+            if _internal_route_metadata_applicable(nm):
+                operational_floor = float(nm.get("operational_profit_floor_isk", 0.0) or 0.0)
+                if operational_floor > 0.0:
+                    lines.append(f"    Internal Route Floor: {fmt_isk_de(operational_floor)}")
+                suppressed_profit = float(nm.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+                if suppressed_profit > 0.0:
+                    lines.append(f"    Suppressed Expected Profit: {fmt_isk_de(suppressed_profit)}")
+                operational_note = str(nm.get("operational_filter_note", "") or "")
+                if operational_note:
+                    lines.append(f"    Internal Route Note: {operational_note}")
             why = dict(nm.get("why_out_summary", {}) or {})
             if why:
                 top_why = sorted(why.items(), key=lambda kv: kv[1], reverse=True)[:3]
                 why_str = "  ".join(f"{k}={v}" for k, v in top_why)
-                lines.append(f"    Ablehnungsgründe: {why_str}")
+                lines.append(f"    Ablehnungsgruende: {why_str}")
         lines.append("")
 
     # Profile comparison
@@ -991,9 +1152,9 @@ def write_no_trade_report(
     if comparison:
         lines.append("PROFIL-VERGLEICH")
         lines.append("-" * 40)
-        lines.append("  Würde ein anderes Profil hier handeln?")
+        lines.append("  Wuerde ein anderes Profil hier handeln?")
         for pname, would_trade in sorted(comparison.items()):
-            verdict = "JA — würde handeln" if would_trade else "NEIN — würde ebenfalls ablehnen"
+            verdict = "JA - wuerde handeln" if would_trade else "NEIN - wuerde ebenfalls ablehnen"
             lines.append(f"    {pname:<20} {verdict}")
         lines.append("")
 

@@ -1,12 +1,133 @@
 # Task Queue
 
-Last updated: 2026-03-08 (session 14 live/replay/web verification)
+Last updated: 2026-03-14 (session 26 output honesty + tail cleanup)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0: Restore execution-plan consistency for route profiles
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- What was done:
+  - hard pick-level post-build profile enforcement now runs in both
+    `run_route()` and `run_route_wide_leg()` for expected profit, profit
+    density, confidence, and max budget/item
+  - cargo-fill share limits are now clamped to the visible profile
+    `Max Budget/Item`, so fill picks cannot bypass the profile cap
+  - route prune reasons are now bucketed into clearer business causes
+    (profit floor, confidence, budget rule, fill/depth, sell time, invalid
+    volume, no candidates, post-portfolio constraints, internal route floor)
+  - execution-plan footer no longer implies one combined executable portfolio;
+    it now separates best actionable route from aggregate-alternative totals
+  - internal `internal_self_haul` routes now use a configurable operational
+    expected-profit floor (`route_search.internal_self_haul_min_expected_profit_isk`)
+  - invalid or missing item volume is now treated conservatively and surfaced
+    as `invalid_volume` instead of silently falling back
+  - focused regression:
+    `pytest -q tests/test_risk_profiles.py tests/test_portfolio.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_config.py tests/test_shipping.py tests/test_explainability.py tests/test_route_search.py tests/test_no_trade.py tests/test_webapp.py`
+    -> **272 passed**
+
+### Task 0c: Tighten market-quality gating and anti-bait pick selection
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `market_plausibility.py`, `candidate_engine.py`,
+  `portfolio_builder.py`, `explainability.py`, `execution_plan.py`,
+  `route_search.py`, `models.py`, `tests/`
+- What was done:
+  - added a central market-quality seam on top of existing plausibility data:
+    profit-retention ratio, market-quality score, and a combined fragile-book
+    gate for thin top-of-book / concentrated / repricing-sensitive candidates
+  - candidate generation now preserves that quality haircut in `instant`
+    confidence instead of letting fill-proxy logic restore a too-friendly
+    `overall_confidence`
+  - route-wide candidate ranking now uses market quality instead of raw
+    plausibility only
+  - pick scoring, local search, cargo fill, and final mandatory/optional
+    labeling now react more strongly to market fragility
+  - route summaries now cap `route_confidence` by average pick market quality,
+    so leaderboard / no-trade cannot stay overly optimistic on weak route mixes
+  - focused regression:
+    `pytest -q tests/test_core.py tests/test_portfolio.py tests/test_execution_plan.py tests/test_route_search.py tests/test_explainability.py tests/test_no_trade.py tests/test_runtime_reports.py`
+    -> **163 passed**
+
+### Task 0d: Calibrate market-quality thresholds against replay artifacts
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `market_plausibility.py`, `candidate_engine.py`,
+  `tests/test_core.py`, `tests/test_execution_plan.py`,
+  `tests/test_route_search.py`, `tests/test_integration.py`
+- What was done:
+  - audited the tightened quality logic against the focused
+    `replay_live_focused_o4t_jita_20260308.json` fixture and a narrow
+    `replay_snapshot.json` route-search run instead of adding new heuristics
+  - replay evidence showed robust survivors with only generic structural flags
+    were being double-penalized: once inside `market_quality_score`, then again
+    when candidate liquidity/exit confidence was multiplied by that score
+  - softened only the generic `DEPTH_COLLAPSE` and
+    `ORDERBOOK_CONCENTRATION` multipliers and replaced the direct
+    `quality_conf_penalty = market_quality_score` coupling with a softer blend
+  - kept thin-top, unusable-depth, and fake-spread penalties unchanged so the
+    fragile bait cases stayed rejected
+  - updated the focused replay regression fixture expectation to the new stable
+    pick set (`Noise-25 'Needlejack' Filament`,
+    `Polarized Heavy Neutron Blaster`) and added coverage for robust
+    depth-collapse books plus healthy route-confidence capping
+  - focused regression:
+    `pytest -q tests/test_core.py tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py`
+    -> **132 passed**
+
+### Task 0e: Clean weak post-selection route add-ons from the final mix
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `runtime_runner.py`, `execution_plan.py`,
+  `nullsectrader.py`, `tests/test_runtime_runner.py`,
+  `tests/test_execution_plan.py`, `tests/test_route_search.py`
+- What was done:
+  - added a small post-selection route-mix cleanup seam in
+    `runtime_runner.py` after final picks exist and before final route output
+  - cleanup only evaluates non-mandatory picks and only removes them when they
+    have a small profit share, materially improve route confidence or market
+    quality, and do not materially worsen the route score
+  - cleanup refuses to break current-profile strong-pick minimums or push an
+    internal self-haul route below its operational profit floor
+  - execution plan and leaderboard now show explicit route-mix-cleanup notes
+    when such a removal happens
+  - focused regression:
+    `pytest -q tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_route_search.py tests/test_no_trade.py tests/test_integration.py -k "runtime_runner or execution_plan or route_search or no_trade or replay_live_focused_fixture_keeps_real_pick_set or same_snapshot_keeps_stable_plan_and_pick_ids"`
+    -> **125 passed**
+
+### Task 0g: Tighten output honesty and weak-tail cleanup without regressing anti-bait gates
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `execution_plan.py`, `runtime_runner.py`,
+  `tests/test_execution_plan.py`, `tests/test_route_search.py`,
+  `tests/test_runtime_runner.py`, `tests/test_integration.py`
+- What was done:
+  - execution-plan / leaderboard / no-trade rendering now gates internal-route
+    floor metadata on actual `internal_self_haul` applicability instead of
+    showing it on external shipping routes just because a floor value existed
+  - price-sensitive picks now show an explicit profit-basis block with quote
+    basis, visible-book profit proxy, conservative executable profit proxy,
+    retention, and the displayed profit basis used by the plan
+  - post-selection route-mix cleanup now also targets weak speculative /
+    price-sensitive tail picks when they contribute only a small profit share,
+    route quality/confidence recover, and route score stays effectively intact
+  - focused regression:
+    `pytest -q tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py tests/test_runtime_runner.py`
+    -> **129 passed**
 
 ### Task 1: Verify and stabilize risk-profile integration
 
@@ -25,6 +146,51 @@ full backlog scrape.
   - Full suite: 239 passed.
 
 ## P1
+
+### Task 0f: Add a safe clean-start command for runtime artifacts
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `runtime_common.py`, `runtime_runner.py`,
+  `runtime_cleanup.py`, `.gitignore`, `README.md`, `tests/test_runtime_cleanup.py`
+- What was done:
+  - added a CLI `clean` / `cleanup` subcommand that can be run via
+    `python .\main.py clean`
+  - the cleanup path removes generated root artifacts, `market_snapshot.json`,
+    `replay_snapshot.json`, default `snapshot_*.json`, `trade_plan_*.json`,
+    `cache/http_cache.json`, `cache/types.json`, `.pytest_cache`, and
+    recursive `__pycache__` directories
+  - the cleanup deliberately preserves `cache/token.json`,
+    `cache/trade_journal.sqlite3`, and `cache/character_context/`
+  - `.gitignore` now also ignores generated `roundtrip_plan_*.txt`,
+    `no_trade_*.txt`, `trade_plan_*.json`, and `snapshot_*.json` files
+  - targeted regression:
+    `pytest -q tests/test_runtime_cleanup.py tests/test_config.py tests/test_character_context.py tests/test_execution_plan.py -k "clean or parse_cli_args or compact_flag"`
+    -> **8 passed**
+  - live repo cleanup run:
+    `python main.py clean` -> **111 files** and **7 directories** removed
+
+### Task 0b: Mirror route-profile plan semantics in chain and roundtrip artifacts
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-13
+- Relevant files: `execution_plan.py`, `runtime_reports.py`,
+  `runtime_runner.py`, `tests/`
+- What was done:
+  - `runtime_reports.py` now labels chain and roundtrip footer totals as
+    sequential aggregates instead of simultaneous capital requirements
+  - chain execution plans now surface suppressed/non-actionable legs when an
+    internal route was filtered by the operational floor instead of dropping
+    them silently
+  - chain summaries, route leaderboard, and no-trade near-miss output now keep
+    `internal_self_haul` floor, suppressed-profit, and prune-reason details
+  - `runtime_runner.py` now passes full route metadata into the roundtrip
+    summary writer so the writer can show the same honest status/floor context
+  - focused regression:
+    `pytest -q tests/test_runtime_reports.py tests/test_execution_plan.py tests/test_route_search.py tests/test_no_trade.py tests/test_core.py tests/test_runtime_runner.py tests/test_shipping.py`
+    -> **168 passed**
 
 ### Task 2: Practical output + Do Not Trade + full audit (this session)
 
@@ -401,3 +567,37 @@ full backlog scrape.
     manifest-serialization regression in `tests/test_journal.py`, and
     runtime-bridge / shutdown regressions in `tests/test_webapp.py`
   - Full suite: **330 passed**
+
+### Task 7f: Remove browser heartbeat / idle auto-shutdown from the local web app
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - Removed the heartbeat endpoint and shutdown watcher from `webapp/app.py`
+  - Removed the browser-side heartbeat ping from `webapp/templates/base.html`
+  - Replaced the old shutdown regression in `tests/test_webapp.py` with a
+    regression that confirms `/heartbeat` is no longer exposed
+  - Targeted regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**
+
+### Task 7g: Make journal web views show current character data instead of looking empty
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-08
+- What was done:
+  - `webapp/services/journal_service.py` now loads a character snapshot summary
+    for journal pages, so open-order and wallet-history counts are visible even
+    when the local journal DB has zero entries
+  - the journal empty-state text now explains the real distinction between an
+    empty local journal and available character / wallet data
+  - added `GET /journal/reconcile` in `webapp/routes/pages.py`, and the
+    journal tab link now opens the real reconciliation flow instead of a static
+    placeholder
+  - `GET /journal/unmatched` now auto-populates reconciliation data on first
+    use so unmatched wallet activity is visible without a prior manual POST
+  - targeted regression:
+    `python -m pytest -q tests/test_webapp.py`
+    -> **9 passed**

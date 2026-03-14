@@ -54,11 +54,13 @@ def _instant_pick(**kwargs) -> dict:
         "overall_confidence": 0.88,
         "expected_days_to_sell": 0.3,
         "market_plausibility_score": 0.95,
+        "market_quality_score": 0.93,
         "manipulation_risk_score": 0.02,
         "unit_volume": 0.01,
         "order_duration_days": 0,
         "profit_at_top_of_book": 600.0,
         "profit_at_conservative_executable_price": 580.0,
+        "profit_retention_ratio": 0.97,
     }
     base.update(kwargs)
     return base
@@ -82,11 +84,13 @@ def _planned_pick(**kwargs) -> dict:
         "overall_confidence": 0.55,
         "expected_days_to_sell": 20.0,
         "market_plausibility_score": 0.80,
+        "market_quality_score": 0.78,
         "manipulation_risk_score": 0.05,
         "unit_volume": 1.0,
         "order_duration_days": 30,
         "profit_at_top_of_book": 30_000.0,
         "profit_at_conservative_executable_price": 20_000.0,
+        "profit_retention_ratio": 0.67,
     }
     base.update(kwargs)
     return base
@@ -208,6 +212,41 @@ class TestCategorizePick:
         p = _planned_pick(overall_confidence=0.55, expected_days_to_sell=60.1)
         assert _categorize_pick(p) == _CAT_SPECULATIVE
 
+    def test_price_sensitive_instant_pick_is_not_mandatory(self):
+        p = _instant_pick(
+            overall_confidence=0.82,
+            liquidity_confidence=0.82,
+            market_quality_score=0.80,
+            profit_at_top_of_book=1_000_000.0,
+            profit_at_conservative_executable_price=600_000.0,
+            profit_retention_ratio=0.60,
+        )
+        assert _categorize_pick(p) == _CAT_OPTIONAL
+
+    def test_fragile_market_quality_is_speculative_even_if_plausibility_looks_ok(self):
+        p = _instant_pick(
+            overall_confidence=0.82,
+            liquidity_confidence=0.82,
+            market_plausibility_score=0.78,
+            market_quality_score=0.48,
+            manipulation_risk_score=0.42,
+        )
+        assert _categorize_pick(p) == _CAT_SPECULATIVE
+
+    def test_robust_instant_pick_with_generic_structure_warnings_stays_mandatory(self):
+        p = _instant_pick(
+            overall_confidence=0.76,
+            liquidity_confidence=0.80,
+            exit_confidence=0.80,
+            market_plausibility_score=0.85,
+            market_quality_score=0.77,
+            manipulation_risk_score=0.14,
+            profit_at_top_of_book=1_000_000.0,
+            profit_at_conservative_executable_price=820_000.0,
+            profit_retention_ratio=0.82,
+        )
+        assert _categorize_pick(p) == _CAT_MANDATORY
+
 
 # ---------------------------------------------------------------------------
 # Test _is_price_sensitive
@@ -327,7 +366,7 @@ class TestRouteLevelWarnings:
         picks = [_instant_pick()]
         summary = _route_summary(capital_lock_risk=0.70)
         warns = _route_level_warnings(picks, summary)
-        assert any("capital lock" in w.lower() for w in warns)
+        assert any("concentration" in w.lower() for w in warns)
 
     def test_speculative_picks_warning(self):
         picks = [_speculative_pick()]
@@ -471,6 +510,16 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result])
         assert "MANDATORY" in content
 
+    def test_route_mix_cleanup_note_is_rendered_in_execution_plan(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["route_mix_cleanup_removed_count"] = 1
+        result["route_mix_cleanup_notes"] = [
+            "Removed weak optional add-on pick Noise-5 'Needlejack' Filament: +0.06 route confidence, +0.07 market quality, -3.7% expected profit share."
+        ]
+        content = self._write_and_read([result])
+        assert "Route Mix Cleanup: removed 1 weak add-on pick(s)" in content
+        assert "Noise-5 'Needlejack' Filament" in content
+
     def test_speculative_section_present(self):
         result = _make_route_result(picks=[_speculative_pick()])
         content = self._write_and_read([result])
@@ -481,7 +530,7 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result], compact_mode=True)
         # In compact mode: shopping list present, detailed pick blocks absent
         assert "SHOPPING LIST" in content
-        assert "MANDATORY — instant exits" not in content
+        assert "MANDATORY - instant exits" not in content
 
     def test_compact_mode_header_note(self):
         result = _make_route_result()
@@ -500,13 +549,26 @@ class TestWriteExecutionPlanProfiles:
 
     def test_totals_block_present(self):
         content = self._write_and_read([_make_route_result()])
-        assert "TOTAL COST:" in content or "TOTAL COST" in content
+        assert "BEST ACTIONABLE ROUTE" in content
+        assert "AGGREGATE ACROSS DISPLAYED ROUTE ALTERNATIVES" in content
+        assert "NOT a combined executable plan" in content
 
     def test_profile_shown_in_header(self):
         result = _make_route_result()
         result["_active_risk_profile"] = "conservative"
         content = self._write_and_read([result])
         assert "CONSERVATIVE" in content
+
+    def test_profile_header_uses_resolved_profile_params(self):
+        result = _make_route_result()
+        result["_active_risk_profile"] = "balanced"
+        result["_active_risk_profile_params"] = {
+            "description": "Resolved runtime override",
+            "min_expected_profit_isk": 2_500_000.0,
+            "max_item_share_of_budget": 0.30,
+        }
+        content = self._write_and_read([result])
+        assert "Resolved runtime override" in content
 
     def test_character_summary_shown_in_header(self):
         result = _make_route_result()
@@ -525,6 +587,44 @@ class TestWriteExecutionPlanProfiles:
         assert "Character: CACHE" in content
         assert "Trader One" in content
         assert "Open Orders 4" in content
+
+    def test_internal_route_operational_floor_is_visible(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["transport_mode"] = "internal_self_haul"
+        result["operational_profit_floor_isk"] = 2_000_000.0
+        result["suppressed_expected_realized_profit_total"] = 1_300_000.0
+        result["operational_filter_note"] = "Internal nullsec routes require at least 2.0m ISK expected realized profit."
+        content = self._write_and_read([result])
+        assert "Internal Route Floor" in content
+        assert "Suppressed Profit" in content
+
+    def test_external_route_operational_floor_is_hidden(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["transport_mode"] = "shipping_lane"
+        result["operational_profit_floor_isk"] = 2_000_000.0
+        result["suppressed_expected_realized_profit_total"] = 1_300_000.0
+        result["operational_filter_note"] = "Should not render on external routes."
+        content = self._write_and_read([result])
+        assert "Internal Route Floor" not in content
+        assert "Internal Route Note" not in content
+
+    def test_price_sensitive_pick_shows_profit_basis_block(self):
+        pick = _planned_pick(
+            target_price_basis="best_ask_undercut",
+            profit_at_top_of_book=30_000.0,
+            profit_at_conservative_executable_price=18_000.0,
+            expected_realized_profit_90d=16_000.0,
+            profit_retention_ratio=0.60,
+        )
+        result = _make_route_result(picks=[pick])
+        content = self._write_and_read([result])
+        assert "Quote Basis:" in content
+        assert "Profit Basis:" in content
+        assert "visible-book" in content
+        assert "conservative executable" in content
+        assert "displayed uses" in content
+        assert "retention 60%" in content
+        assert "Net Exit Basis Used:" in content
 
     def test_personal_history_warning_shown_in_header(self):
         result = _make_route_result()

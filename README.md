@@ -105,9 +105,34 @@ python .\main.py auth login
 python .\main.py auth status
 python .\main.py character sync
 python .\main.py character status
+python .\main.py clean
 ```
 
 Wenn `--cargo-m3` oder `--budget-isk` fehlen, fragt die CLI interaktiv nach Cargo und Budget.
+
+### Sauberer Neustart
+
+Fuer einen sicheren Clean-Start gibt es jetzt:
+
+```powershell
+python .\main.py clean
+```
+
+Das entfernt nur erzeugte Laufzeit-Artefakte und fluichtigen Cache:
+
+- `execution_plan_*.txt`, `route_leaderboard_*.txt`,
+  `roundtrip_plan_*.txt`, `no_trade_*.txt`
+- `*_to_*_<timestamp>.csv`, `*_top_candidates_<timestamp>.txt`
+- `trade_plan_*.json`, `snapshot_*.json`, `market_snapshot.json`,
+  `replay_snapshot.json`
+- `cache/http_cache.json`, `cache/types.json`
+- `.pytest_cache` und rekursive `__pycache__`-Verzeichnisse
+
+Bewusst erhalten bleiben:
+
+- `cache/token.json`
+- `cache/trade_journal.sqlite3`
+- `cache/character_context/`
 
 ### Lokale Web App
 
@@ -306,6 +331,9 @@ Artefakte liegen unter dem ohnehin ignorierten `cache/`-Bereich:
 - `cache/character_context/sso_token.json`
 - `cache/character_context/sso_metadata.json`
 - `cache/character_context/character_profile.json`
+
+Der Safe-Cleanup ueber `python .\main.py clean` entfernt diese Dateien bewusst
+nicht.
 
 #### Fallback-Verhalten
 
@@ -560,9 +588,13 @@ Wichtig beim Lesen:
 Je nach Modus entstehen ausserdem:
 
 - `roundtrip_plan_<timestamp>.txt` im einfachen Roundtrip-Pfad ohne Route-Profile
+- `no_trade_<timestamp>.txt` bei expliziter Nicht-Handeln-Entscheidung
 - `*_to_*_<timestamp>.csv` fuer Pick-Daten
 - `*_top_candidates_<timestamp>.txt` fuer Kandidaten-Diagnostik und Rejection-Reasons
+- `trade_plan_<plan_id>.json` fuer Journal-Import und stabile Pick-IDs
+- `snapshot_<timestamp>.json` im Snapshot-Only-Modus
 - `market_snapshot.json` als Laufzeit-Snapshot
+- `replay_snapshot.json`, wenn ein Live-Run einen Replay-Snapshot schreibt
 
 Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine Picks erscheinen, heisst das im Normalfall: Unter den aktuellen Filtern, Kosten und Marktbedingungen ist gerade nichts belastbar handelbar.
 

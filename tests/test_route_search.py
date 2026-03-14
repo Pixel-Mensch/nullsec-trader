@@ -1,6 +1,7 @@
 """Route Search tests."""
 
 from tests.shared import *  # noqa: F401,F403
+from route_search import summarize_route_for_ranking
 
 def test_build_adjacent_pairs_forward() -> None:
     chain_nodes = [
@@ -184,6 +185,47 @@ def test_route_search_prefers_allowed_pair_alias_for_deduped_node() -> None:
     pairs = {(p["from"], p["to"]) for p in profiles}
     assert pairs == {("A Alias", "B")}
 
+
+def test_route_summary_confidence_is_capped_by_pick_market_quality() -> None:
+    route = {
+        "route_label": "A->B",
+        "picks": [
+            {
+                "expected_realized_profit_90d": 10_000_000.0,
+                "decision_overall_confidence": 0.88,
+                "overall_confidence": 0.88,
+                "expected_days_to_sell": 2.0,
+                "market_quality_score": 0.46,
+            }
+        ],
+        "cost_model_confidence": "normal",
+    }
+
+    summary = summarize_route_for_ranking(route)
+    assert abs(float(summary["market_quality_factor"]) - 0.46) < 1e-9
+    assert abs(float(summary["route_confidence"]) - 0.46) < 1e-9
+
+
+def test_route_summary_keeps_healthy_market_quality_routes_actionable() -> None:
+    route = {
+        "route_label": "A->B",
+        "picks": [
+            {
+                "expected_realized_profit_90d": 12_000_000.0,
+                "decision_overall_confidence": 0.86,
+                "overall_confidence": 0.86,
+                "expected_days_to_sell": 1.5,
+                "market_quality_score": 0.77,
+            }
+        ],
+        "cost_model_confidence": "high",
+    }
+
+    summary = summarize_route_for_ranking(route)
+    assert abs(float(summary["market_quality_factor"]) - 0.77) < 1e-9
+    assert abs(float(summary["route_confidence"]) - 0.77) < 1e-9
+    assert bool(summary["actionable"]) is True
+
 def test_route_leaderboard_top_n_sorted() -> None:
     routes = [
         {"route_label": "A->B", "source_label": "A", "dest_label": "B", "shipping_provider": "ITL", "profit_total": 10_000_000.0, "isk_used": 50_000_000.0, "m3_used": 1000.0, "net_revenue_total": 60_000_000.0, "total_fees_taxes": 1_000_000.0, "total_route_cost": 500_000.0, "shipping_cost_total": 200_000.0, "items_count": 3, "budget_util_pct": 50.0, "cargo_util_pct": 20.0, "picks": [{"profit": 6_500_000.0}, {"profit": 2_000_000.0}, {"profit": 1_500_000.0}]},
@@ -201,6 +243,42 @@ def test_route_leaderboard_top_n_sorted() -> None:
     assert "provider: HWL" in content
     assert "Top3 Profit Share" in content
     assert "Dominance Flag (>60%): YES" in content
+
+
+def test_route_leaderboard_shows_route_mix_cleanup_note() -> None:
+    routes = [
+        {
+            "route_label": "A->B",
+            "source_label": "A",
+            "dest_label": "B",
+            "shipping_provider": "ITL",
+            "profit_total": 10_000_000.0,
+            "isk_used": 50_000_000.0,
+            "m3_used": 1000.0,
+            "net_revenue_total": 60_000_000.0,
+            "total_fees_taxes": 1_000_000.0,
+            "total_route_cost": 500_000.0,
+            "shipping_cost_total": 200_000.0,
+            "items_count": 2,
+            "budget_util_pct": 50.0,
+            "cargo_util_pct": 20.0,
+            "route_mix_cleanup_notes": [
+                "Removed weak optional add-on pick Noise-5 'Needlejack' Filament: +0.06 route confidence, +0.07 market quality, -3.7% expected profit share."
+            ],
+            "picks": [
+                {"profit": 6_500_000.0, "expected_realized_profit_90d": 6_500_000.0, "decision_overall_confidence": 0.80, "overall_confidence": 0.80, "market_quality_score": 0.80},
+                {"profit": 3_500_000.0, "expected_realized_profit_90d": 3_500_000.0, "decision_overall_confidence": 0.78, "overall_confidence": 0.78, "market_quality_score": 0.78},
+            ],
+            "cost_model_confidence": "normal",
+        }
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-05_00-00-00", routes, ranking_metric="profit_total", max_routes=1)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "route_mix_cleanup:" in content
+    assert "Noise-5 'Needlejack' Filament" in content
 
 def test_route_leaderboard_prunes_blocked_route_from_ranked_section() -> None:
     routes = [
@@ -234,4 +312,65 @@ def test_route_leaderboard_prunes_blocked_route_from_ranked_section() -> None:
     assert "GOOD" in content
     assert "PRUNED / NOT ACTIONABLE" in content
     assert "- BLOCKED: missing_transport_cost_model" in content
+
+
+def test_route_leaderboard_shows_internal_route_floor_for_suppressed_route() -> None:
+    routes = [
+        {
+            "route_label": "GOOD",
+            "source_label": "A",
+            "dest_label": "B",
+            "shipping_provider": "ITL",
+            "expected_realized_profit_total": 10_000_000.0,
+            "full_sell_profit_total": 12_000_000.0,
+            "isk_used": 50_000_000.0,
+            "m3_used": 1000.0,
+            "picks": [{"expected_realized_profit_90d": 10_000_000.0, "overall_confidence": 0.8, "expected_days_to_sell": 10.0}],
+            "cost_model_confidence": "normal",
+        },
+        {
+            "route_label": "WEAK INTERNAL",
+            "source_label": "UALX-3",
+            "dest_label": "C-J6MT",
+            "transport_mode": "internal_self_haul",
+            "route_prune_reason": "internal_route_profit_below_operational_floor",
+            "operational_profit_floor_isk": 2_000_000.0,
+            "suppressed_expected_realized_profit_total": 1_300_000.0,
+            "operational_filter_note": "Internal nullsec routes require at least 2.0m ISK expected realized profit.",
+            "picks": [],
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-13_00-00-00", routes, ranking_metric="risk_adjusted_expected_profit", max_routes=5)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "WEAK INTERNAL" in content
+    assert "internal_route_floor" in content
+    assert "suppressed_expected_profit" in content
+    assert "internal_route_note" in content
+
+
+def test_route_leaderboard_hides_internal_route_floor_for_external_route() -> None:
+    routes = [
+        {
+            "route_label": "EXTERNAL",
+            "source_label": "Jita",
+            "dest_label": "O4T",
+            "transport_mode": "shipping_lane",
+            "route_prune_reason": "confidence",
+            "operational_profit_floor_isk": 2_000_000.0,
+            "suppressed_expected_realized_profit_total": 1_300_000.0,
+            "operational_filter_note": "Should stay hidden on external routes.",
+            "picks": [],
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-14_00-00-00", routes, ranking_metric="risk_adjusted_expected_profit", max_routes=5)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "EXTERNAL" in content
+    assert "internal_route_floor" not in content
+    assert "internal_route_note" not in content
 

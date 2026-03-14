@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-08
+Last updated: 2026-03-14
 
 ## Evidence And Limits
 
@@ -51,6 +51,7 @@ import facade used by tests and local tooling.
 Use this section to avoid loading large unrelated modules.
 
 - CLI argument parsing and shared runtime helpers: `runtime_common.py`
+- Safe runtime-artifact cleanup and cache reset: `runtime_cleanup.py`
 - Runtime orchestration, mode selection, replay/live flow, output fan-out:
   `runtime_runner.py`
 - Config loading, validation, overrides, and directory setup: `config_loader.py`
@@ -65,14 +66,19 @@ Use this section to avoid loading large unrelated modules.
   `journal_store.py`
 - Candidate generation, planned-sell math, route-wide candidate scoring:
   `candidate_engine.py`
-- Market plausibility heuristics: `market_plausibility.py`
-- Route ranking and route summary scoring: `route_search.py`
-- Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
+- Market plausibility heuristics plus anti-bait market-quality gate:
+  `market_plausibility.py`
+- Route ranking and route summary scoring, including market-quality confidence
+  cap: `route_search.py`
+- Portfolio construction, liquidation gating, cargo fill, and local-search
+  selection objective: `portfolio_builder.py`
 - Shipping costs, route blocking, and transport context: `shipping.py`
 - Fee calculations: `fees.py`, `fee_engine.py`
-- Human-readable output, route plan rendering, and no-trade reports: `execution_plan.py`
+- Human-readable output, route plan rendering, route leaderboard, and no-trade
+  reports: `execution_plan.py`
 - Do Not Trade decision engine (reason codes, near-misses, profile comparison): `no_trade.py`
-- CSV and summary writers: `runtime_reports.py`
+- CSV and summary writers for chain/roundtrip artifacts with sequential-leg
+  aggregate semantics: `runtime_reports.py`
 - Journal CLI and persistence: `journal_cli.py`, `journal_store.py`,
   `journal_models.py`, `journal_reporting.py`
 - Wallet/journal reconciliation: `journal_reconciliation.py`
@@ -98,6 +104,17 @@ The main runtime flow is:
 -> `route_search.py`
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
+
+Safe clean-start flow:
+
+`main.py clean`
+-> `runtime_common.py`
+-> `runtime_runner.py`
+-> `runtime_cleanup.py`
+-> removes generated root artifacts, transient HTTP/type caches, and Python
+   cache directories
+-> preserves `cache/token.json`, `cache/trade_journal.sqlite3`, and
+   `cache/character_context/`
 
 Journal reconciliation flow:
 
@@ -125,9 +142,21 @@ Local web flow is separate from the CLI and intentionally thin:
 -> `runtime_runner.run_cli()` in-process for full analysis runs
 -> existing artifacts and manifest files rendered into templates
 
-`webapp.app` now tracks in-flight requests before the heartbeat watcher decides
-to auto-shutdown, so long-running `/analysis/run` requests are not killed by
-the idle timer mid-response.
+`webapp.app` is now a plain local FastAPI app without browser-heartbeat or
+idle auto-shutdown behavior. The local web process stays up until it is
+stopped explicitly.
+
+The journal web path has two distinct data sources on purpose:
+
+- the local journal DB drives overview/open/closed/report/personal/calibration
+  pages
+- character cache or live wallet data drives the journal page's snapshot
+  summary plus the dedicated reconcile/unmatched views
+
+The browser now makes that separation explicit: the journal page always shows
+the current character snapshot summary it can resolve, and opening the
+Reconcile/Unmatched tabs triggers real reconciliation work instead of showing a
+pure placeholder.
 
 The analysis/result browser views now rely on a small page-level layout
 modifier in `base.html` plus overflow-safe CSS in `webapp/static/css/app.css`:
@@ -145,6 +174,57 @@ their own panels instead of widening the full page.
   explicit internal `route_costs` entry is present
 - route blocking for missing transport models still applies to non-internal,
   non-modeled routes
+
+`runtime_runner.py` now owns a second shared post-build gating seam after
+transport and confidence calibration:
+
+- `risk_profiles.filter_picks_by_profile()` is applied to final picks in both
+  `run_route()` and `run_route_wide_leg()`
+- that shared seam is responsible for hard pick-level profile enforcement
+  (expected profit, profit density, confidence, and max budget share)
+- after that, `runtime_runner.py` can apply a narrow post-selection route-mix
+  cleanup that removes clearly weak optional/speculative add-ons when route
+  confidence / market quality recover materially and the route score stays
+  effectively intact
+- that cleanup now also looks for weak tail signals explicitly
+  (`speculative`, `price-sensitive`, fragile market quality, weak retention,
+  low confidence, elevated manipulation risk) instead of relying only on raw
+  score deltas
+- the same post-build seam also derives clearer `route_prune_reason` buckets
+  and applies the internal-self-haul operational route floor before artifacts
+  are emitted
+
+Trade quality now has one central seam instead of separate ad-hoc penalties:
+
+- `market_plausibility.py` computes book-structure signals, profit retention
+  after conservative repricing, a derived `market_quality_score`, and a small
+  combined gate for fragile thin-book setups
+- `candidate_engine.py` applies that seam during candidate generation and
+  carries `market_quality_score` / `profit_retention_ratio` forward on records
+- `portfolio_builder.py` and `execution_plan.py` reuse those fields instead of
+  inventing second-pass heuristics for local search, cargo fill, or mandatory
+  labeling
+- `route_search.py` caps displayed `route_confidence` by average pick market
+  quality so downstream leaderboard / no-trade artifacts stay aligned
+- replay-guided calibration on 2026-03-13 kept that seam intact but softened
+  only two generic structural penalties (`DEPTH_COLLAPSE`,
+  `ORDERBOOK_CONCENTRATION`) and the candidate-stage quality confidence
+  haircut; fake-spread / thin-top / unusable-depth gates were left unchanged
+- `execution_plan.py` now surfaces that seam more honestly for operators:
+  PRICE-SENS / materially repriced picks show the quote basis, visible-book
+  profit proxy, conservative executable profit proxy, retention, and the
+  displayed profit basis actually used in the plan
+- internal-route operational floor metadata is now presentation-scoped to
+  `internal_self_haul` routes instead of any route result that merely carried a
+  floor value
+
+Volume validity is now intentionally conservative across the runtime path:
+
+- `runtime_clients.py` returns `0.0` for missing/invalid type volume instead of
+  silently coercing to a positive fallback
+- `candidate_engine.py` rejects such candidates via `invalid_volume`
+- execution plans and prune reasons can now surface invalid-volume failures
+  explicitly
 
 Personal history flow is separate on purpose and only becomes decision-relevant
 through an explicit policy gate:
@@ -169,10 +249,13 @@ Confirmed output families from the current docs and entry modules:
 - `execution_plan_<timestamp>.txt`
 - `route_leaderboard_<timestamp>.txt`
 - `roundtrip_plan_<timestamp>.txt`
+- `no_trade_<timestamp>.txt`
 - `*_to_*_<timestamp>.csv`
 - `*_top_candidates_<timestamp>.txt`
 - `trade_plan_<plan_id>.json`
+- `snapshot_<timestamp>.json`
 - `market_snapshot.json`
+- `replay_snapshot.json`
 
 `plan_id` / `pick_id` identity is now intentionally deterministic for identical
 snapshot+input runs. The human-readable text artifacts still keep their own
@@ -184,6 +267,10 @@ Local mutable state:
 - `config.local.json` is local-only and ignored by Git
 - `cache/` holds runtime cache, SSO token/metadata, character profile cache,
   and journal data
+- `runtime_cleanup.py` powers `python main.py clean` and intentionally deletes
+  only generated artifacts plus transient caches (`cache/http_cache.json`,
+  `cache/types.json`, `.pytest_cache`, `__pycache__`) while preserving local
+  auth and journal state
 - `trade_journal.sqlite3` now stores both manual trade events and optional
   wallet-reconciliation summaries on each entry, including wallet-snapshot
   quality fields that keep personal-history output independent from a fresh
@@ -208,9 +295,12 @@ the repository dynamically.
 
 ## Current Hotspots
 
-Most recent focused work on 2026-03-07 touched:
+Most recent focused work on 2026-03-13 touched:
 
 - risk profiles and profile-aware ranking/output
+- replay-based market-quality calibration against focused execution-plan and
+  top-candidate artifacts
+- post-selection route-mix cleanup for weak optional/speculative add-ons
 - execution-plan presentation
 - optional private character context via EVE SSO / ESI
 - wallet-to-journal reconciliation and personal trade-history reporting
@@ -240,7 +330,8 @@ confirm the current branch state.
 - Wallet-based personal trade reconciliation: `journal_reconciliation.py`
 - Route ranking: `route_search.py`
 - Portfolio construction, liquidation gating, and cargo fill: `portfolio_builder.py`
-- Execution plan rendering: `execution_plan.py`
+- Execution plan rendering and aggregate-vs-actionable text semantics:
+  `execution_plan.py`
 - Runtime orchestration: `runtime_runner.py`
 - Local browser delivery and service glue: `webapp/`
 

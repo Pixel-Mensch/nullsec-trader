@@ -24,9 +24,49 @@ DEFAULT_MARKET_PLAUSIBILITY_CFG = {
     "reference_soft_cap_markup": 0.25,
 }
 
+_FRAGILE_BOOK_FLAGS = {
+    "THIN_TOP_OF_BOOK",
+    "UNUSABLE_DEPTH",
+    "DEPTH_COLLAPSE",
+    "ORDERBOOK_CONCENTRATION",
+}
+
 
 def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, float(value or 0.0)))
+
+
+def _metric_get(metrics: object, key: str, default: float | list[str] | None = None):
+    if isinstance(metrics, dict):
+        return metrics.get(key, default)
+    return getattr(metrics, key, default)
+
+
+def _metric_has(metrics: object, key: str) -> bool:
+    if isinstance(metrics, dict):
+        return key in metrics
+    return hasattr(metrics, key)
+
+
+def _metric_flags(metrics: object) -> set[str]:
+    raw_flags = _metric_get(metrics, "flags", None)
+    if raw_flags is None:
+        nested = _metric_get(metrics, "market_plausibility", {})
+        if isinstance(nested, dict):
+            raw_flags = nested.get("flags", [])
+    return {str(flag).strip().upper() for flag in list(raw_flags or []) if str(flag).strip()}
+
+
+def _primary_reason_from_flags(flags: set[str]) -> str:
+    reason_priority = [
+        "FAKE_SPREAD_RISK",
+        "UNUSABLE_DEPTH",
+        "THIN_TOP_OF_BOOK",
+        "DEPTH_COLLAPSE",
+        "EXTREME_REFERENCE_DEVIATION",
+        "ORDERBOOK_CONCENTRATION",
+    ]
+    return next((code for code in reason_priority if code in flags), "")
 
 
 def resolve_market_plausibility_cfg(filters: dict) -> dict:
@@ -35,6 +75,103 @@ def resolve_market_plausibility_cfg(filters: dict) -> dict:
     if isinstance(raw, dict):
         cfg.update(raw)
     return cfg
+
+
+def profit_retention_ratio_from_values(
+    top_profit_total: float,
+    usable_profit_total: float | None = None,
+    conservative_profit_total: float | None = None,
+) -> float:
+    top_profit = float(top_profit_total or 0.0)
+    if top_profit <= 0.0:
+        return 1.0
+    effective_profits = [float(top_profit)]
+    if usable_profit_total is not None:
+        effective_profits.append(float(usable_profit_total))
+    if conservative_profit_total is not None:
+        effective_profits.append(float(conservative_profit_total))
+    retained = min(effective_profits)
+    return _clamp01(retained / max(1.0, top_profit))
+
+
+def market_quality_score_from_metrics(metrics: object) -> float:
+    if _metric_has(metrics, "market_quality_score"):
+        raw_quality = _metric_get(metrics, "market_quality_score", None)
+        if raw_quality is not None:
+            try:
+                parsed_quality = _clamp01(float(raw_quality))
+                if parsed_quality < 0.999:
+                    return parsed_quality
+            except (TypeError, ValueError):
+                pass
+    plausibility_score = _clamp01(float(_metric_get(metrics, "market_plausibility_score", 1.0) or 1.0))
+    manipulation_risk = _clamp01(
+        float(_metric_get(metrics, "manipulation_risk_score", max(0.0, 1.0 - plausibility_score)) or 0.0)
+    )
+    profit_retention_ratio = _clamp01(
+        float(
+            _metric_get(
+                metrics,
+                "profit_retention_ratio",
+                profit_retention_ratio_from_values(
+                    float(_metric_get(metrics, "profit_at_top_of_book", 0.0) or 0.0),
+                    float(_metric_get(metrics, "profit_at_usable_depth", 0.0) or 0.0),
+                    float(_metric_get(metrics, "profit_at_conservative_executable_price", 0.0) or 0.0),
+                ),
+            )
+            or 0.0
+        )
+    )
+    flags = _metric_flags(metrics)
+    quality_score = min(plausibility_score, max(0.0, 1.0 - manipulation_risk), profit_retention_ratio)
+    if "THIN_TOP_OF_BOOK" in flags:
+        quality_score *= 0.92
+    if "UNUSABLE_DEPTH" in flags:
+        quality_score *= 0.88
+    if "DEPTH_COLLAPSE" in flags:
+        quality_score *= 0.95
+    if "ORDERBOOK_CONCENTRATION" in flags:
+        quality_score *= 0.96
+    if "FAKE_SPREAD_RISK" in flags:
+        quality_score *= 0.85
+    return _clamp01(quality_score)
+
+
+def market_quality_gate_from_metrics(metrics: object, *, cfg: dict | None = None) -> tuple[bool, str]:
+    settings = dict(DEFAULT_MARKET_PLAUSIBILITY_CFG)
+    if isinstance(cfg, dict):
+        settings.update(cfg)
+    flags = _metric_flags(metrics)
+    fragile_flags = flags & _FRAGILE_BOOK_FLAGS
+    manipulation_risk = _clamp01(float(_metric_get(metrics, "manipulation_risk_score", 0.0) or 0.0))
+    profit_retention_ratio = _clamp01(
+        float(
+            _metric_get(
+                metrics,
+                "profit_retention_ratio",
+                profit_retention_ratio_from_values(
+                    float(_metric_get(metrics, "profit_at_top_of_book", 0.0) or 0.0),
+                    float(_metric_get(metrics, "profit_at_usable_depth", 0.0) or 0.0),
+                    float(_metric_get(metrics, "profit_at_conservative_executable_price", 0.0) or 0.0),
+                ),
+            )
+            or 0.0
+        )
+    )
+    market_quality_score = market_quality_score_from_metrics(metrics)
+    warn_manipulation_risk = max(0.0, float(settings.get("warn_manipulation_risk", 0.45) or 0.45))
+    price_sensitive_retention_floor = max(0.65, float(settings.get("fake_spread_profit_ratio", 0.55) or 0.55))
+    reason = _primary_reason_from_flags(flags) or "FAKE_SPREAD_RISK"
+
+    if market_quality_score < 0.40 and (fragile_flags or "FAKE_SPREAD_RISK" in flags):
+        return True, reason
+    if profit_retention_ratio < 0.70 and manipulation_risk >= warn_manipulation_risk and fragile_flags:
+        return True, reason
+    if profit_retention_ratio < price_sensitive_retention_floor and (
+        "THIN_TOP_OF_BOOK" in flags or "DEPTH_COLLAPSE" in flags or "FAKE_SPREAD_RISK" in flags
+    ):
+        return True, reason
+    return False, ""
 
 
 def top_of_book_volume_ratio(levels: list[OrderLevel], visible_levels: int = 5) -> float:
@@ -304,12 +441,11 @@ def assess_market_plausibility(
     if ref_deviation >= reference_deviation_threshold:
         flags.append("EXTREME_REFERENCE_DEVIATION")
 
-    profit_ratio = 1.0
-    if top_profit_total > 0.0:
-        profit_ratio = min(
-            usable_profit_total / max(1.0, top_profit_total),
-            conservative_profit_total / max(1.0, top_profit_total),
-        )
+    profit_ratio = profit_retention_ratio_from_values(
+        top_profit_total,
+        usable_profit_total,
+        conservative_profit_total,
+    )
     if top_profit_total > 0.0 and profit_ratio < fake_spread_profit_ratio:
         flags.append("FAKE_SPREAD_RISK")
 
@@ -328,6 +464,31 @@ def assess_market_plausibility(
         risk += 0.10
     risk = _clamp01(risk)
     plausibility_score = _clamp01(1.0 - risk)
+    flags_set = set(flags)
+    primary_reason = _primary_reason_from_flags(flags_set)
+    market_quality_score = market_quality_score_from_metrics(
+        {
+            "market_plausibility_score": float(plausibility_score),
+            "manipulation_risk_score": float(risk),
+            "profit_retention_ratio": float(profit_ratio),
+            "flags": list(flags),
+            "profit_at_top_of_book": float(top_profit_total),
+            "profit_at_usable_depth": float(usable_profit_total),
+            "profit_at_conservative_executable_price": float(conservative_profit_total),
+        }
+    )
+    quality_gate_reject, quality_gate_reason = market_quality_gate_from_metrics(
+        {
+            "market_plausibility_score": float(plausibility_score),
+            "manipulation_risk_score": float(risk),
+            "profit_retention_ratio": float(profit_ratio),
+            "flags": list(flags),
+            "profit_at_top_of_book": float(top_profit_total),
+            "profit_at_usable_depth": float(usable_profit_total),
+            "profit_at_conservative_executable_price": float(conservative_profit_total),
+        },
+        cfg=settings,
+    )
 
     hard_reject = False
     if bool(settings.get("hard_reject_on_unusable_depth", True)) and usable_depth_ratio < 0.55:
@@ -338,16 +499,8 @@ def assess_market_plausibility(
         hard_reject = True
     if "FAKE_SPREAD_RISK" in flags and "THIN_TOP_OF_BOOK" in flags:
         hard_reject = True
-
-    reason_priority = [
-        "FAKE_SPREAD_RISK",
-        "UNUSABLE_DEPTH",
-        "THIN_TOP_OF_BOOK",
-        "DEPTH_COLLAPSE",
-        "EXTREME_REFERENCE_DEVIATION",
-        "ORDERBOOK_CONCENTRATION",
-    ]
-    primary_reason = next((code for code in reason_priority if code in flags), "")
+    if not primary_reason and quality_gate_reason:
+        primary_reason = str(quality_gate_reason)
 
     return {
         "top_of_book_volume_ratio": float(min(source_top_ratio, exit_top_ratio)),
@@ -372,17 +525,24 @@ def assess_market_plausibility(
         "profit_at_usable_depth": float(usable_profit_total),
         "profit_at_conservative_executable_price": float(conservative_profit_total),
         "conservative_executable_qty": int(conservative_profit_qty),
+        "profit_retention_ratio": float(profit_ratio),
         "flags": list(flags),
         "primary_reason": str(primary_reason),
         "hard_reject": bool(hard_reject),
+        "quality_gate_reject": bool(quality_gate_reject),
+        "quality_gate_reason": str(quality_gate_reason),
         "manipulation_risk_score": float(risk),
         "market_plausibility_score": float(plausibility_score),
+        "market_quality_score": float(market_quality_score),
     }
 
 
 __all__ = [
     "DEFAULT_MARKET_PLAUSIBILITY_CFG",
     "resolve_market_plausibility_cfg",
+    "profit_retention_ratio_from_values",
+    "market_quality_score_from_metrics",
+    "market_quality_gate_from_metrics",
     "top_of_book_volume_ratio",
     "depth_decay",
     "price_gap_after_top_levels",

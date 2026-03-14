@@ -25,6 +25,7 @@ py-modules = [
   "main",
   "nullsectrader",
   "runtime_common",
+  "runtime_cleanup",
   "runtime_clients",
   "runtime_reports",
   "runtime_runner",

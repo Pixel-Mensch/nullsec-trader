@@ -18,7 +18,9 @@
 <section class="panel">
   <div class="tabs" role="tablist" aria-label="Journal views">
     {% for tab in data.tabs %}
-    {% if tab == 'unmatched' %}
+    {% if tab == 'reconcile' %}
+    <a class="tab-link {% if data.tab == tab %}is-active{% endif %}" href="/journal/reconcile?limit={{ data.limit }}">{{ tab }}</a>
+    {% elif tab == 'unmatched' %}
     <a class="tab-link {% if data.tab == tab %}is-active{% endif %}" href="/journal/unmatched?limit={{ data.limit }}">{{ tab }}</a>
     {% else %}
     <a class="tab-link {% if data.tab == tab %}is-active{% endif %}" href="/journal?tab={{ tab }}&limit={{ data.limit }}">{{ tab }}</a>
@@ -26,6 +28,29 @@
     {% endfor %}
   </div>
   <p class="muted">Entries {{ data.entry_count }} | Limit {{ data.limit }} | Reconcile cache {% if data.has_reconciliation_result %}available{% else %}empty{% endif %}</p>
+  <div class="card-grid">
+    <article class="info-card">
+      <p class="card-label">Character snapshot</p>
+      <h3>{{ data.character_summary.character_name or "Unavailable" }}</h3>
+      <p class="stat-line">{{ data.character_summary.source or "default" }}</p>
+      <p class="muted">Warnings {{ data.character_summary.warnings|length }}</p>
+    </article>
+    <article class="info-card">
+      <p class="card-label">Open orders</p>
+      <h3>{{ data.character_summary.open_orders_count or 0 }}</h3>
+      <p class="stat-line">Sell {{ data.character_summary.sell_order_count or 0 }} / Buy {{ data.character_summary.buy_order_count or 0 }}</p>
+      <p class="muted">Current character market exposure</p>
+    </article>
+    <article class="info-card">
+      <p class="card-label">Wallet history</p>
+      <h3>{{ data.character_summary.wallet_transactions_count or 0 }} tx</h3>
+      <p class="stat-line">Journal {{ data.character_summary.wallet_journal_count or 0 }}</p>
+      <p class="muted">{{ data.character_summary.wallet_data_freshness or "unknown" }} / {{ data.character_summary.wallet_history_quality or "missing" }}</p>
+    </article>
+  </div>
+  {% if data.empty_notice %}
+  <p class="muted">{{ data.empty_notice }}</p>
+  {% endif %}
   {% if data.last_action %}
   <p class="status-note">{{ data.last_action }}</p>
   {% endif %}

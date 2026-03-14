@@ -346,3 +346,34 @@ def test_market_plausibility_planned_sell_with_competition_uses_exit_depth() -> 
     assert result["usable_depth_at_confidence_price"] == min(50, 60)
     assert result["usable_depth_ratio"] >= 1.0
 
+
+def test_market_quality_gate_rejects_fragile_price_sensitive_book() -> None:
+    from market_plausibility import market_quality_gate_from_metrics
+
+    metrics = {
+        "market_plausibility_score": 0.58,
+        "manipulation_risk_score": 0.48,
+        "profit_retention_ratio": 0.62,
+        "flags": ["THIN_TOP_OF_BOOK", "ORDERBOOK_CONCENTRATION"],
+    }
+
+    reject, reason = market_quality_gate_from_metrics(metrics)
+    assert reject is True
+    assert reason in {"THIN_TOP_OF_BOOK", "ORDERBOOK_CONCENTRATION"}
+
+
+def test_market_quality_keeps_robust_depth_collapse_books_actionable() -> None:
+    from market_plausibility import market_quality_gate_from_metrics, market_quality_score_from_metrics
+
+    metrics = {
+        "market_plausibility_score": 0.85,
+        "manipulation_risk_score": 0.15,
+        "profit_retention_ratio": 0.84,
+        "flags": ["DEPTH_COLLAPSE", "ORDERBOOK_CONCENTRATION"],
+    }
+
+    reject, reason = market_quality_gate_from_metrics(metrics)
+    assert reject is False
+    assert reason == ""
+    assert market_quality_score_from_metrics(metrics) >= 0.75
+

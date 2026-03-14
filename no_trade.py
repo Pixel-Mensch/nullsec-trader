@@ -24,13 +24,13 @@ from __future__ import annotations
 
 REASON_CODES: dict[str, str] = {
     "NO_ACTIONABLE_ROUTES": "No actionable routes found",
-    "NO_STRONG_EXITS": "No mandatory or optional picks — only speculative positions",
+    "NO_STRONG_EXITS": "No mandatory or optional picks - only speculative positions",
     "EXCESSIVE_SPECULATION": "Speculative pick share exceeds acceptable threshold",
     "LOW_ROUTE_CONFIDENCE": "Best route confidence below profile minimum",
     "SHIPPING_UNCERTAIN": "Transport confidence too low for reliable execution",
     "CAPITAL_LOCK_TOO_HIGH": "Capital lock risk exceeds acceptable threshold",
     "PROFIT_NOT_ACTIONABLE": "Expected profit too small to justify execution costs",
-    "DATA_QUALITY_TOO_WEAK": "Calibration data too thin — outcomes unverifiable",
+    "DATA_QUALITY_TOO_WEAK": "Calibration data too thin - outcomes unverifiable",
     "TOO_FEW_HIGH_QUALITY_PICKS": "Too few mandatory or optional picks for a viable plan",
     "CANDIDATES_DID_NOT_SURVIVE_FILTERS": "Candidates existed but none passed all active filters",
 }
@@ -148,6 +148,9 @@ def _build_near_misses(non_actionable: list[dict]) -> list[dict]:
             "total_candidates": int(r.get("total_candidates", 0) or 0),
             "why_out_summary": dict(r.get("why_out_summary", {}) or {}),
             "transport_blocked": bool(r.get("route_blocked_due_to_transport", False)),
+            "operational_profit_floor_isk": float(r.get("operational_profit_floor_isk", 0.0) or 0.0),
+            "suppressed_expected_realized_profit_total": float(r.get("suppressed_expected_realized_profit_total", 0.0) or 0.0),
+            "operational_filter_note": str(r.get("operational_filter_note", "") or ""),
         })
     return near_misses
 
@@ -236,7 +239,7 @@ def evaluate_no_trade(
                 "code": "NO_ACTIONABLE_ROUTES",
                 "text": REASON_CODES["NO_ACTIONABLE_ROUTES"],
                 "severity": _SEVERITY_CRITICAL,
-                "detail": "No routes were evaluated — check config and market data.",
+                "detail": "No routes were evaluated - check config and market data.",
             }],
             "near_misses": [],
             "profile_comparison": {},
@@ -329,7 +332,7 @@ def evaluate_no_trade(
             "text": REASON_CODES["NO_STRONG_EXITS"],
             "severity": _SEVERITY_CRITICAL,
             "detail": (
-                f"All {total_picks} pick(s) are speculative — no instant or solid "
+                f"All {total_picks} pick(s) are speculative - no instant or solid "
                 "planned-sell exits available. Verify order book depth."
             ),
         })

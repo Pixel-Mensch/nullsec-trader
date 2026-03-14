@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from market_plausibility import market_quality_score_from_metrics, profit_retention_ratio_from_values
+
 
 REASON_CATALOG: dict[str, str] = {
     "STRONG_EXPECTED_PROFIT": "Konservativer erwarteter Profit ist stark.",
@@ -43,8 +45,22 @@ REASON_CATALOG: dict[str, str] = {
     "NO_ACTIONABLE_CANDIDATES": "Es gibt keine brauchbaren Kandidaten fuer diese Route.",
     "NO_ORDERBOOK": "Es fehlt ein brauchbares Orderbuch.",
     "LOW_PROFIT_AFTER_COSTS": "Nach Gebuehren und Kosten bleibt zu wenig Profit.",
+    "INVALID_VOLUME_DATA": "Volumendaten fehlen oder sind ungueltig.",
     "EXCLUDED_TYPE": "Typ ist konfigurationsseitig ausgeschlossen.",
     "EXCLUDED_NAME_KEYWORD": "Name-Matching hat den Typ ausgeschlossen.",
+    "NO_CANDIDATES": "Es wurden keine Kandidaten fuer diese Route erzeugt.",
+    "CANDIDATES_BELOW_PROFIT_FLOOR": "Kandidaten wurden am Profit-Floor verworfen.",
+    "CANDIDATES_FAILED_CONFIDENCE": "Kandidaten oder Picks scheiterten an Confidence-Grenzen.",
+    "CANDIDATES_FAILED_BUDGET_RULE": "Kandidaten oder Picks scheiterten an Budgetregeln.",
+    "CANDIDATES_FAILED_FILL_PROBABILITY": "Kandidaten scheiterten an Fill- oder Depth-Anforderungen.",
+    "CANDIDATES_FAILED_SELL_TIME": "Kandidaten scheiterten an Sell-Time- oder Liquidity-Limits.",
+    "CANDIDATES_INVALID_VOLUME": "Kandidaten wurden wegen ungueltiger Volumendaten verworfen.",
+    "NO_PICKS_AFTER_PORTFOLIO_CONSTRAINTS": "Nach Portfolio-Regeln blieb kein Pick uebrig.",
+    "INTERNAL_ROUTE_PROFIT_BELOW_OPERATIONAL_FLOOR": "Interne Route liegt unter dem operativen Mindestprofit.",
+    "PROFILE_MIN_PROFIT": "Der Pick unterschreitet den sichtbaren Profil-Mindestprofit.",
+    "PROFILE_MIN_PROFIT_DENSITY": "Der Pick unterschreitet das Profil-Limit fuer Profit pro m3.",
+    "PROFILE_MIN_CONFIDENCE": "Der Pick unterschreitet die Profil-Confidence-Grenze.",
+    "PROFILE_BUDGET_CAP": "Der Pick verletzt das Profil-Limit fuer Budget pro Item.",
 }
 
 INTERNAL_REASON_CODES: dict[str, str] = {
@@ -89,6 +105,7 @@ INTERNAL_REASON_CODES: dict[str, str] = {
     "shipping_cost_non_positive_profit": "HIGH_TRANSPORT_COST",
     "min_profit_pct_after_shipping": "HIGH_TRANSPORT_COST",
     "expected_profit_too_low_after_shipping": "HIGH_TRANSPORT_COST",
+    "invalid_volume": "INVALID_VOLUME_DATA",
     "thin_top_of_book": "THIN_TOP_OF_BOOK",
     "unusable_depth": "UNUSABLE_DEPTH",
     "fake_spread_risk": "FAKE_SPREAD_RISK",
@@ -98,6 +115,19 @@ INTERNAL_REASON_CODES: dict[str, str] = {
     "fill_probability": "WEAK_INSTANT_EXIT",
     "missing_transport_cost_model": "NO_SHIPPING_MODEL",
     "no_picks": "NO_ACTIONABLE_CANDIDATES",
+    "no_candidates": "NO_CANDIDATES",
+    "candidates_below_profit_floor": "CANDIDATES_BELOW_PROFIT_FLOOR",
+    "candidates_failed_confidence": "CANDIDATES_FAILED_CONFIDENCE",
+    "candidates_failed_budget_rule": "CANDIDATES_FAILED_BUDGET_RULE",
+    "candidates_failed_fill_probability": "CANDIDATES_FAILED_FILL_PROBABILITY",
+    "candidates_failed_sell_time": "CANDIDATES_FAILED_SELL_TIME",
+    "candidates_invalid_volume": "CANDIDATES_INVALID_VOLUME",
+    "no_picks_after_portfolio_constraints": "NO_PICKS_AFTER_PORTFOLIO_CONSTRAINTS",
+    "internal_route_profit_below_operational_floor": "INTERNAL_ROUTE_PROFIT_BELOW_OPERATIONAL_FLOOR",
+    "profile_min_expected_profit_isk": "PROFILE_MIN_PROFIT",
+    "profile_min_profit_per_m3": "PROFILE_MIN_PROFIT_DENSITY",
+    "profile_min_confidence": "PROFILE_MIN_CONFIDENCE",
+    "profile_max_item_share_of_budget": "PROFILE_BUDGET_CAP",
 }
 
 
@@ -130,6 +160,24 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value or 0)
     except Exception:
         return int(default)
+
+
+def _profit_retention_ratio_for_record(record: Any, default_profit: float = 0.0) -> float:
+    computed = profit_retention_ratio_from_values(
+        _safe_float(_record_get(record, "profit_at_top_of_book", default_profit)),
+        _safe_float(_record_get(record, "profit_at_usable_depth", default_profit)),
+        _safe_float(_record_get(record, "profit_at_conservative_executable_price", default_profit)),
+    )
+    raw_value = _record_get(record, "profit_retention_ratio", None)
+    try:
+        parsed = _clamp01(float(raw_value))
+    except Exception:
+        return computed
+    if parsed < 0.999:
+        return parsed
+    if _safe_float(_record_get(record, "profit_at_top_of_book", 0.0)) <= 0.0:
+        return parsed
+    return computed
 
 
 def _fmt_isk_short(value: Any) -> str:
@@ -256,12 +304,54 @@ def normalize_reason_entry(reason: str, metrics: dict | None = None) -> dict:
     elif code == "LOW_PROFIT_AFTER_COSTS":
         profit = _safe_float(metrics.get("expected_realized_profit_90d", metrics.get("max_profit_total", metrics.get("profit_per_unit", 0.0))))
         text = f"Nach Kosten bleibt nur {_fmt_isk_short(profit)} konservativer Profit."
+    elif code == "INVALID_VOLUME_DATA":
+        volume = _safe_float(metrics.get("resolved_unit_volume", 0.0))
+        text = f"Typvolumen ist ungueltig oder fehlt ({volume:.2f} m3)."
     elif code == "HISTORY_ONLY_SIGNAL":
         text = text or "Die Aussage stuetzt sich zu stark auf schwache History-/Fallback-Signale."
     elif code == "NO_SHIPPING_MODEL":
         text = text or "Ohne Shipping-Modell wird die Route blockiert."
     elif code == "NO_ACTIONABLE_CANDIDATES":
         text = text or "Nach allen Filtern bleiben keine brauchbaren Kandidaten uebrig."
+    elif code == "NO_CANDIDATES":
+        text = text or "Es konnten fuer diese Route keine Kandidaten gebildet werden."
+    elif code == "CANDIDATES_BELOW_PROFIT_FLOOR":
+        text = text or "Die besten Kandidaten scheitern am Profit-Floor."
+    elif code == "CANDIDATES_FAILED_CONFIDENCE":
+        text = text or "Die besten Kandidaten scheitern an Confidence-Grenzen."
+    elif code == "CANDIDATES_FAILED_BUDGET_RULE":
+        text = text or "Die besten Kandidaten scheitern an Budgetregeln."
+    elif code == "CANDIDATES_FAILED_FILL_PROBABILITY":
+        text = text or "Die besten Kandidaten scheitern an Fill- oder Depth-Anforderungen."
+    elif code == "CANDIDATES_FAILED_SELL_TIME":
+        text = text or "Die besten Kandidaten scheitern an Sell-Time- oder Liquidity-Limits."
+    elif code == "CANDIDATES_INVALID_VOLUME":
+        text = text or "Kandidaten wurden wegen ungueltiger Volumendaten verworfen."
+    elif code == "NO_PICKS_AFTER_PORTFOLIO_CONSTRAINTS":
+        text = text or "Nach Portfolio- und Pick-Regeln blieb kein Pick uebrig."
+    elif code == "INTERNAL_ROUTE_PROFIT_BELOW_OPERATIONAL_FLOOR":
+        profit = _safe_float(metrics.get("expected_realized_profit_total", 0.0))
+        floor = _safe_float(metrics.get("operational_profit_floor_isk", 0.0))
+        text = (
+            f"Interne Route liegt mit {_fmt_isk_short(profit)} unter dem operativen Mindestprofit "
+            f"von {_fmt_isk_short(floor)}."
+        )
+    elif code == "PROFILE_MIN_PROFIT":
+        profit = _safe_float(metrics.get("expected_realized_profit_90d", 0.0))
+        floor = _safe_float(metrics.get("profile_min_expected_profit_isk", 0.0))
+        text = f"Pick liefert nur {_fmt_isk_short(profit)} Erwartungsprofit bei Profil-Limit {_fmt_isk_short(floor)}."
+    elif code == "PROFILE_MIN_PROFIT_DENSITY":
+        profit_per_m3 = _safe_float(metrics.get("expected_realized_profit_per_m3_90d", 0.0))
+        floor = _safe_float(metrics.get("profile_min_profit_per_m3", 0.0))
+        text = f"Pick liefert nur {_fmt_isk_short(profit_per_m3)} pro m3 bei Profil-Limit {_fmt_isk_short(floor)} pro m3."
+    elif code == "PROFILE_MIN_CONFIDENCE":
+        conf = _safe_float(metrics.get("decision_overall_confidence", 0.0))
+        floor = _safe_float(metrics.get("profile_min_confidence", 0.0))
+        text = f"Pick-Confidence {conf:.2f} liegt unter dem Profil-Limit {floor:.2f}."
+    elif code == "PROFILE_BUDGET_CAP":
+        share = _safe_float(metrics.get("budget_share", 0.0))
+        cap = _safe_float(metrics.get("profile_max_item_share_of_budget", 0.0))
+        text = f"Pick bindet {share:.1%} des Budgets bei Profil-Limit {cap:.1%}."
     elif code == "WEAK_PRICE_BASIS":
         text = text or "Der geplante Zielpreis ist nicht belastbar genug abgeleitet."
     elif code == "NO_ORDERBOOK":
@@ -270,7 +360,12 @@ def normalize_reason_entry(reason: str, metrics: dict | None = None) -> dict:
         text = text or "Dieser Typ wurde per Konfiguration ausgeschlossen."
     elif code == "EXCLUDED_NAME_KEYWORD":
         text = text or "Der Typ wurde ueber Name-Filter ausgeschlossen."
-    return build_reason_entry(code, text=text, metrics=metrics, severity="error" if code in {"NO_SHIPPING_MODEL", "NO_ACTIONABLE_CANDIDATES"} else "info")
+    return build_reason_entry(
+        code,
+        text=text,
+        metrics=metrics,
+        severity="error" if code in {"NO_SHIPPING_MODEL", "NO_ACTIONABLE_CANDIDATES"} else "info",
+    )
 
 
 def _dedupe_reasons(entries: list[dict]) -> list[dict]:
@@ -342,22 +437,25 @@ def build_pick_score_breakdown(record: Any, *, max_liq_days: float) -> tuple[flo
     transport_conf = _clamp01(_safe_float(_record_get(record, "raw_transport_confidence", _record_get(record, "transport_confidence", 1.0))))
     exit_type = str(_record_get(record, "exit_type", "instant") or "instant").strip().lower()
     used_fallback = bool(_record_get(record, "used_volume_fallback", False))
+    market_quality_score = _clamp01(_safe_float(market_quality_score_from_metrics(record)))
     market_plausibility_score = _clamp01(_safe_float(_record_get(record, "market_plausibility_score", 1.0)))
+    manipulation_risk_score = _clamp01(_safe_float(_record_get(record, "manipulation_risk_score", max(0.0, 1.0 - market_plausibility_score))))
+    profit_retention_ratio = _profit_retention_ratio_for_record(record, default_profit=expected_profit)
 
     base_profit_score = expected_profit
     confidence_factor = 0.70 + (0.30 * confidence)
     days_penalty = 1.0 + (expected_days / max(1.0, float(max_liq_days or 1.0))) if max_liq_days > 0 else 1.0
     liquidity_factor = 1.0 / max(1.0, days_penalty)
     transport_factor = 0.90 + (0.10 * transport_conf)
-    market_plausibility_factor = 0.50 + (0.50 * market_plausibility_score)
+    market_quality_factor = 0.25 + (0.75 * market_quality_score)
     stale_market_factor = 0.90 if used_fallback else 1.0
     speculative_factor = 1.0 if exit_type == "instant" else (0.96 if exit_type == "planned" else 0.90)
 
     after_conf = base_profit_score * confidence_factor
     after_liq = after_conf * liquidity_factor
     after_transport = after_liq * transport_factor
-    after_plaus = after_transport * market_plausibility_factor
-    after_stale = after_plaus * stale_market_factor
+    after_quality = after_transport * market_quality_factor
+    after_stale = after_quality * stale_market_factor
     after_spec = after_stale * speculative_factor
     density_bonus = per_m3 * 0.05
     final_score = after_spec + density_bonus
@@ -383,15 +481,18 @@ def build_pick_score_breakdown(record: Any, *, max_liq_days: float) -> tuple[flo
             text=f"Transport-Faktor {transport_factor:.3f} bei Transport-Confidence {transport_conf:.2f}.",
         ),
         build_contributor(
-            "market_plausibility_adjustment",
-            value=market_plausibility_factor,
-            effect=after_plaus - after_transport,
-            text=f"Orderbuch-Plausibilitaetsfaktor {market_plausibility_factor:.3f} bei Score {market_plausibility_score:.2f}.",
+            "market_quality_adjustment",
+            value=market_quality_factor,
+            effect=after_quality - after_transport,
+            text=(
+                f"Market-Quality-Faktor {market_quality_factor:.3f} "
+                f"(quality {market_quality_score:.2f}, retention {profit_retention_ratio:.0%}, manip {manipulation_risk_score:.2f})."
+            ),
         ),
         build_contributor(
             "stale_market_penalty",
             value=stale_market_factor,
-            effect=after_stale - after_plaus,
+            effect=after_stale - after_quality,
             text="Fallback-/History-only-Signal reduziert den Score." if used_fallback else "Kein zusaetzlicher Stale-Market-Abzug.",
         ),
         build_contributor(
@@ -436,6 +537,8 @@ def build_candidate_explainability(record: Any, *, max_liq_days: float | None = 
         market_plausibility = {}
     market_plausibility_score = _clamp01(_safe_float(_record_get(record, "market_plausibility_score", market_plausibility.get("market_plausibility_score", 1.0))))
     manipulation_risk_score = _clamp01(_safe_float(_record_get(record, "manipulation_risk_score", market_plausibility.get("manipulation_risk_score", 0.0))))
+    market_quality_score = _clamp01(_safe_float(market_quality_score_from_metrics(record)))
+    profit_retention_ratio = _profit_retention_ratio_for_record(record, default_profit=expected_profit)
 
     positive_reasons: list[dict] = []
     negative_reasons: list[dict] = []
@@ -491,12 +594,20 @@ def build_candidate_explainability(record: Any, *, max_liq_days: float | None = 
         warnings.append(build_reason_entry("CALIBRATION_WEAK_DATA", text=calibration_warning, severity="warning"))
     if raw_conf - calibrated_conf >= 0.10:
         warnings.append(build_reason_entry("CONFIDENCE_DOWNGRADED", text=f"Kalibrierung senkt Confidence von {raw_conf:.2f} auf {calibrated_conf:.2f}.", severity="warning"))
-    if manipulation_risk_score >= 0.45 or market_plausibility_score <= 0.65:
+    if (
+        manipulation_risk_score >= 0.45
+        or market_plausibility_score <= 0.65
+        or market_quality_score <= 0.60
+        or profit_retention_ratio < 0.70
+    ):
         warnings.append(
             build_reason_entry(
                 "FAKE_SPREAD_RISK" if "FAKE_SPREAD_RISK" in set(market_plausibility.get("flags", []) or []) else "THIN_TOP_OF_BOOK",
                 text=(
-                    f"Market-Plausibility {market_plausibility_score:.2f}, Manipulation-Risk {manipulation_risk_score:.2f}."
+                    f"Market-Plausibility {market_plausibility_score:.2f}, "
+                    f"Market-Quality {market_quality_score:.2f}, "
+                    f"Profit-Retention {profit_retention_ratio:.0%}, "
+                    f"Manipulation-Risk {manipulation_risk_score:.2f}."
                 ),
                 severity="warning",
                 metrics=market_plausibility,

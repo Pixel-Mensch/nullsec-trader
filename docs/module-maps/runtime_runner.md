@@ -10,9 +10,14 @@ not a full line-by-line review.
 
 - owns `run_cli()` and the top-level runtime path
 - coordinates route, route-wide, chain, and snapshot-only execution
+- dispatches the safe clean-start maintenance path
 - wires profiles, calibration, reporting, and plan artifacts together
 - applies the opt-in personal-history layer after generic calibration
 - attaches character/personal-history metadata and explainability to runtime results
+- owns the shared post-build pick-gating seam after transport and calibration
+- owns the post-selection route-mix cleanup seam for weak non-mandatory add-ons
+- owns the internal-self-haul operational route floor before artifact emission
+- keeps external routes from carrying misleading internal-route floor metadata
 
 ## Inputs
 
@@ -40,6 +45,10 @@ not a full line-by-line review.
 - `run_route()`
 - `run_route_wide_leg()`
 - `run_snapshot_only()`
+- `_apply_post_build_profile_filters()`
+- `_apply_post_selection_route_mix_cleanup()`
+- `_derive_route_prune_reason()`
+- `_apply_internal_self_haul_operational_filter()`
 - `_build_personal_calibration_runtime()`
 - `_apply_confidence_calibration_to_candidates()`
 - `_apply_confidence_calibration_to_picks()`
@@ -49,6 +58,7 @@ not a full line-by-line review.
 ## Depends On
 
 - `runtime_common.py`
+- `runtime_cleanup.py`
 - `config_loader.py`
 - `runtime_clients.py`
 - `candidate_engine.py`
@@ -73,6 +83,7 @@ not a full line-by-line review.
 - wire new profile, calibration, or ranking behavior into the main flow
 - surface runtime metadata and keep personal-layer effects explicit
 - change artifact generation or route/chain branching
+- tune the weak-tail cleanup seam without weakening candidate-stage anti-bait gates
 
 ## Risk Areas
 
