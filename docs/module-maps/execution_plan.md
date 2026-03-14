@@ -20,7 +20,8 @@ This map is based on focused output and test inspection, not a full audit.
 - exposes profit-basis context for price-sensitive / materially repriced picks
   so visible quote vs displayed profit stays explainable
 - can render corridor-ordered route sections when runtime metadata provides a
-  direct-leg vs span / Jita-connector display grouping
+  display-only direct-leg vs longer-span / Jita-connector grouping without
+  changing ranking, and without dropping longer profitable spans from view
 
 ## Inputs
 

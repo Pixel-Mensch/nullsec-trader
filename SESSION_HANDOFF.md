@@ -1,105 +1,81 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 27 web hardening + corridor display)
+Date: 2026-03-14 (session 28 docs alignment for private web deploy scope)
 Branch: `dev`
 
 ## Completed This Session
 
-Implemented the planned local block around private web access and
-streckenlogik-based route presentation without changing route-search scoring.
+Updated only the affected docs and handoff files so the current web-protection
+scope and the new corridor-ordered output behavior are described more
+precisely. No runtime code changed in this session.
 
 ## Root Cause
 
-- the local web app had no request-level protection seam, so a private deploy
-  could be exposed remotely without any access control
-- browser-sensitive pages (`/config`, `/character`) relied only on “local use”
-  convention instead of explicit guardrails
-- route-profile artifacts and browser result cards still reflected generation
-  order more than corridor logic, so direct legs, longer profitable spans, and
-  Jita connectors were harder to compare side by side
-- a local in-flight alias change in `location_utils.py` would have broken `1st`
-  normalization and made `O4T -> 1ST` / Jita-to-1ST visibility fragile
+- the existing docs already mentioned web protection and corridor ordering, but
+  they still read slightly too broad for the actual intent of the block
+- the private web seam is meant for one trusted operator, not for public or
+  multi-user deployment, and that boundary needed to be stated explicitly
+- the output docs needed to say more clearly that direct legs are ordered first
+  while longer profitable spans such as `O4T -> 1ST` and Jita routes remain
+  visible
 
 ## What Changed
 
-- `webapp/security.py` and `webapp/app.py`
-  - added a small request-level access seam
-  - optional Basic Auth protects the full app when a web password is present
-  - remote requests are blocked if no password is configured
-  - `run_dev_server()` now warns on non-local bind without password and can
-    read host/port overrides from env or optional local config
-- `webapp/routes/pages.py`, `webapp/templates/base.html`,
-  `webapp/templates/config.html`
-  - render security state on every page
-  - sensitive pages now clearly show the local-only / protected status
-- `webapp/services/config_service.py`
-  - exposes a redacted web-access summary and includes `webapp` config in the
-    browser-safe config sections
-- `location_utils.py`
-  - restored `1st` normalization so corridor and Jita connector routes using
-    `1st` stay distinct from `cj6` aliases
-- `runtime_runner.py`, `journal_models.py`, `execution_plan.py`,
-  `webapp/services/analysis_service.py`, `webapp/templates/results.html`
-  - added presentation-only corridor metadata on route results and manifest
-    routes
-  - execution plans now group sections by corridor source and route logic
-    (direct leg first, then longer spans, Jita connectors separate)
-  - browser results now mirror the same grouped corridor presentation
-- `scripts/quality_check.py` and `.github/workflows/ci.yml`
-  - added a minimal CI workflow
-  - quality-check now uses the maintained pytest path for the changed route/web
-    surface instead of relying on the old lightweight runner only
+- `README.md`
+  - clarified that the browser surface is for private single-user use
+  - clarified the intended localhost-without-password mode vs password-gated
+    non-local private use
+  - documented that public multi-user hardening stays out of scope
+  - clarified that corridor ordering is display-only and keeps longer spans plus
+    Jita connectors visible
+- `PROJECT_STATE.md`
+  - aligned the current capability and known-limit wording with the actual
+    private-deploy scope of the web seam
+  - recorded that corridor ordering keeps direct legs first without dropping
+    longer profitable spans or Jita connectors
+- `TASK_QUEUE.md`
+  - tightened the completed task wording around single-user/private scope
+  - added one follow-up backlog item for stronger private web deploy semantics,
+    sensitive-page minimization, and targeted security regressions
+- `docs/module-maps/webapp.md`
+  - clarified the web module as a private single-user browser surface
+  - made the non-goals around public / multi-user / reverse-proxy hardening
+    explicit
+- `docs/module-maps/execution_plan.md`
+  - clarified that corridor ordering is presentation-only and preserves direct
+    legs, longer profitable spans, and Jita connectors
 
 ## Tests And Verification
 
-- focused regression:
-  - `pytest -q tests/test_route_search.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_webapp.py tests/test_shipping.py tests/test_integration.py`
-    -> **155 passed**
-- quality path:
-  - `python scripts/quality_check.py`
-    -> **178 passed**
-- new coverage proves:
-  - `1st` normalization still preserves corridor and Jita-to-1ST pair building
-  - route-display metadata marks direct legs, longer spans, and Jita connectors
-  - execution plans render corridor sections in the intended order
-  - browser results render grouped corridor sections and route-logic labels
-  - remote requests are blocked without password, and password-protected web
-    requests require / accept Basic Auth
+- no additional tests were run in this documentation-only session
+- the wording was aligned against the current code, existing queue/state files,
+  and the already verified route-display / web-access behavior from the prior
+  implementation session
 
 ## Remaining Limits
 
-- the new web protection is intentionally small and private-deploy oriented; it
-  is not a multi-user auth system with sessions, roles, or CSRF model
-- `scripts/quality_check.py` now targets the maintained execution-plan/web
-  regression surface. A separate full-suite run still currently exposes older
-  unrelated failures in `tests/test_journal_reconciliation.py` and
-  `tests/test_no_trade.py`
+- the current web protection remains intentionally small and private-deploy
+  oriented; it is not a public or multi-user auth/session system
+- direct localhost is the intended unprotected mode; stronger semantics for
+  reverse-proxy / tunnel / broader remote deployment remain follow-up work
+- sensitive browser pages are called out and protected by the same seam, but
+  stricter minimization of config/context passed into those pages remains a
+  separate follow-up
+- `scripts/quality_check.py` and CI still intentionally target the maintained
+  execution-plan / web regression surface rather than the full historical suite
+
+## Next Recommended Task
+
+Implement the queued follow-up for private web deploy semantics: make direct
+localhost the only clearly supported unprotected mode, minimize sensitive page
+context further, and add regressions for `Cache-Control`, redaction, and
+request classification.
 
 ## Files Touched
 
-- `location_utils.py`
-- `runtime_runner.py`
-- `journal_models.py`
-- `execution_plan.py`
-- `nullsectrader.py`
-- `webapp/security.py`
-- `webapp/app.py`
-- `webapp/routes/pages.py`
-- `webapp/services/analysis_service.py`
-- `webapp/services/config_service.py`
-- `webapp/templates/base.html`
-- `webapp/templates/config.html`
-- `webapp/templates/results.html`
-- `webapp/static/css/app.css`
-- `config.local.example.json`
-- `.github/workflows/ci.yml`
-- `scripts/quality_check.py`
-- `tests/test_route_search.py`
-- `tests/test_runtime_runner.py`
-- `tests/test_execution_plan.py`
-- `tests/test_webapp.py`
+- `README.md`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
-- `ARCHITECTURE.md`
-- `README.md`
 - `SESSION_HANDOFF.md`
+- `docs/module-maps/webapp.md`
+- `docs/module-maps/execution_plan.md`

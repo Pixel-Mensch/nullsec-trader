@@ -137,7 +137,8 @@ Bewusst erhalten bleiben:
 ### Lokale Web App
 
 Die CLI bleibt der produktive Kernpfad. Zusaetzlich gibt es jetzt eine lokale
-Web-App fuer Browser-Nutzung auf demselben Rechner.
+Web-App fuer Browser-Nutzung auf demselben Rechner oder einen kleinen privaten
+Single-User-Deploy.
 
 Start:
 
@@ -165,9 +166,11 @@ Aktuelle Seiten:
 
 Kleine Zugriffssicherung fuer private Deploys:
 
-- ohne gesetztes Web-Passwort blockt die App nicht-lokale Requests explizit,
-  statt sie still offen zu lassen
-- fuer private Deploys kann ein kleines Basic-Auth-Gate gesetzt werden:
+- ohne gesetztes Web-Passwort ist direkter localhost-Betrieb der vorgesehene
+  Modus; als remote erkannte Requests werden explizit geblockt, statt die App
+  still offen zu lassen
+- fuer privaten non-local Single-User-Betrieb kann ein kleines Basic-Auth-Gate
+  gesetzt werden:
   `NULLSEC_WEBAPP_PASSWORD=...` oder lokal `webapp.access_password`
 - `run_dev_server()` bleibt standardmaessig auf `127.0.0.1:8000`; `host` und
   `port` koennen optional lokal oder per Env ueberschrieben werden
@@ -176,8 +179,13 @@ Kleine Zugriffssicherung fuer private Deploys:
 
 Wichtige Grenzen:
 
-- lokal gedacht, keine oeffentliche Deployment-Architektur
+- fuer privaten Single-User-Betrieb gedacht, keine oeffentliche oder
+  Multi-User-Deployment-Architektur
 - keine neue Nutzerverwaltung; nur kleines Passwort-Gate fuer private Deploys
+- keine Session-, Rollen- oder CSRF-Haertung; oeffentliche Multi-User-Haertung
+  bleibt bewusst ausserhalb dieses Blocks
+- Reverse Proxy / Tunnel / oeffentliche Exponierung ohne Passwort sind
+  absichtlich kein unterstuetzter Betriebsmodus dieses Blocks
 - keine Shell-Wrapper im Browser; die Web-Schicht nutzt kleine Services und
   fuer Vollruns einen in-process Runtime-Bridge auf `runtime_runner.run_cli()`
 - CLI, Route-Ranking, Candidate-Scoring, `no_trade`, Reconciliation und
@@ -595,7 +603,10 @@ Wichtig beim Lesen:
 - `[NOT ACTIONABLE]` bedeutet: nicht normal handeln, auch wenn irgendwo noch ein theoretischer Spread sichtbar ist.
 - Route-Profile-Ausgaben sind jetzt zusaetzlich nach Streckenlogik lesbar:
   direkte Legs stehen vor laengeren profitablen Spannweiten derselben Corridor-
-  Quelle, und Jita-Connectoren bleiben als eigene Gruppe sichtbar
+  Quelle, laengere profitable Legs wie `O4T -> 1ST` bleiben sichtbar, und
+  Jita-Connectoren bleiben als eigene Gruppe sichtbar
+- diese Corridor-Sortierung ist reine Darstellung; Route Search, Ranking und
+  Scoring werden dadurch nicht umgebaut
 
 ### Weitere Dateien
 

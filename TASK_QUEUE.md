@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 27 web hardening + corridor display)
+Last updated: 2026-03-14 (session 28 docs alignment for private web deploy scope)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -22,13 +22,16 @@ full backlog scrape.
 - What was done:
   - added a small web access seam: optional Basic Auth when a web password is
     configured, otherwise explicit blocking of non-local requests
+  - scoped that seam to private single-user use instead of inventing a public
+    multi-user web architecture
   - sensitive browser pages (`/character`, `/config`) now run behind the same
     seam and emit `Cache-Control: no-store`
   - restored `1st` normalization so corridor routes such as `O4T -> 1ST` and
     Jita-to-1ST connectors remain visible
   - route-profile results now carry presentation-only corridor metadata;
     execution plans and browser results group direct legs before longer spans
-    and keep Jita connectors separate without touching route-search scoring
+    while keeping longer profitable spans and Jita connectors visible without
+    touching route-search scoring
   - synchronized `scripts/quality_check.py` with the pytest-based quality path
     used by this block and added a minimal CI workflow
   - focused regression:
@@ -176,6 +179,20 @@ full backlog scrape.
   - Full suite: 239 passed.
 
 ## P1
+
+### Task 0i: Tighten private web deploy semantics and sensitive-page minimization
+
+- Priority: P1
+- Status: ready
+- Relevant files: `webapp/security.py`, `webapp/app.py`,
+  `webapp/services/config_service.py`, `webapp/services/character_service.py`,
+  `tests/test_webapp.py`, `README.md`
+- Expected result:
+  - direct localhost without password is the only unprotected supported mode
+  - private non-local single-user deploys remain password-gated
+  - sensitive browser pages stop carrying broader config/context than needed
+  - web regressions prove `Cache-Control: no-store`, config redaction, and the
+    intended request-classification behavior
 
 ### Task 0f: Add a safe clean-start command for runtime artifacts
 

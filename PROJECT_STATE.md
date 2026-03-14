@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14
+Last updated: 2026-03-14 (docs alignment for private web deploy scope)
 
 ## Snapshot
 
@@ -151,6 +151,8 @@ Not fully re-audited this session:
 - the local web UI now has a small private-deploy access seam: if a web
   password is configured it requires HTTP Basic Auth, otherwise non-local
   requests are blocked instead of exposing the app unguarded
+- that web seam is intentionally aimed at private single-user operation; public
+  multi-user hardening remains out of scope for this block
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
@@ -175,6 +177,9 @@ Not fully re-audited this session:
   parity and no longer serializes `instant` picks with `proposed_sell_price=0`
 - `trade_plan_*.json` route entries now also preserve presentation-only
   corridor display metadata for browser parity with execution-plan text output
+- corridor display now keeps direct legs first but still preserves longer
+  profitable spans and Jita connector routes instead of collapsing the view to
+  nearest-leg-only output
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
@@ -358,6 +363,14 @@ Files that indicate this focus:
   messaging, but browser/UI surfaces were not re-audited in this session.
 - the new web protection seam is intentionally small and private-deploy
   oriented; it is not a full multi-user auth/session system
+- without a web password, the intended supported web mode is direct localhost
+  use by one operator; reverse-proxy / tunnel / public exposure semantics were
+  deliberately not expanded into a broader deployment model in this block
+- public multi-user web hardening, session/role controls, and stronger reverse-
+  proxy trust handling remain explicit follow-up work rather than implied
+  guarantees of the current seam
+- the corridor ordering is presentation-only and intentionally leaves route
+  search formulas, ranking, and scoring untouched
 - replay calibration used the focused O4T/Jita fixture plus a narrow
   `replay_snapshot.json` route search. Those checks confirmed that prior bait
   picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage

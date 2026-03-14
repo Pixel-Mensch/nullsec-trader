@@ -11,11 +11,12 @@ journal, character, and config workflows without replacing the CLI.
 - keep web calls separated from domain logic through small service modules
 - reuse existing runtime, journal, and character functions instead of redoing
   trade logic in HTML handlers
-- stay local-only and optional
+- stay local-only / private and optional for one operator
 - keep process lifetime simple; the local server no longer uses browser
   heartbeat or idle auto-shutdown logic
 - enforce a small private-deploy access seam: optional Basic Auth when a web
   password exists, otherwise explicit blocking of non-local requests
+- keep public or multi-user web hardening explicitly out of scope for this seam
 
 ## Inputs
 
@@ -27,7 +28,7 @@ journal, character, and config workflows without replacing the CLI.
 
 ## Outputs
 
-- local HTTP pages on `127.0.0.1:8000`
+- local HTTP pages on `127.0.0.1:8000` for private single-user operation
 - rendered dashboard, analysis, journal, character, and config views
 - browser-safe summaries of existing text artifacts and manifest files
 
@@ -80,6 +81,8 @@ journal, character, and config workflows without replacing the CLI.
   current character snapshot / reconcile data
 - keep browser route presentation aligned with runtime corridor-display
   metadata instead of inventing a second ranking view
+- keep private-deploy wording honest so docs do not over-promise public-grade
+  web hardening
 
 ## Risk Areas
 
@@ -88,6 +91,8 @@ journal, character, and config workflows without replacing the CLI.
   must stay aligned with CLI output
 - character and reconcile actions must remain robust without live ESI
 - templates can drift from real service payloads if not covered by tests
+- request locality is intentionally a small seam; reverse-proxy / public
+  deployment assumptions should not be inferred from this module
 
 ## Tests
 
