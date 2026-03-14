@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 29 reviewer follow-up for private web deploy semantics)
+Last updated: 2026-03-14 (session 30 ansiblex corridor travel layer)
 
 ## Snapshot
 
@@ -188,6 +188,15 @@ Not fully re-audited this session:
 - corridor display now keeps direct legs first but still preserves longer
   profitable spans and Jita connector routes instead of collapsing the view to
   nearest-leg-only output
+- internal corridor travel can now optionally add a directed Ansiblex layer
+  from `docs/Ansis.txt`; gate travel remains available and the route-search
+  scoring path stays untouched
+- route and pick transport summaries now preserve internal travel metadata:
+  gate-leg count, ansiblex-leg count, estimated ansiblex logistics cost, and
+  profit before vs after logistics
+- execution plans, browser results, and `trade_plan_*.json` now surface those
+  internal travel fields so ansiblex usage is visible without inventing a
+  second ranking model
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
@@ -308,6 +317,9 @@ Not fully re-audited this session:
   for Jita-connected routes and `internal_self_haul` for internal nullsec
   structure routes. Future internal ansiplex/fuel/risk surcharges can attach to
   the same central transport-mode seam.
+- the new ansiblex travel layer is intentionally narrow and topology-driven:
+  `docs/Ansis.txt` is the source of truth, edges are directed only, and no
+  automatic reverse bridges are inferred
 
 ## Current Focus
 
@@ -334,8 +346,9 @@ centered on:
 - a first local browser UI over the existing runtime and journal workflows
 - local browser hardening plus corridor-ordered route presentation near the
   web entry and execution-plan path
-- reviewer follow-up on private web deploy semantics, sensitive-page
-  minimization, and matching security regressions
+- additive internal travel realism for `internal_self_haul` routes through a
+  small directed ansiblex layer and more transparent route/output travel
+  metadata
 
 Files that indicate this focus:
 
@@ -385,6 +398,10 @@ Files that indicate this focus:
   should be treated as password-required
 - the corridor ordering is presentation-only and intentionally leaves route
   search formulas, ranking, and scoring untouched
+- ansiblex travel currently uses a constant per-edge distance estimate because
+  `docs/Ansis.txt` carries topology only, not geometric LY distances
+- internal ansiblex/gate path metadata only exists for route-chain systems that
+  are explicitly mapped through `route_chain.legs[].system`
 - replay calibration used the focused O4T/Jita fixture plus a narrow
   `replay_snapshot.json` route search. Those checks confirmed that prior bait
   picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage

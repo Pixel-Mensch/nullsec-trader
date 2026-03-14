@@ -180,6 +180,20 @@ def test_route_search_keeps_1st_span_and_jita_connector_visible() -> None:
                 "full_load_reward": 100_000_000.0,
             },
         },
+        "route_chain": {
+            "enabled": True,
+            "legs": [
+                {"id": 1, "label": "O4T", "system": "O4T-Z5"},
+                {"id": 2, "label": "1st Taj Mahgoon", "system": "C-J6MT"},
+            ],
+        },
+        "ansiblex": {
+            "enabled": True,
+            "file_path": "docs/Ansis.txt",
+            "ship_mass_kg": 200_000_000.0,
+            "liquid_ozone_price_isk": 1_000.0,
+            "toll_mode": "none",
+        },
     }
 
     profiles = nst.build_route_search_profiles(node_catalog, cfg)

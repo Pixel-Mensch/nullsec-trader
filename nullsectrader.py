@@ -28,6 +28,7 @@ import location_utils as _location_utils
 import market_fetch as _market_fetch
 import market_normalization as _market_normalization
 import market_plausibility as _market_plausibility
+import ansiblex as _ansiblex
 import models as _models
 import portfolio_builder as _portfolio_builder
 import risk_profiles as _risk_profiles
@@ -248,12 +249,17 @@ _EXPORTS = {
     "_resolve_capital_flow_cfg": _runtime_runner._resolve_capital_flow_cfg,
     "_resolve_route_profiles_cfg": _runtime_runner._resolve_route_profiles_cfg,
     "_resolve_route_wide_scan_cfg": _runtime_runner._resolve_route_wide_scan_cfg,
+    "compute_ansiblex_jump_cost": _ansiblex.compute_ansiblex_jump_cost,
     "build_adjacent_pairs": _runtime_runner.build_adjacent_pairs,
     "build_route_profiles": _runtime_runner.build_route_profiles,
     "build_route_wide_pairs": _runtime_runner.build_route_wide_pairs,
+    "load_ansiblex_edges": _ansiblex.load_ansiblex_edges,
     "enforce_route_destination": _runtime_runner.enforce_route_destination,
     "evaluate_leg_disabled": _runtime_runner.evaluate_leg_disabled,
     "main": _runtime_runner.main,
+    "parse_ansiblex_edge_line": _ansiblex.parse_ansiblex_edge_line,
+    "resolve_ansiblex_cfg": _ansiblex.resolve_ansiblex_cfg,
+    "resolve_route_travel_details": _ansiblex.resolve_route_travel_details,
     "run_cli": _runtime_runner.run_cli,
     "make_skipped_chain_leg": _runtime_runner.make_skipped_chain_leg,
     "run_route": _runtime_runner.run_route,

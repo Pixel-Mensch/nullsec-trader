@@ -21,6 +21,7 @@ WEBAPP_MODULES = _repo_paths("webapp/**/*.py")
 SCRIPT_MODULES = _repo_paths("scripts/*.py")
 TEST_SOURCE_FILES = _repo_paths("tests/*.py")
 TEST_MODULES = [
+    "tests/test_ansiblex.py",
     "tests/test_config.py",
     "tests/test_execution_plan.py",
     "tests/test_integration.py",

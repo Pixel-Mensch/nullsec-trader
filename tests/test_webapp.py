@@ -70,8 +70,16 @@ def _analysis_result() -> dict:
             "budget_util_pct": 45.3,
             "cargo_util_pct": 37.7,
             "isk_used": 226373819.86,
+            "expected_profit_before_logistics_total": 12000000.0,
+            "expected_profit_after_logistics_total": 12000000.0,
             "expected_profit_total": 12000000.0,
             "full_sell_profit_total": 15000000.0,
+            "travel_summary": "Pure gate route with 1 gate leg(s)",
+            "gate_leg_count": 1,
+            "ansiblex_leg_count": 0,
+            "ansiblex_logistics_cost_isk": 0.0,
+            "used_ansiblex": False,
+            "travel_path_legs": [{"from_system": "O4T-Z5", "to_system": "R-ARKN", "mode": "gate"}],
             "pick_count": 1,
             "warnings": ["calibration fallback"],
             "calibration_warning": "",
@@ -106,8 +114,19 @@ def _analysis_result() -> dict:
             "budget_util_pct": 54.9,
             "cargo_util_pct": 42.0,
             "isk_used": 286373819.86,
+            "expected_profit_before_logistics_total": 18665000.0,
+            "expected_profit_after_logistics_total": 18000000.0,
             "expected_profit_total": 18000000.0,
             "full_sell_profit_total": 22000000.0,
+            "travel_summary": "1 gate leg(s), 1 ansiblex leg(s), 665000 ISK ansiblex logistics",
+            "gate_leg_count": 1,
+            "ansiblex_leg_count": 1,
+            "ansiblex_logistics_cost_isk": 665000.0,
+            "used_ansiblex": True,
+            "travel_path_legs": [
+                {"from_system": "O4T-Z5", "to_system": "R-ARKN", "mode": "gate"},
+                {"from_system": "R-ARKN", "to_system": "WT-2J9", "mode": "ansiblex", "ansiblex_logistics_cost_isk": 665000.0},
+            ],
             "pick_count": 1,
             "warnings": [],
             "calibration_warning": "",
@@ -142,8 +161,16 @@ def _analysis_result() -> dict:
             "budget_util_pct": 12.0,
             "cargo_util_pct": 8.5,
             "isk_used": 60373819.86,
+            "expected_profit_before_logistics_total": 2500000.0,
+            "expected_profit_after_logistics_total": 2500000.0,
             "expected_profit_total": 2500000.0,
             "full_sell_profit_total": 3100000.0,
+            "travel_summary": "External connector",
+            "gate_leg_count": 0,
+            "ansiblex_leg_count": 0,
+            "ansiblex_logistics_cost_isk": 0.0,
+            "used_ansiblex": False,
+            "travel_path_legs": [],
             "pick_count": 1,
             "warnings": ["shipping warning"],
             "calibration_warning": "",
@@ -338,6 +365,10 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     assert "Jita connectors @ O4T" in response.text
     assert "Personal Layer" in response.text
     assert "Budget 45.3%" in response.text
+    assert "Profit pre-logistics 18665000 ISK" in response.text
+    assert "Ansiblex legs 1" in response.text
+    assert "Ansiblex cost 665000 ISK" in response.text
+    assert "R-ARKN -&gt; WT-2J9" in response.text
     assert "Snapshot C:/tmp/replay_snapshot.json" in response.text
     assert 'class="log-output"' in response.text
 

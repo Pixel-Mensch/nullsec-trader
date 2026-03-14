@@ -647,7 +647,7 @@ def validate_config(cfg: dict) -> dict:
         err("config root must be an object")
         return result
 
-    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context", "personal_history_policy"):
+    for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context", "personal_history_policy", "ansiblex"):
         if key in cfg and not isinstance(cfg.get(key), dict):
             err(f"{key} must be an object")
 
@@ -977,6 +977,27 @@ def validate_config(cfg: dict) -> dict:
             and not isinstance(route_search_cfg.get("allow_zero_transport_cost_for_routes"), list)
         ):
             err("route_search.allow_zero_transport_cost_for_routes must be a list")
+
+    ansiblex_cfg = cfg.get("ansiblex", {})
+    if ansiblex_cfg is not None and not isinstance(ansiblex_cfg, dict):
+        err("ansiblex must be an object")
+    elif isinstance(ansiblex_cfg, dict):
+        if "enabled" in ansiblex_cfg and not isinstance(ansiblex_cfg.get("enabled"), bool):
+            err("ansiblex.enabled must be a boolean")
+        if "file_path" in ansiblex_cfg and not isinstance(ansiblex_cfg.get("file_path"), str):
+            err("ansiblex.file_path must be a string")
+        for nkey in (
+            "ship_mass_kg",
+            "liquid_ozone_price_isk",
+            "toll_isk_per_ozone",
+            "fixed_toll_isk_per_jump",
+        ):
+            if nkey in ansiblex_cfg:
+                _check_non_negative(f"ansiblex.{nkey}", ansiblex_cfg.get(nkey))
+        if "toll_mode" in ansiblex_cfg:
+            mode = str(ansiblex_cfg.get("toll_mode", "") or "").strip().lower()
+            if mode not in ("none", "per_ozone", "fixed_per_jump"):
+                err("ansiblex.toll_mode must be one of: none, per_ozone, fixed_per_jump")
 
     confidence_calibration_cfg = cfg.get("confidence_calibration", {})
     if confidence_calibration_cfg is not None and not isinstance(confidence_calibration_cfg, dict):

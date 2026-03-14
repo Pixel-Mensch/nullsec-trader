@@ -162,6 +162,58 @@ def _route_display_meta(record: dict) -> dict:
     return dict(raw) if isinstance(raw, dict) else {}
 
 
+def _route_travel_legs(record: dict) -> list[dict]:
+    raw = record.get("travel_path_legs", [])
+    if not isinstance(raw, list):
+        return []
+    return [dict(leg) for leg in raw if isinstance(leg, dict)]
+
+
+def _append_route_travel_lines(lines: list[str], record: dict, fmt_isk_de, *, indent: str = "", detail_mode: bool = False) -> None:
+    travel_summary = str(record.get("travel_summary", "") or "").strip()
+    gate_legs = int(record.get("gate_leg_count", 0) or 0)
+    ansiblex_legs = int(record.get("ansiblex_leg_count", 0) or 0)
+    ansiblex_cost = float(record.get("ansiblex_logistics_cost_isk", 0.0) or 0.0)
+    profit_before = float(
+        record.get(
+            "expected_profit_before_logistics_total",
+            float(record.get("expected_realized_profit_total", record.get("profit_total", 0.0)) or 0.0)
+            + float(record.get("total_transport_cost", 0.0) or 0.0),
+        )
+        or 0.0
+    )
+    profit_after = float(
+        record.get(
+            "expected_profit_after_logistics_total",
+            record.get("expected_realized_profit_total", record.get("profit_total", 0.0)),
+        )
+        or 0.0
+    )
+
+    if travel_summary:
+        lines.append(f"{indent}Travel: {travel_summary}")
+    if gate_legs > 0 or ansiblex_legs > 0:
+        lines.append(f"{indent}  gate_legs: {gate_legs} | ansiblex_legs: {ansiblex_legs}")
+    lines.append(f"{indent}  expected_profit_before_logistics: {fmt_isk_de(profit_before)}")
+    lines.append(f"{indent}  expected_profit_after_logistics:  {fmt_isk_de(profit_after)}")
+    if ansiblex_legs > 0 or ansiblex_cost > 0.0:
+        lines.append(f"{indent}  ansiblex_logistics_cost:        {fmt_isk_de(ansiblex_cost)}")
+
+    if ansiblex_legs <= 0 and not detail_mode:
+        return
+
+    for leg in _route_travel_legs(record):
+        mode = str(leg.get("mode", "gate") or "gate").strip().lower()
+        from_system = str(leg.get("from_system", "") or "").strip()
+        to_system = str(leg.get("to_system", "") or "").strip()
+        if not from_system or not to_system:
+            continue
+        detail_bits = [mode]
+        if mode == "ansiblex":
+            detail_bits.append(f"{fmt_isk_de(float(leg.get('ansiblex_logistics_cost_isk', 0.0) or 0.0))}")
+        lines.append(f"{indent}  leg: {from_system} -> {to_system} [{' | '.join(detail_bits)}]")
+
+
 def _ordered_route_results_for_display(route_results: list[dict]) -> list[dict]:
     indexed = list(enumerate(list(route_results or [])))
 
@@ -769,6 +821,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             lines.append(f"  transport_cost_total: {fmt_isk_de(float(leg.get('total_transport_cost', 0.0) or 0.0))}")
             if transport_note:
                 lines.append(f"  note: {transport_note}")
+        _append_route_travel_lines(lines, leg, fmt_isk_de, indent="", detail_mode=detail_mode)
         if shipping_lane_id:
             lines.append(f"Shipping Lane: {shipping_lane_id}")
             provider = str(leg.get("shipping_provider", "") or "")
@@ -1053,6 +1106,7 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Total Route Costs: {fmt_isk_de(float(r.get('total_route_cost', 0.0) or 0.0))}")
         lines.append(f"   Total Shipping Cost: {fmt_isk_de(float(r.get('shipping_cost_total', 0.0) or 0.0))}")
         lines.append(f"   Total Transport Cost: {fmt_isk_de(float(r.get('total_transport_cost', 0.0) or 0.0))}")
+        _append_route_travel_lines(lines, r, fmt_isk_de, indent="   ", detail_mode=detail_mode)
         transport_note = str(r.get("transport_mode_note", "") or "")
         if transport_note:
             lines.append(f"   transport_note: {transport_note}")

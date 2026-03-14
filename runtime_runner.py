@@ -1052,6 +1052,10 @@ def _refresh_route_result_from_current_picks(result: dict) -> dict:
     result["shipping_cost_total"] = float(total_shipping_cost)
     result["total_route_cost"] = float(total_route_cost)
     result["total_transport_cost"] = float(total_transport_cost)
+    result["expected_profit_before_logistics_total"] = float(expected_realized_total + total_transport_cost)
+    result["expected_profit_after_logistics_total"] = float(expected_realized_total)
+    result["full_sell_profit_before_logistics_total"] = float(full_sell_total + total_transport_cost)
+    result["full_sell_profit_after_logistics_total"] = float(full_sell_total)
     result["route_actionable"] = bool(picks and not bool(result.get("route_blocked_due_to_transport", False)))
     result["budget_left_reason"] = (
         "Keine weiteren Picks erfuellen Profit-Floors nach Gebuehren und Routenkosten."
@@ -1484,10 +1488,24 @@ def _finalize_route_result(
         "profit_total": float(total_profit),
         "expected_realized_profit_total": float(expected_realized_total),
         "full_sell_profit_total": float(full_sell_total),
+        "expected_profit_before_logistics_total": float(expected_realized_total + float(transport_summary.get("total_transport_cost", 0.0))),
+        "expected_profit_after_logistics_total": float(expected_realized_total),
+        "full_sell_profit_before_logistics_total": float(full_sell_total + float(transport_summary.get("total_transport_cost", 0.0))),
+        "full_sell_profit_after_logistics_total": float(full_sell_total),
         "total_shipping_cost": float(transport_summary.get("total_shipping_cost", 0.0)),
         "shipping_cost_total": float(transport_summary.get("total_shipping_cost", 0.0)),
         "total_route_cost": float(transport_summary.get("total_route_cost", 0.0)),
         "total_transport_cost": float(transport_summary.get("total_transport_cost", 0.0)),
+        "travel_summary": str(transport_summary.get("travel_summary", "") or ""),
+        "travel_path_found": bool(transport_summary.get("travel_path_found", False)),
+        "travel_path_legs": list(transport_summary.get("travel_path_legs", []) or []),
+        "travel_path_kind": str(transport_summary.get("travel_path_kind", "") or ""),
+        "gate_leg_count": int(transport_summary.get("gate_leg_count", 0) or 0),
+        "ansiblex_leg_count": int(transport_summary.get("ansiblex_leg_count", 0) or 0),
+        "ansiblex_logistics_cost_isk": float(transport_summary.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+        "used_ansiblex": bool(transport_summary.get("used_ansiblex", False)),
+        "travel_source_system": str(transport_summary.get("travel_source_system", "") or ""),
+        "travel_dest_system": str(transport_summary.get("travel_dest_system", "") or ""),
         "shipping_lane_id": str(transport_summary.get("shipping_lane_id", "")),
         "shipping_pricing_model": str(transport_summary.get("shipping_pricing_model", "")),
         "shipping_provider": str(transport_summary.get("shipping_provider", "")),

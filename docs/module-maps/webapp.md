@@ -84,6 +84,9 @@ journal, character, and config workflows without replacing the CLI.
   current character snapshot / reconcile data
 - keep browser route presentation aligned with runtime corridor-display
   metadata instead of inventing a second ranking view
+- surface compact internal travel metadata from runtime artifacts, including
+  gate/ansiblex counts, ansiblex logistics cost, and visible ansiblex legs,
+  without designing a second corridor UI
 - keep private-deploy wording honest so docs do not over-promise public-grade
   web hardening
 

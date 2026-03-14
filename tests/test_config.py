@@ -116,6 +116,13 @@ def test_validate_config_rejects_negative_internal_self_haul_profit_floor() -> N
     vr = nst.validate_config(cfg)
     assert any("route_search.internal_self_haul_min_expected_profit_isk" in str(e) for e in vr.get("errors", []))
 
+
+def test_validate_config_rejects_invalid_ansiblex_toll_mode() -> None:
+    cfg = _minimal_valid_config()
+    cfg["ansiblex"] = {"enabled": True, "toll_mode": "weird_mode"}
+    vr = nst.validate_config(cfg)
+    assert any("ansiblex.toll_mode" in str(e) for e in vr.get("errors", []))
+
 def test_validate_config_rejects_invalid_structure_regions() -> None:
     cfg = _minimal_valid_config()
     cfg["structure_regions"] = {"bad": 10000059, "1040804972352": -1}

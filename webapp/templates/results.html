@@ -120,10 +120,32 @@
           <span>Budget {{ "%.1f"|format(route.budget_util_pct or 0) }}%</span>
           <span>Cargo {{ "%.1f"|format(route.cargo_util_pct or 0) }}%</span>
           <span>Total cost {{ "%.0f"|format(route.isk_used or 0) }} ISK</span>
+          <span>Profit pre-logistics {{ "%.0f"|format(route.expected_profit_before_logistics_total or 0) }} ISK</span>
+          <span>Profit post-logistics {{ "%.0f"|format(route.expected_profit_after_logistics_total or 0) }} ISK</span>
           <span>Expected profit {{ "%.0f"|format(route.expected_profit_total or 0) }} ISK</span>
           <span>Full sell {{ "%.0f"|format(route.full_sell_profit_total or 0) }} ISK</span>
+          <span>Gate legs {{ route.gate_leg_count or 0 }}</span>
+          <span>Ansiblex legs {{ route.ansiblex_leg_count or 0 }}</span>
+          <span>Ansiblex cost {{ "%.0f"|format(route.ansiblex_logistics_cost_isk or 0) }} ISK</span>
           <span>Picks {{ route.pick_count }}</span>
         </div>
+        {% if route.travel_summary %}
+        <p class="muted route-logic">{{ route.travel_summary }}</p>
+        {% endif %}
+        {% if route.travel_path_legs and route.used_ansiblex %}
+        <ul class="plain-list">
+          {% for travel_leg in route.travel_path_legs %}
+          <li>
+            {{ travel_leg.from_system }} -&gt; {{ travel_leg.to_system }}
+            {% if travel_leg.mode == "ansiblex" %}
+            [ansiblex | {{ "%.0f"|format(travel_leg.ansiblex_logistics_cost_isk or 0) }} ISK]
+            {% else %}
+            [gate]
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
         {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason %}
         <ul class="plain-list">
           {% for warning in route.warnings %}

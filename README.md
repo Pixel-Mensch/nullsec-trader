@@ -46,6 +46,8 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Shipping- und zusaetzliche Routenkosten werden vor dem finalen Ranking vom Profit abgezogen.
 - Wenn fuer eine Route kein belastbares Transportmodell existiert, wird sie standardmaessig blockiert. Eine Zero-Cost-Ausnahme ist nur explizit ueber `route_search.allow_zero_transport_cost_for_routes` moeglich.
 - Interne Struktur-zu-Struktur-Routen ohne Jita werden dabei separat behandelt: sie laufen standardmaessig als `internal_self_haul` und werden nicht wegen fehlender externer Shipping-Lanes blockiert. Solange keine expliziten internen `route_costs` gesetzt sind, gelten dort aktuell `0 ISK` Transportkosten.
+- Optional kann fuer interne Corridor-Wege ein kleiner Ansiblex-Layer zugeschaltet werden. Die Source of Truth ist [`docs/Ansis.txt`](./docs/Ansis.txt) mit gerichteten Zeilen im Format `FROM -> TO`; Gate-Wege bleiben dabei weiter erhalten und werden nicht ersetzt.
+- Das aktuelle Ansiblex-Kostenmodell bleibt absichtlich klein und additiv: pro genutztem Ansiblex-Leg wird ein geschaetzter Fuel-/Toll-Kostenblock berechnet und zusaetzlich zu bestehenden Route-/Shipping-Kosten verbucht, statt das Route-Scoring oder die Profitformeln neu zu schreiben.
 
 ### Wichtiger Unterschied: Papierprofit vs. erwartbarer Profit
 
@@ -538,6 +540,7 @@ Fuer den Betrieb relevant sind vor allem:
 - `structures`, `locations`, `structure_regions`
 - `fees`
 - `shipping_lanes`, `route_costs`, `shipping_defaults`
+- `ansiblex`
 - `filters_forward`, `filters_return`, `filters_planned_sell_forward`
 - `planned_sell`, `reference_price`, `strict_mode`
 - `portfolio`
@@ -574,6 +577,8 @@ Pro Route werden unter anderem ausgegeben:
 - `Exit Type`
 - `Total Expected Realized Profit`
 - `Total Full Sell Profit`
+- `Expected Profit Before Logistics`
+- `Expected Profit After Logistics`
 - `route_confidence`
 - `transport_confidence`
 - `capital_lock_risk`
@@ -582,6 +587,9 @@ Pro Route werden unter anderem ausgegeben:
   offene Order-Anzahl
 - sichtbarer Order-Overlap-Hinweis, wenn vorgeschlagene Picks bereits mit
   eigenen Character-Orders kollidieren
+- kompakte Travel-Metadaten fuer interne Routen: Gate-Legs, Ansiblex-Legs,
+  geschaetzte Ansiblex-Logistikkosten und sichtbare Travel-Legs, wenn
+  Ansiblex genutzt wurde
 
 Pro Pick werden unter anderem ausgegeben:
 
@@ -613,6 +621,9 @@ Wichtig beim Lesen:
   Jita-Connectoren bleiben als eigene Gruppe sichtbar
 - diese Corridor-Sortierung ist reine Darstellung; Route Search, Ranking und
   Scoring werden dadurch nicht umgebaut
+- falls eine Route Ansiblex nutzt, wird das in Plan und Web-Resultaten sichtbar
+  gemacht: Travel-Zusammenfassung, einzelne Ansiblex-Legs, Gate-/Ansiblex-
+  Counts sowie Profit vor und nach Logistik
 
 ### Weitere Dateien
 
@@ -623,6 +634,9 @@ Je nach Modus entstehen ausserdem:
 - `*_to_*_<timestamp>.csv` fuer Pick-Daten
 - `*_top_candidates_<timestamp>.txt` fuer Kandidaten-Diagnostik und Rejection-Reasons
 - `trade_plan_<plan_id>.json` fuer Journal-Import und stabile Pick-IDs
+- `trade_plan_<plan_id>.json` enthaelt jetzt zusaetzlich Travel-Metadaten fuer
+  Gate-/Ansiblex-Legs, geschaetzte Ansiblex-Kosten sowie Profit vor und nach
+  Logistik fuer Browser- und Journal-Paritaet
 - `snapshot_<timestamp>.json` im Snapshot-Only-Modus
 - `market_snapshot.json` als Laufzeit-Snapshot
 - `replay_snapshot.json`, wenn ein Live-Run einen Replay-Snapshot schreibt
@@ -647,6 +661,7 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`fees.py`](./fees.py), [`fee_engine.py`](./fee_engine.py): Gebuehrenmodell
 - [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
 - [`journal_reconciliation.py`](./journal_reconciliation.py): Wallet-Transaction-/Wallet-Journal-Matching gegen lokale Journal-Eintraege mit Confidence und Unmatched-Tracking
+- [`ansiblex.py`](./ansiblex.py): gerichteter Ansiblex-Parser, kleines Kostenmodell und interner Gate-/Ansiblex-Travel-Layer fuer Route-Metadaten
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
 - [`route_search.py`](./route_search.py): Route Search, Ranking und Route-Summary fuer das Leaderboard
 - [`portfolio_builder.py`](./portfolio_builder.py): Portfolio-Bau unter Risiko-, Nachfrage-, Budget- und Cargo-Grenzen
@@ -658,6 +673,8 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`webapp/`](./webapp): lokale FastAPI-/Jinja2-Webschicht mit Services,
   Templates und statischen Assets fuer Dashboard, Analyse, Journal und
   Character-Status
+- [`docs/Ansis.txt`](./docs/Ansis.txt): Source of Truth fuer gerichtete
+  Ansiblex-Verbindungen; nur explizit vorhandene Richtungen gelten
 
 ### Runtime-Helfer
 
@@ -680,6 +697,10 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
 - `planned_sell` ist riskanter als `instant`, weil Queue und Konkurrenz sich nach dem Kauf veraendern koennen.
 - Regionale History ist fuer Strukturmaerkte nur ein schwacher Proxy. Das Tool behandelt sie inzwischen vorsichtiger, aber nicht magisch praezise.
 - Shipping-Modelle sind konfigurationsgetrieben. Wenn Lane-Parameter nicht zur realen Hauling-Situation passen, passt auch die Profitrechnung nicht.
+- Der Ansiblex-Layer ist bewusst klein: [`docs/Ansis.txt`](./docs/Ansis.txt)
+  liefert nur Topologie, keine echten LY-Distanzen. Das aktuelle Default-
+  Modell rechnet deshalb mit einer konstanten Schaetzung pro Ansiblex-Leg, bis
+  spaeter genauere Distanzdaten vorliegen.
 - Gebuehren haengen von den in der Config hinterlegten Skills und Markttypen ab. Wenn dein Charakter oder Markt-Setup davon abweicht, driftet das Ergebnis.
 - Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
   harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell

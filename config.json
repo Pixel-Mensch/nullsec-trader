@@ -458,23 +458,36 @@
         "legs": [
             {
                 "id": 1040804972352,
-                "label": "O4T"
+                "label": "O4T",
+                "system": "O4T-Z5"
             },
             {
                 "id": 1048663825563,
-                "label": "R-ARKN"
+                "label": "R-ARKN",
+                "system": "R-ARKN"
             },
             {
                 "id": 1046664001931,
-                "label": "UALX-3"
+                "label": "UALX-3",
+                "system": "UALX-3"
             },
             {
                 "id": 1049588174021,
-                "label": "1st Taj Mahgoon"
+                "label": "1st Taj Mahgoon",
+                "system": "C-J6MT"
             }
         ],
         "fallback_to_non_chain_on_invalid_route": false,
         "fallback_to_non_chain_on_middle_failure": false
+    },
+    "ansiblex": {
+        "enabled": true,
+        "file_path": "docs/Ansis.txt",
+        "ship_mass_kg": 200000000,
+        "liquid_ozone_price_isk": 1000,
+        "toll_mode": "none",
+        "toll_isk_per_ozone": 0,
+        "fixed_toll_isk_per_jump": 0
     },
     "chain_leg_budget_util_min_pct": 0.1,
     "chain_return_mode": "fast_sell",

@@ -18,6 +18,8 @@ not a full line-by-line review.
 - owns the post-selection route-mix cleanup seam for weak non-mandatory add-ons
 - owns the internal-self-haul operational route floor before artifact emission
 - keeps external routes from carrying misleading internal-route floor metadata
+- carries presentation-ready internal travel metadata from transport context
+  into final route results and `trade_plan` artifacts
 
 ## Inputs
 
@@ -84,6 +86,8 @@ not a full line-by-line review.
 - surface runtime metadata and keep personal-layer effects explicit
 - change artifact generation or route/chain branching
 - tune the weak-tail cleanup seam without weakening candidate-stage anti-bait gates
+- preserve display-only travel metadata such as gate/ansiblex counts and
+  profit-before/after-logistics without leaking routing logic into the runner
 
 ## Risk Areas
 

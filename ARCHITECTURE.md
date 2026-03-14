@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14 (session 29 reviewer follow-up)
+Last updated: 2026-03-14 (session 30 ansiblex corridor travel layer)
 
 ## Evidence And Limits
 
@@ -32,6 +32,7 @@ Current module maps:
 - `docs/module-maps/eve_character_client.md`
 - `docs/module-maps/journal_reconciliation.md`
 - `docs/module-maps/webapp.md`
+- `docs/module-maps/ansiblex.md`
 
 Use the relevant module map before opening one of these larger files.
 
@@ -73,6 +74,8 @@ Use this section to avoid loading large unrelated modules.
 - Portfolio construction, liquidation gating, cargo fill, and local-search
   selection objective: `portfolio_builder.py`
 - Shipping costs, route blocking, and transport context: `shipping.py`
+- Directed ansiblex parsing, small internal travel graph, and additive
+  ansiblex logistics costs: `ansiblex.py`
 - Fee calculations: `fees.py`, `fee_engine.py`
 - Human-readable output, route plan rendering, route leaderboard, and no-trade
   reports: `execution_plan.py`
@@ -101,6 +104,7 @@ The main runtime flow is:
 -> `candidate_engine.py`
 -> `portfolio_builder.py`
 -> `shipping.py`
+-> optional `ansiblex.py` internal corridor travel metadata/cost seam
 -> `route_search.py`
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
@@ -188,6 +192,10 @@ their own panels instead of widening the full page.
   explicit internal `route_costs` entry is present
 - route blocking for missing transport models still applies to non-internal,
   non-modeled routes
+- for internal route-chain nodes, `shipping.py` can now ask `ansiblex.py` for a
+  small gate/ansiblex travel path summary and additive ansiblex logistics cost;
+  this augments transport metadata but does not replace gate travel or rewrite
+  `route_search.py`
 
 `runtime_runner.py` now owns a second shared post-build gating seam after
 transport and confidence calibration:
@@ -210,6 +218,9 @@ transport and confidence calibration:
 - the route-profile path now also attaches `_route_display` metadata per route
   result so presentation consumers can group direct legs, longer spans, and
   Jita connectors without changing ranking
+- final route results can now also carry travel metadata for browser and plan
+  parity: travel summary, gate/ansiblex leg counts, visible travel legs, and
+  profit before vs after logistics
 
 Trade quality now has one central seam instead of separate ad-hoc penalties:
 
@@ -274,6 +285,9 @@ Confirmed output families from the current docs and entry modules:
 - `trade_plan_<plan_id>.json`
 - route entries inside `trade_plan_<plan_id>.json` can now also carry a
   `display` block used by the browser results page for corridor grouping parity
+- route entries inside `trade_plan_<plan_id>.json` can also carry travel
+  metadata for internal gate/ansiblex path visibility and profit-before/after-
+  logistics parity
 - `snapshot_<timestamp>.json`
 - `market_snapshot.json`
 - `replay_snapshot.json`
@@ -345,6 +359,8 @@ confirm the current branch state.
 
 - Fees: `fees.py`, `fee_engine.py`
 - Shipping and route transport blocking: `shipping.py`
+- Internal ansiblex source of truth and additive cost seam: `ansiblex.py` plus
+  `docs/Ansis.txt`
 - Internal self-haul vs external shipping classification: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
 - Confidence calibration logic and personal decision-layer policy:

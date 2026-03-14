@@ -22,6 +22,9 @@ This map is based on focused output and test inspection, not a full audit.
 - can render corridor-ordered route sections when runtime metadata provides a
   display-only direct-leg vs longer-span / Jita-connector grouping without
   changing ranking, and without dropping longer profitable spans from view
+- can render compact internal travel metadata when runtime metadata provides
+  gate/ansiblex leg counts, ansiblex logistics cost, profit before/after
+  logistics, and visible ansiblex travel legs
 
 ## Inputs
 
@@ -76,6 +79,8 @@ This map is based on focused output and test inspection, not a full audit.
 - keep price-basis transparency honest for PRICE-SENS picks
 - keep corridor presentation aligned with route-chain logic without changing
   the ranking path
+- keep ansiblex travel visibility concise and presentation-only, without
+  turning the plan writer into a second routing engine
 
 ## Risk Areas
 

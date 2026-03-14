@@ -1,4 +1,5 @@
 import math
+from ansiblex import resolve_route_travel_details
 from location_utils import normalize_location_label
 
 
@@ -462,6 +463,7 @@ def build_route_context(
     dest_id: int | None = None,
     preferred_shipping_lane_id: str | None = None,
 ) -> dict:
+    travel_details = resolve_route_travel_details(cfg, source_label, dest_label)
     shipping_candidates = _match_shipping_lanes(cfg, source_label, dest_label, source_id=source_id, dest_id=dest_id)
     shipping = resolve_shipping_lane_cfg(
         cfg,
@@ -507,6 +509,16 @@ def build_route_context(
         "allow_zero_transport_cost_for_routes": list(zero_transport_allowlist),
         "internal_structure_route": bool(internal_structure_route),
         "transport_mode": str(transport_mode),
+        "travel_summary": str(travel_details.get("travel_summary", "") or ""),
+        "travel_path_found": bool(travel_details.get("path_found", False)),
+        "travel_path_legs": list(travel_details.get("travel_path_legs", []) or []),
+        "travel_path_kind": str(travel_details.get("path_kind", "") or ""),
+        "gate_leg_count": int(travel_details.get("gate_leg_count", 0) or 0),
+        "ansiblex_leg_count": int(travel_details.get("ansiblex_leg_count", 0) or 0),
+        "ansiblex_logistics_cost_isk": float(travel_details.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+        "used_ansiblex": bool(travel_details.get("used_ansiblex", False)),
+        "travel_source_system": str(travel_details.get("source_system", "") or ""),
+        "travel_dest_system": str(travel_details.get("dest_system", "") or ""),
     }
 
 
@@ -527,9 +539,25 @@ def _extract_shipping_lane_params(lane_cfg: dict | None) -> dict:
     }
 
 
-def _internal_self_haul_note(transport_total: float, route_total: float) -> str:
+def _internal_self_haul_note(
+    transport_total: float,
+    route_total: float,
+    *,
+    gate_leg_count: int = 0,
+    ansiblex_leg_count: int = 0,
+    ansiblex_logistics_cost_isk: float = 0.0,
+) -> str:
     total = max(0.0, float(transport_total or 0.0))
     route_cost = max(0.0, float(route_total or 0.0))
+    gate_legs = max(0, int(gate_leg_count or 0))
+    ansiblex_legs = max(0, int(ansiblex_leg_count or 0))
+    ansiblex_cost = max(0.0, float(ansiblex_logistics_cost_isk or 0.0))
+    if ansiblex_legs > 0:
+        return (
+            "Internal self haul: corridor route uses "
+            f"{gate_legs} gate leg(s) and {ansiblex_legs} ansiblex leg(s); "
+            f"estimated ansiblex logistics {ansiblex_cost:,.0f} ISK."
+        )
     if total <= 0.0:
         return (
             "Internal self haul: structure-to-structure nullsec route; "
@@ -559,7 +587,13 @@ def _summarize_transport_policy(
     if transport_mode == "internal_self_haul":
         return {
             "transport_mode": "internal_self_haul",
-            "transport_mode_note": _internal_self_haul_note(transport_total, route_total),
+            "transport_mode_note": _internal_self_haul_note(
+                transport_total,
+                route_total,
+                gate_leg_count=int(route_context.get("gate_leg_count", 0) or 0),
+                ansiblex_leg_count=int(route_context.get("ansiblex_leg_count", 0) or 0),
+                ansiblex_logistics_cost_isk=float(route_context.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+            ),
             "cost_model_status": "internal_self_haul",
             "cost_model_confidence": "normal",
             "transport_cost_assumed_zero": False,
@@ -649,6 +683,16 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
             "route_blocked_due_to_transport": bool(policy_summary.get("route_blocked_due_to_transport", False)),
             "route_actionable": bool(policy_summary.get("route_actionable", True)),
             "route_prune_reason": str(policy_summary.get("route_prune_reason", "") or ""),
+            "travel_summary": str(route_context.get("travel_summary", "") or ""),
+            "travel_path_found": bool(route_context.get("travel_path_found", False)),
+            "travel_path_legs": list(route_context.get("travel_path_legs", []) or []),
+            "travel_path_kind": str(route_context.get("travel_path_kind", "") or ""),
+            "gate_leg_count": int(route_context.get("gate_leg_count", 0) or 0),
+            "ansiblex_leg_count": int(route_context.get("ansiblex_leg_count", 0) or 0),
+            "ansiblex_logistics_cost_isk": float(route_context.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+            "used_ansiblex": bool(route_context.get("used_ansiblex", False)),
+            "travel_source_system": str(route_context.get("travel_source_system", "") or ""),
+            "travel_dest_system": str(route_context.get("travel_dest_system", "") or ""),
         }
     total_volume = sum(max(0.0, float(p.get("unit_volume", 0.0)) * float(p.get("qty", 0))) for p in picks)
     if total_volume <= 0:
@@ -744,7 +788,8 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
     route_fixed = max(0.0, float(route_cfg.get("fixed_isk", 0.0) or 0.0))
     route_per_m3 = max(0.0, float(route_cfg.get("isk_per_m3", 0.0) or 0.0))
     route_cost_is_explicit = bool(route_cfg.get("is_explicit", False))
-    route_total = route_fixed + (route_per_m3 * total_volume)
+    ansiblex_logistics_cost = max(0.0, float(route_context.get("ansiblex_logistics_cost_isk", 0.0) or 0.0))
+    route_total = route_fixed + (route_per_m3 * total_volume) + ansiblex_logistics_cost
     transport_total = shipping_total + route_total
     policy_summary = _summarize_transport_policy(
         route_context,
@@ -768,6 +813,7 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
             p["shipping_cost"] = float(pick_shipping)
             p["route_cost"] = float(pick_route)
             p["transport_cost"] = float(pick_transport)
+            p["ansiblex_logistics_cost"] = float(ansiblex_logistics_cost * share)
             p["revenue_net"] = float(p.get("revenue_net", 0.0)) - float(pick_transport)
             p["profit"] = float(p.get("profit", 0.0)) - float(pick_transport)
             cost = float(p.get("cost", 0.0))
@@ -793,6 +839,7 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
             p.setdefault("shipping_cost", 0.0)
             p.setdefault("route_cost", 0.0)
             p.setdefault("transport_cost", 0.0)
+            p.setdefault("ansiblex_logistics_cost", 0.0)
             p["transport_cost_confidence"] = cost_model_confidence
             if cost_model_warning:
                 p["transport_cost_warning"] = cost_model_warning
@@ -826,6 +873,16 @@ def apply_route_costs_to_picks(picks: list[dict], route_context: dict) -> dict:
         "route_blocked_due_to_transport": bool(route_blocked),
         "route_actionable": bool(policy_summary.get("route_actionable", not route_blocked)),
         "route_prune_reason": str(policy_summary.get("route_prune_reason", "")) or "",
+        "travel_summary": str(route_context.get("travel_summary", "") or ""),
+        "travel_path_found": bool(route_context.get("travel_path_found", False)),
+        "travel_path_legs": list(route_context.get("travel_path_legs", []) or []),
+        "travel_path_kind": str(route_context.get("travel_path_kind", "") or ""),
+        "gate_leg_count": int(route_context.get("gate_leg_count", 0) or 0),
+        "ansiblex_leg_count": int(route_context.get("ansiblex_leg_count", 0) or 0),
+        "ansiblex_logistics_cost_isk": float(ansiblex_logistics_cost),
+        "used_ansiblex": bool(route_context.get("used_ansiblex", False)),
+        "travel_source_system": str(route_context.get("travel_source_system", "") or ""),
+        "travel_dest_system": str(route_context.get("travel_dest_system", "") or ""),
     }
 
 

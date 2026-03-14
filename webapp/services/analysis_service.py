@@ -69,8 +69,21 @@ def _route_cards(manifest: dict) -> list[dict]:
                 "total_fees_taxes": float(route.get("total_fees_taxes", 0.0) or 0.0),
                 "total_transport_cost": float(route.get("total_transport_cost", 0.0) or 0.0),
                 "shipping_cost_total": float(route.get("shipping_cost_total", 0.0) or 0.0),
+                "expected_profit_before_logistics_total": float(
+                    route.get("expected_profit_before_logistics_total", expected_total + float(route.get("total_transport_cost", 0.0) or 0.0))
+                    or 0.0
+                ),
+                "expected_profit_after_logistics_total": float(route.get("expected_profit_after_logistics_total", expected_total) or 0.0),
                 "expected_profit_total": expected_total,
                 "full_sell_profit_total": full_total,
+                "travel_summary": str(route.get("travel_summary", "") or ""),
+                "travel_path_found": bool(route.get("travel_path_found", False)),
+                "travel_path_kind": str(route.get("travel_path_kind", "") or ""),
+                "gate_leg_count": int(route.get("gate_leg_count", 0) or 0),
+                "ansiblex_leg_count": int(route.get("ansiblex_leg_count", 0) or 0),
+                "ansiblex_logistics_cost_isk": float(route.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
+                "used_ansiblex": bool(route.get("used_ansiblex", False)),
+                "travel_path_legs": [dict(leg) for leg in list(route.get("travel_path_legs", []) or []) if isinstance(leg, dict)],
                 "warnings": [str(item).strip() for item in list(route.get("warnings", []) or []) if str(item).strip()],
                 "display": display,
                 "route_logic_label": str(display.get("logic_label", "") or ""),

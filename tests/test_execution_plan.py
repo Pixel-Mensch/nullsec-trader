@@ -464,6 +464,9 @@ class TestWriteShoppingList:
 
 def _make_route_result(picks=None) -> dict:
     p_list = [_instant_pick(), _planned_pick()] if picks is None else picks
+    total_transport_cost = 100_000.0
+    expected_profit_total = sum(float(p.get("expected_realized_profit_90d", p.get("profit", 0)) or 0.0) for p in p_list)
+    full_sell_profit_total = sum(float(p.get("profit", 0) or 0.0) for p in p_list)
     return {
         "route_label": "Jita -> Perimeter",
         "source_label": "Jita IV-4",
@@ -474,8 +477,19 @@ def _make_route_result(picks=None) -> dict:
         "m3_used": 2_000.0,
         "total_route_m3": 2_000.0,
         "profit_total": sum(float(p.get("profit", 0)) for p in p_list),
-        "total_transport_cost": 100_000.0,
+        "expected_realized_profit_total": expected_profit_total,
+        "expected_profit_before_logistics_total": expected_profit_total + total_transport_cost,
+        "expected_profit_after_logistics_total": expected_profit_total,
+        "full_sell_profit_total": full_sell_profit_total,
+        "full_sell_profit_before_logistics_total": full_sell_profit_total + total_transport_cost,
+        "full_sell_profit_after_logistics_total": full_sell_profit_total,
+        "total_transport_cost": total_transport_cost,
         "total_shipping_cost": 0.0,
+        "travel_summary": "Pure gate route with 0 gate leg(s)",
+        "gate_leg_count": 0,
+        "ansiblex_leg_count": 0,
+        "ansiblex_logistics_cost_isk": 0.0,
+        "travel_path_legs": [],
         "picks": p_list,
         "_active_risk_profile": "balanced",
         "plan_id": "test-plan-001",
@@ -778,6 +792,31 @@ class TestWriteExecutionPlanProfiles:
         assert "Route Logic: direct leg" in content
         assert "Route Logic: 3-leg span" in content
         assert "Route Logic: Jita outbound connector" in content
+
+    def test_execution_plan_shows_ansiblex_travel_legs_and_profit_before_after_logistics(self):
+        result = _make_route_result(picks=[_instant_pick(name="Ansiblex Pick")])
+        result["route_label"] = "O4T -> UALX-3"
+        result["source_label"] = "O4T"
+        result["dest_label"] = "UALX-3"
+        result["travel_summary"] = "1 gate leg(s), 1 ansiblex leg(s), 665000 ISK ansiblex logistics"
+        result["gate_leg_count"] = 1
+        result["ansiblex_leg_count"] = 1
+        result["ansiblex_logistics_cost_isk"] = 665_000.0
+        result["expected_profit_before_logistics_total"] = 5_665_000.0
+        result["expected_profit_after_logistics_total"] = 5_000_000.0
+        result["travel_path_legs"] = [
+            {"from_system": "O4T-Z5", "to_system": "R-ARKN", "mode": "gate"},
+            {"from_system": "R-ARKN", "to_system": "WT-2J9", "mode": "ansiblex", "ansiblex_logistics_cost_isk": 665_000.0},
+        ]
+
+        content = self._write_and_read([result])
+
+        assert "Travel: 1 gate leg(s), 1 ansiblex leg(s), 665000 ISK ansiblex logistics" in content
+        assert "expected_profit_before_logistics" in content
+        assert "expected_profit_after_logistics" in content
+        assert "ansiblex_logistics_cost" in content
+        assert "leg: O4T-Z5 -> R-ARKN [gate]" in content
+        assert "leg: R-ARKN -> WT-2J9 [ansiblex" in content
 
 
 # ---------------------------------------------------------------------------

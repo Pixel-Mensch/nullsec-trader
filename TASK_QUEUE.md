@@ -1,12 +1,42 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 29 reviewer follow-up for private web deploy semantics)
+Last updated: 2026-03-14 (session 30 ansiblex corridor travel layer)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0j: Add a small directed ansiblex corridor travel layer
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `ansiblex.py`, `config.json`, `config_loader.py`,
+  `shipping.py`, `runtime_runner.py`, `execution_plan.py`,
+  `journal_models.py`, `webapp/services/analysis_service.py`,
+  `webapp/templates/results.html`, `nullsectrader.py`, `tests/`,
+  `scripts/quality_check.py`, `docs/Ansis.txt`
+- What was done:
+  - added `docs/Ansis.txt` as directed source of truth for optional ansiblex
+    connections; parser ignores blank lines and simple comments but does not
+    invent reverse edges
+  - kept normal gate travel intact and layered ansiblex edges on top of the
+    internal corridor graph instead of rewriting route search
+  - added a small configurable ansiblex cost model and folds its estimated
+    logistics cost additively into existing route transport costs
+  - route summaries, execution plans, browser results, and `trade_plan` JSON
+    now show gate legs, ansiblex legs, ansiblex logistics cost, travel summary,
+    and profit before vs after logistics
+  - corridor ordering stayed presentation-only; longer spans like
+    `O4T -> 1ST` and Jita connector routes remain visible
+  - focused regression:
+    `python -m pytest -q tests/test_ansiblex.py tests/test_config.py tests/test_route_search.py tests/test_runtime_runner.py tests/test_shipping.py tests/test_execution_plan.py tests/test_webapp.py`
+    -> **183 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **195 passed**
 
 ### Task 0h: Add small private web protection and corridor-ordered route display
 
@@ -563,6 +593,15 @@ full backlog scrape.
 - Expected result: replace some stdout/artifact parsing in the web analysis path
   with a smaller structured runtime service API, without rewriting CLI behavior
   or duplicating trading logic.
+
+### Task 7h: Decide whether ansiblex travel should use real LY distances later
+
+- Priority: P2
+- Status: ready
+- Relevant files: `ansiblex.py`, `docs/Ansis.txt`, `config.json`, `README.md`
+- Expected result: if a trustworthy distance source becomes available, replace
+  the current per-edge default estimate with explicit LY data without changing
+  the additive cost seam or route-search scoring.
 
 ### Task 7c: Keep local journal schema migration robust for UI and CLI entry points
 
