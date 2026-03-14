@@ -490,6 +490,8 @@ def _make_route_result(picks=None) -> dict:
         "ansiblex_leg_count": 0,
         "ansiblex_logistics_cost_isk": 0.0,
         "travel_path_legs": [],
+        "candidate_node_summary": "",
+        "candidate_nodes": [],
         "picks": p_list,
         "_active_risk_profile": "balanced",
         "plan_id": "test-plan-001",
@@ -533,6 +535,18 @@ class TestWriteExecutionPlanProfiles:
         content = self._write_and_read([result])
         assert "Route Mix Cleanup: removed 1 weak add-on pick(s)" in content
         assert "Noise-5 'Needlejack' Filament" in content
+
+    def test_candidate_node_summary_is_rendered_when_present(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["candidate_node_summary"] = "start 1DQ1-A [market_candidate] | corridor RE-C26 [corridor_checkpoint]"
+        result["candidate_nodes"] = [
+            {"label": "1DQ1-A", "kind": "market_candidate", "match_role": "start", "note": ""},
+            {"label": "RE-C26", "kind": "corridor_checkpoint", "match_role": "corridor", "note": ""},
+        ]
+        content = self._write_and_read([result], detail_mode=True)
+        assert "Candidate nodes: start 1DQ1-A [market_candidate] | corridor RE-C26 [corridor_checkpoint]" in content
+        assert "candidate_node: start 1DQ1-A [market_candidate]" in content
+        assert "candidate_node: corridor RE-C26 [corridor_checkpoint]" in content
 
     def test_speculative_section_present(self):
         result = _make_route_result(picks=[_speculative_pick()])

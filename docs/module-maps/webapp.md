@@ -87,6 +87,9 @@ journal, character, and config workflows without replacing the CLI.
 - surface compact internal travel metadata from runtime artifacts, including
   gate/ansiblex counts, ansiblex logistics cost, and visible ansiblex legs,
   without designing a second corridor UI
+- surface compact candidate-node summaries from runtime artifacts when routes
+  touch configured watch nodes, without inventing a new browser-side routing or
+  market classification model
 - keep private-deploy wording honest so docs do not over-promise public-grade
   web hardening
 

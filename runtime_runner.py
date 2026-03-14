@@ -5,6 +5,7 @@ import os
 import sys
 import time
 
+from candidate_nodes import annotate_route_candidate_nodes
 from candidate_engine import _route_adjusted_candidate_score, compute_candidates, compute_route_wide_candidates_for_source
 from character_profile import (
     apply_character_fee_overrides,
@@ -1334,6 +1335,7 @@ def _apply_internal_self_haul_operational_filter(result: dict, cfg: dict) -> dic
 def _finalize_route_result_runtime_state(result: dict, cfg: dict) -> dict:
     _refresh_route_result_from_current_picks(result)
     _apply_post_selection_route_mix_cleanup(result, cfg)
+    result.update(annotate_route_candidate_nodes(result, cfg))
     return _apply_internal_self_haul_operational_filter(result, cfg)
 
 

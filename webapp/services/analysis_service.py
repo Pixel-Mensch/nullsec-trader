@@ -84,6 +84,8 @@ def _route_cards(manifest: dict) -> list[dict]:
                 "ansiblex_logistics_cost_isk": float(route.get("ansiblex_logistics_cost_isk", 0.0) or 0.0),
                 "used_ansiblex": bool(route.get("used_ansiblex", False)),
                 "travel_path_legs": [dict(leg) for leg in list(route.get("travel_path_legs", []) or []) if isinstance(leg, dict)],
+                "candidate_node_summary": str(route.get("candidate_node_summary", "") or ""),
+                "candidate_nodes": [dict(node) for node in list(route.get("candidate_nodes", []) or []) if isinstance(node, dict)],
                 "warnings": [str(item).strip() for item in list(route.get("warnings", []) or []) if str(item).strip()],
                 "display": display,
                 "route_logic_label": str(display.get("logic_label", "") or ""),

@@ -20,6 +20,8 @@ not a full line-by-line review.
 - keeps external routes from carrying misleading internal-route floor metadata
 - carries presentation-ready internal travel metadata from transport context
   into final route results and `trade_plan` artifacts
+- attaches display-only candidate-node annotations from config when a route
+  starts, ends, or passes through a watched system
 
 ## Inputs
 
@@ -88,6 +90,8 @@ not a full line-by-line review.
 - tune the weak-tail cleanup seam without weakening candidate-stage anti-bait gates
 - preserve display-only travel metadata such as gate/ansiblex counts and
   profit-before/after-logistics without leaking routing logic into the runner
+- preserve candidate-node annotations as descriptive metadata only; do not let
+  them turn into hidden hub scoring inside the runner
 
 ## Risk Areas
 

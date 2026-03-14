@@ -132,6 +132,9 @@
         {% if route.travel_summary %}
         <p class="muted route-logic">{{ route.travel_summary }}</p>
         {% endif %}
+        {% if route.candidate_node_summary %}
+        <p class="muted route-logic">Candidate nodes: {{ route.candidate_node_summary }}</p>
+        {% endif %}
         {% if route.travel_path_legs and route.used_ansiblex %}
         <ul class="plain-list">
           {% for travel_leg in route.travel_path_legs %}

@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 30 ansiblex corridor travel layer)
+Last updated: 2026-03-14 (session 31 imperium candidate nodes)
 
 ## Snapshot
 
@@ -197,6 +197,13 @@ Not fully re-audited this session:
 - execution plans, browser results, and `trade_plan_*.json` now surface those
   internal travel fields so ansiblex usage is visible without inventing a
   second ranking model
+- the repo now also has a small config-driven candidate-node seam for Imperium
+  watch systems: `station_candidate`, `market_candidate`, and
+  `corridor_checkpoint` stay distinct instead of implicitly treating every
+  named system as a real station market
+- candidate-node hits are display-only metadata on routes; execution plans,
+  browser results, and `trade_plan_*.json` can now show when a route starts,
+  ends, or passes through such a configured node
 - the web runtime bridge now captures `Replay-Snapshot geschrieben: ...` from
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
@@ -349,9 +356,12 @@ centered on:
 - additive internal travel realism for `internal_self_haul` routes through a
   small directed ansiblex layer and more transparent route/output travel
   metadata
+- cautious preparation for Imperium watch nodes and future market/station
+  expansion without hardcoding unverified hubs into route-search logic
 
 Files that indicate this focus:
 
+- `candidate_nodes.py`
 - `risk_profiles.py`
 - `runtime_runner.py`
 - `runtime_common.py`
@@ -402,6 +412,13 @@ Files that indicate this focus:
   `docs/Ansis.txt` carries topology only, not geometric LY distances
 - internal ansiblex/gate path metadata only exists for route-chain systems that
   are explicitly mapped through `route_chain.legs[].system`
+- candidate nodes are intentionally descriptive only in this block: they do not
+  fetch markets, create routes, or turn a system into a location/structure by
+  themselves
+- the default candidate-node block is intentionally cautious: the current
+  Imperium watch list is preloaded as `market_candidate` or
+  `corridor_checkpoint`; no default node in this block is hardcoded as a real
+  `station_candidate`
 - replay calibration used the focused O4T/Jita fixture plus a narrow
   `replay_snapshot.json` route search. Those checks confirmed that prior bait
   picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage

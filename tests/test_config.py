@@ -123,6 +123,15 @@ def test_validate_config_rejects_invalid_ansiblex_toll_mode() -> None:
     vr = nst.validate_config(cfg)
     assert any("ansiblex.toll_mode" in str(e) for e in vr.get("errors", []))
 
+def test_validate_config_rejects_invalid_candidate_node_kind() -> None:
+    cfg = _minimal_valid_config()
+    cfg["candidate_nodes"] = {
+        "enabled": True,
+        "nodes": [{"label": "1DQ1-A", "kind": "mystery_hub"}],
+    }
+    vr = nst.validate_config(cfg)
+    assert any("candidate_nodes.nodes[0].kind" in str(e) for e in vr.get("errors", []))
+
 def test_validate_config_rejects_invalid_structure_regions() -> None:
     cfg = _minimal_valid_config()
     cfg["structure_regions"] = {"bad": 10000059, "1040804972352": -1}

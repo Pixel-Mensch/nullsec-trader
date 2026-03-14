@@ -489,6 +489,53 @@
         "toll_isk_per_ozone": 0,
         "fixed_toll_isk_per_jump": 0
     },
+    "candidate_nodes": {
+        "enabled": true,
+        "nodes": [
+            {
+                "label": "1DQ1-A",
+                "kind": "market_candidate",
+                "enabled": true,
+                "note": "Watch node only; not hardcoded as an active station."
+            },
+            {
+                "label": "YZ-LQL",
+                "kind": "market_candidate",
+                "enabled": true,
+                "note": "Watch node only; not hardcoded as an active station."
+            },
+            {
+                "label": "319-3D",
+                "kind": "market_candidate",
+                "enabled": true,
+                "note": "Watch node only; not hardcoded as an active station."
+            },
+            {
+                "label": "PR-8CA",
+                "kind": "market_candidate",
+                "enabled": true,
+                "note": "Watch node only; not hardcoded as an active station."
+            },
+            {
+                "label": "FWST-8",
+                "kind": "market_candidate",
+                "enabled": true,
+                "note": "Watch node only; not hardcoded as an active station."
+            },
+            {
+                "label": "KFIE-Z",
+                "kind": "market_candidate",
+                "enabled": true,
+                "note": "Watch node only; not hardcoded as an active station."
+            },
+            {
+                "label": "RE-C26",
+                "kind": "corridor_checkpoint",
+                "enabled": true,
+                "note": "Routing checkpoint only; not treated as a station candidate."
+            }
+        ]
+    },
     "chain_leg_budget_util_min_pct": 0.1,
     "chain_return_mode": "fast_sell",
     "filters_chain_return": {

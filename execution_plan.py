@@ -214,6 +214,23 @@ def _append_route_travel_lines(lines: list[str], record: dict, fmt_isk_de, *, in
         lines.append(f"{indent}  leg: {from_system} -> {to_system} [{' | '.join(detail_bits)}]")
 
 
+def _append_candidate_node_lines(lines: list[str], record: dict, *, indent: str = "", detail_mode: bool = False) -> None:
+    summary = str(record.get("candidate_node_summary", "") or "").strip()
+    raw_nodes = record.get("candidate_nodes", [])
+    nodes = [dict(node) for node in list(raw_nodes or []) if isinstance(node, dict)] if isinstance(raw_nodes, list) else []
+    if summary:
+        lines.append(f"{indent}Candidate nodes: {summary}")
+    if not detail_mode:
+        return
+    for node in nodes:
+        label = str(node.get("label", "") or "").strip()
+        kind = str(node.get("kind", "") or "").strip()
+        match_role = str(node.get("match_role", "") or "").strip()
+        if not label or not kind or not match_role:
+            continue
+        lines.append(f"{indent}  candidate_node: {match_role} {label} [{kind}]")
+
+
 def _ordered_route_results_for_display(route_results: list[dict]) -> list[dict]:
     indexed = list(enumerate(list(route_results or [])))
 
@@ -822,6 +839,7 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
             if transport_note:
                 lines.append(f"  note: {transport_note}")
         _append_route_travel_lines(lines, leg, fmt_isk_de, indent="", detail_mode=detail_mode)
+        _append_candidate_node_lines(lines, leg, indent="", detail_mode=detail_mode)
         if shipping_lane_id:
             lines.append(f"Shipping Lane: {shipping_lane_id}")
             provider = str(leg.get("shipping_provider", "") or "")
@@ -1107,6 +1125,7 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
         lines.append(f"   Total Shipping Cost: {fmt_isk_de(float(r.get('shipping_cost_total', 0.0) or 0.0))}")
         lines.append(f"   Total Transport Cost: {fmt_isk_de(float(r.get('total_transport_cost', 0.0) or 0.0))}")
         _append_route_travel_lines(lines, r, fmt_isk_de, indent="   ", detail_mode=detail_mode)
+        _append_candidate_node_lines(lines, r, indent="   ", detail_mode=detail_mode)
         transport_note = str(r.get("transport_mode_note", "") or "")
         if transport_note:
             lines.append(f"   transport_note: {transport_note}")

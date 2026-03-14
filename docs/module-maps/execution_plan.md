@@ -25,6 +25,8 @@ This map is based on focused output and test inspection, not a full audit.
 - can render compact internal travel metadata when runtime metadata provides
   gate/ansiblex leg counts, ansiblex logistics cost, profit before/after
   logistics, and visible ansiblex travel legs
+- can render compact candidate-node summaries when runtime metadata marks a
+  start/end/corridor hit for a configured watch node
 
 ## Inputs
 
@@ -81,6 +83,8 @@ This map is based on focused output and test inspection, not a full audit.
   the ranking path
 - keep ansiblex travel visibility concise and presentation-only, without
   turning the plan writer into a second routing engine
+- keep candidate-node messaging descriptive only, without implying that a watch
+  node is automatically a proven trade hub
 
 ## Risk Areas
 

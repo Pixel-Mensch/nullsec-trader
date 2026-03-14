@@ -325,6 +325,8 @@ def build_trade_plan_manifest(
                 "travel_source_system": str(route.get("travel_source_system", "") or ""),
                 "travel_dest_system": str(route.get("travel_dest_system", "") or ""),
                 "travel_path_legs": json.loads(json.dumps(route.get("travel_path_legs", []), ensure_ascii=False)),
+                "candidate_node_summary": str(route.get("candidate_node_summary", "") or ""),
+                "candidate_nodes": json.loads(json.dumps(route.get("candidate_nodes", []), ensure_ascii=False)),
                 "transport_mode": str(route.get("transport_mode", "") or ""),
                 "transport_mode_note": str(route.get("transport_mode_note", "") or ""),
                 "budget_left_reason": str(route.get("budget_left_reason", "") or ""),

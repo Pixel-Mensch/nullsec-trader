@@ -127,6 +127,10 @@ def _analysis_result() -> dict:
                 {"from_system": "O4T-Z5", "to_system": "R-ARKN", "mode": "gate"},
                 {"from_system": "R-ARKN", "to_system": "WT-2J9", "mode": "ansiblex", "ansiblex_logistics_cost_isk": 665000.0},
             ],
+            "candidate_node_summary": "corridor RE-C26 [corridor_checkpoint]",
+            "candidate_nodes": [
+                {"label": "RE-C26", "kind": "corridor_checkpoint", "match_role": "corridor", "note": ""},
+            ],
             "pick_count": 1,
             "warnings": [],
             "calibration_warning": "",
@@ -368,6 +372,7 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     assert "Profit pre-logistics 18665000 ISK" in response.text
     assert "Ansiblex legs 1" in response.text
     assert "Ansiblex cost 665000 ISK" in response.text
+    assert "Candidate nodes: corridor RE-C26 [corridor_checkpoint]" in response.text
     assert "R-ARKN -&gt; WT-2J9" in response.text
     assert "Snapshot C:/tmp/replay_snapshot.json" in response.text
     assert 'class="log-output"' in response.text

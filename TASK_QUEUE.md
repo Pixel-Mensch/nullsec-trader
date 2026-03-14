@@ -1,12 +1,40 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 30 ansiblex corridor travel layer)
+Last updated: 2026-03-14 (session 31 imperium candidate nodes)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0k: Add config-driven Imperium candidate nodes without hardcoded hub claims
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `candidate_nodes.py`, `config.json`, `config_loader.py`,
+  `runtime_runner.py`, `execution_plan.py`, `journal_models.py`,
+  `webapp/services/analysis_service.py`, `webapp/templates/results.html`,
+  `nullsectrader.py`, `tests/`, `scripts/quality_check.py`
+- What was done:
+  - added a small `candidate_nodes` config seam with explicit node kinds:
+    `station_candidate`, `market_candidate`, and `corridor_checkpoint`
+  - preloaded the requested Imperium watch systems cautiously as configurable
+    candidates instead of silently promoting them into real trade hubs
+  - kept `RE-C26` out of `station_candidate`; it is modeled only as a
+    `corridor_checkpoint`
+  - attached candidate-node hits to route metadata when a route starts, ends,
+    or passes through one of those nodes; this is display-only and does not
+    change route search or scoring
+  - execution plans, browser results, and `trade_plan` artifacts now surface a
+    compact candidate-node summary when relevant
+  - focused regression:
+    `python -m pytest -q tests/test_candidate_nodes.py tests/test_config.py tests/test_route_search.py tests/test_runtime_runner.py tests/test_shipping.py tests/test_execution_plan.py tests/test_webapp.py`
+    -> **181 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **199 passed**
 
 ### Task 0j: Add a small directed ansiblex corridor travel layer
 
@@ -602,6 +630,16 @@ full backlog scrape.
 - Expected result: if a trustworthy distance source becomes available, replace
   the current per-edge default estimate with explicit LY data without changing
   the additive cost seam or route-search scoring.
+
+### Task 7i: Decide later which watch nodes deserve real station/location treatment
+
+- Priority: P2
+- Status: ready
+- Relevant files: `config.json`, `candidate_nodes.py`, `startup_helpers.py`,
+  `route_search.py`, `README.md`
+- Expected result: only promote a configured watch node into real location or
+  structure logic when verified data or an explicit operator decision exists;
+  keep the default watch-node list descriptive until then.
 
 ### Task 7c: Keep local journal schema migration robust for UI and CLI entry points
 

@@ -23,6 +23,7 @@ nullsec-trader-web = "webapp.app:run_dev_server"
 [tool.setuptools]
 py-modules = [
   "ansiblex",
+  "candidate_nodes",
   "main",
   "nullsectrader",
   "runtime_common",

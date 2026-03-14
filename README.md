@@ -541,6 +541,7 @@ Fuer den Betrieb relevant sind vor allem:
 - `fees`
 - `shipping_lanes`, `route_costs`, `shipping_defaults`
 - `ansiblex`
+- `candidate_nodes`
 - `filters_forward`, `filters_return`, `filters_planned_sell_forward`
 - `planned_sell`, `reference_price`, `strict_mode`
 - `portfolio`
@@ -590,6 +591,9 @@ Pro Route werden unter anderem ausgegeben:
 - kompakte Travel-Metadaten fuer interne Routen: Gate-Legs, Ansiblex-Legs,
   geschaetzte Ansiblex-Logistikkosten und sichtbare Travel-Legs, wenn
   Ansiblex genutzt wurde
+- optional kompakte Candidate-Node-Hinweise, wenn eine Route an einem
+  beobachteten `station_candidate`, `market_candidate` oder
+  `corridor_checkpoint` startet, endet oder vorbeilaeuft
 
 Pro Pick werden unter anderem ausgegeben:
 
@@ -624,6 +628,9 @@ Wichtig beim Lesen:
 - falls eine Route Ansiblex nutzt, wird das in Plan und Web-Resultaten sichtbar
   gemacht: Travel-Zusammenfassung, einzelne Ansiblex-Legs, Gate-/Ansiblex-
   Counts sowie Profit vor und nach Logistik
+- Candidate Nodes sind bewusst nur Beobachtungsknoten: sie erzeugen kein
+  eigenes Ranking, kein Fake-Scoring und machen ein System nicht automatisch zu
+  einem echten Handels-Hub
 
 ### Weitere Dateien
 
@@ -662,6 +669,9 @@ Ein Null-Ergebnis ist nicht automatisch ein Fehler. Wenn keine Route oder keine 
 - [`journal_models.py`](./journal_models.py), [`journal_store.py`](./journal_store.py), [`journal_reporting.py`](./journal_reporting.py), [`journal_cli.py`](./journal_cli.py): Plan-IDs, lokales SQLite-Journal, Soll/Ist-Auswertung und Journal-CLI
 - [`journal_reconciliation.py`](./journal_reconciliation.py): Wallet-Transaction-/Wallet-Journal-Matching gegen lokale Journal-Eintraege mit Confidence und Unmatched-Tracking
 - [`ansiblex.py`](./ansiblex.py): gerichteter Ansiblex-Parser, kleines Kostenmodell und interner Gate-/Ansiblex-Travel-Layer fuer Route-Metadaten
+- [`candidate_nodes.py`](./candidate_nodes.py): konfigurierbare Watch-/Hub-
+  Kandidaten mit sauberer Typtrennung fuer `station_candidate`,
+  `market_candidate` und `corridor_checkpoint`
 - [`shipping.py`](./shipping.py): Shipping-Lanes, Transportkosten, Route-Blocking
 - [`route_search.py`](./route_search.py): Route Search, Ranking und Route-Summary fuer das Leaderboard
 - [`portfolio_builder.py`](./portfolio_builder.py): Portfolio-Bau unter Risiko-, Nachfrage-, Budget- und Cargo-Grenzen
@@ -701,6 +711,9 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
   liefert nur Topologie, keine echten LY-Distanzen. Das aktuelle Default-
   Modell rechnet deshalb mit einer konstanten Schaetzung pro Ansiblex-Leg, bis
   spaeter genauere Distanzdaten vorliegen.
+- Candidate Nodes sind absichtlich nur konfigurierbare Beobachtungspunkte.
+  `market_candidate` oder `corridor_checkpoint` bedeuten nicht automatisch,
+  dass dort ein belastbarer Handelsmarkt oder eine echte Station aktiv ist.
 - Gebuehren haengen von den in der Config hinterlegten Skills und Markttypen ab. Wenn dein Charakter oder Markt-Setup davon abweicht, driftet das Ergebnis.
 - Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
   harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell

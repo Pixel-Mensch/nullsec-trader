@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14 (session 30 ansiblex corridor travel layer)
+Last updated: 2026-03-14 (session 31 imperium candidate nodes)
 
 ## Evidence And Limits
 
@@ -33,6 +33,7 @@ Current module maps:
 - `docs/module-maps/journal_reconciliation.md`
 - `docs/module-maps/webapp.md`
 - `docs/module-maps/ansiblex.md`
+- `docs/module-maps/candidate_nodes.md`
 
 Use the relevant module map before opening one of these larger files.
 
@@ -76,6 +77,8 @@ Use this section to avoid loading large unrelated modules.
 - Shipping costs, route blocking, and transport context: `shipping.py`
 - Directed ansiblex parsing, small internal travel graph, and additive
   ansiblex logistics costs: `ansiblex.py`
+- Config-driven watch-node classification for station/market/corridor
+  candidates: `candidate_nodes.py`
 - Fee calculations: `fees.py`, `fee_engine.py`
 - Human-readable output, route plan rendering, route leaderboard, and no-trade
   reports: `execution_plan.py`
@@ -105,6 +108,7 @@ The main runtime flow is:
 -> `portfolio_builder.py`
 -> `shipping.py`
 -> optional `ansiblex.py` internal corridor travel metadata/cost seam
+-> optional `candidate_nodes.py` display-only route annotations
 -> `route_search.py`
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
@@ -221,6 +225,9 @@ transport and confidence calibration:
 - final route results can now also carry travel metadata for browser and plan
   parity: travel summary, gate/ansiblex leg counts, visible travel legs, and
   profit before vs after logistics
+- final route results can also carry candidate-node annotations when a route
+  starts, ends, or passes through a configured watch node; this remains
+  display-only metadata and does not alter route ranking
 
 Trade quality now has one central seam instead of separate ad-hoc penalties:
 
@@ -288,6 +295,8 @@ Confirmed output families from the current docs and entry modules:
 - route entries inside `trade_plan_<plan_id>.json` can also carry travel
   metadata for internal gate/ansiblex path visibility and profit-before/after-
   logistics parity
+- route entries inside `trade_plan_<plan_id>.json` can also carry compact
+  candidate-node metadata for browser parity
 - `snapshot_<timestamp>.json`
 - `market_snapshot.json`
 - `replay_snapshot.json`
@@ -361,6 +370,8 @@ confirm the current branch state.
 - Shipping and route transport blocking: `shipping.py`
 - Internal ansiblex source of truth and additive cost seam: `ansiblex.py` plus
   `docs/Ansis.txt`
+- Candidate watch-node source of truth: `config.json` `candidate_nodes` plus
+  `candidate_nodes.py`
 - Internal self-haul vs external shipping classification: `shipping.py`
 - Candidate generation and planned-sell modeling: `candidate_engine.py`
 - Confidence calibration logic and personal decision-layer policy:
