@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14 (session 32 small wallet hub safe)
+Last updated: 2026-03-14 (session 35 cleanup + clickable web launcher)
 
 ## Evidence And Limits
 
@@ -48,6 +48,12 @@ The productive startup path is:
 `nullsectrader.py` is not the main CLI path. It is a thin compatibility and
 import facade used by tests and local tooling.
 
+The click-first local web startup path is:
+
+1. `start_webapp.bat`
+2. `webapp.app.run_dev_server()`
+3. browser on `http://127.0.0.1:8000`
+
 ## High-Value Files By Task
 
 Use this section to avoid loading large unrelated modules.
@@ -93,6 +99,7 @@ Use this section to avoid loading large unrelated modules.
   `journal_reporting.py`, `confidence_calibration.py`
 - Local browser UI and service bridge: `webapp/app.py`, `webapp/routes/pages.py`,
   `webapp/services/`
+- Clickable Windows web launcher: `start_webapp.bat`
 - Startup node and chain resolution: `startup_helpers.py`
 
 ## Runtime Flow

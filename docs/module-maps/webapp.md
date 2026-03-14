@@ -57,12 +57,14 @@ journal, character, and config workflows without replacing the CLI.
 - `webapp/services/config_service.py`
 - `webapp/templates/`
 - `webapp/static/`
+- `start_webapp.bat`
 - `tests/test_webapp.py`
 
 ## Important Entry Points
 
 - `webapp.app:create_app`
 - `webapp.app:run_dev_server`
+- `start_webapp.bat`
 - page routes in `webapp/routes/pages.py`
 - `invoke_runtime()` in `webapp/services/runtime_bridge.py`
 
@@ -80,6 +82,7 @@ journal, character, and config workflows without replacing the CLI.
 ## Used By
 
 - local browser sessions
+- `start_webapp.bat`
 - `nullsec-trader-web`
 - `uvicorn webapp.app:create_app --factory`
 - `tests/test_webapp.py`
@@ -90,6 +93,8 @@ journal, character, and config workflows without replacing the CLI.
 - improve browser-safe formatting of runtime or journal outputs
 - tighten service boundaries around runtime and character calls
 - expose more status metadata without changing trading logic
+- keep the click-first Windows launcher aligned with the same local host/port
+  and dependency assumptions as `run_dev_server()`
 - surface active-character state globally and switch it without bypassing the
   existing runtime/journal character-context files
 - surface active-profile state globally and keep browser analysis defaults

@@ -155,6 +155,13 @@ oder nach Installation ueber den Console-Script-Einstieg:
 nullsec-trader-web
 ```
 
+Oder per Doppelklick direkt aus dem Repo:
+
+- [`start_webapp.bat`](./start_webapp.bat)
+- startet den lokalen Web-Server in einem eigenen Fenster
+- oeffnet danach direkt den Browser auf `http://127.0.0.1:8000`
+- beenden: das Fenster `Nullsec Trader Web` schliessen oder `Strg+C`
+
 Dann im Browser:
 
 `http://127.0.0.1:8000`

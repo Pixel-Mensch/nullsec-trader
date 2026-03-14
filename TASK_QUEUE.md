@@ -1,12 +1,31 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 34 web active profile + internal route diagnosis)
+Last updated: 2026-03-14 (session 35 cleanup + clickable web launcher)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0o: Add a click-first Windows launcher for the local web UI
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `start_webapp.bat`, `README.md`, `ARCHITECTURE.md`,
+  `PROJECT_STATE.md`, `SESSION_HANDOFF.md`, `docs/module-maps/webapp.md`
+- What was done:
+  - added a root-level `start_webapp.bat` for Windows double-click use
+  - the launcher checks Python, installs missing web dependencies from
+    `requirements.txt` if needed, starts the local web server in its own
+    console window, and opens `http://127.0.0.1:8000` in the browser
+  - executed a real cleanup run with `python .\main.py clean` so the repo is
+    free of generated runtime artifacts again while preserving token, journal,
+    and character cache state
+  - targeted verification:
+    `python -m pytest -q tests/test_runtime_cleanup.py`
+    -> **2 passed**
 
 ### Task 0n: Add active web risk-profile switching and clearer internal-route diagnosis
 

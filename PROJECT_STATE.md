@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 34 web active profile + internal route diagnosis)
+Last updated: 2026-03-14 (session 35 cleanup + clickable web launcher)
 
 ## Snapshot
 
@@ -67,8 +67,10 @@ Reviewed this session:
 - `tests/test_risk_profiles.py`
 - `tests/test_webapp.py`
 - `tests/test_runtime_cleanup.py`
+- `start_webapp.bat`
 - current `git status`
 - `python -m pytest -q`
+- `python .\main.py clean`
 - focused live CLI run on 2026-03-08 using local overlay config
 - replay CLI run on 2026-03-08 against the freshly written live snapshot
 - real HTTP `uvicorn` checks for `/analysis` replay and long-running live POST
@@ -218,6 +220,10 @@ Not fully re-audited this session:
   live runs, so the browser shows the real snapshot path after a live analysis
 - the local web app no longer uses a browser heartbeat or idle auto-shutdown;
   it now stays up until the operator stops the process explicitly
+- the repo now also has a small click-first web launcher `start_webapp.bat`
+  for Windows single-user use: it checks Python, installs missing web
+  dependencies from `requirements.txt` if needed, starts the local web server
+  in its own console window, and opens the browser on `127.0.0.1:8000`
 - the web journal page now surfaces current cached character snapshot data
   (open orders plus wallet transaction/journal counts) even when the local
   journal DB is empty; opening the dedicated Reconcile/Unmatched tabs now
@@ -542,6 +548,10 @@ Files that indicate this focus:
   snapshot completed quickly. That makes it reasonably likely that the current
   slow path sits after snapshot creation in the live path, but this was not yet
   fully localized in code.
+- a real cleanup run was executed on 2026-03-14 through `python .\main.py clean`
+  and removed generated runtime artifacts while preserving
+  `cache/token.json`, `cache/trade_journal.sqlite3`, and
+  `cache/character_context/`
 - focused replay evidence from 2026-03-14 indicates that many empty internal
   nullsec routes are caused first by weak internal market coverage
   (`non_positive_profit`, thin books, unreliable planned-sell pricing), while a
