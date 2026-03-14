@@ -1,81 +1,93 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 28 docs alignment for private web deploy scope)
+Date: 2026-03-14 (session 29 reviewer follow-up for private web deploy semantics)
 Branch: `dev`
 
 ## Completed This Session
 
-Updated only the affected docs and handoff files so the current web-protection
-scope and the new corridor-ordered output behavior are described more
-precisely. No runtime code changed in this session.
+Implemented only the reviewer-requested follow-up around the private web seam,
+sensitive browser payloads, security regressions, and minimal CI alignment.
+No corridor-ordering or route-scoring logic was expanded.
 
 ## Root Cause
 
-- the existing docs already mentioned web protection and corridor ordering, but
-  they still read slightly too broad for the actual intent of the block
-- the private web seam is meant for one trusted operator, not for public or
-  multi-user deployment, and that boundary needed to be stated explicitly
-- the output docs needed to say more clearly that direct legs are ordered first
-  while longer profitable spans such as `O4T -> 1ST` and Jita routes remain
-  visible
+- the first web-hardening pass still allowed proxy-like loopback requests to
+  look local too easily when password auth was disabled
+- `/config` and `/character` still passed broader raw config/context objects
+  into templates than needed
+- security regressions did not yet prove `Cache-Control`, redaction, and
+  request-classification behavior end to end
+- CI still installed unused `pyflakes`, so the workflow and
+  `scripts/quality_check.py` had minor drift
 
 ## What Changed
 
-- `README.md`
-  - clarified that the browser surface is for private single-user use
-  - clarified the intended localhost-without-password mode vs password-gated
-    non-local private use
-  - documented that public multi-user hardening stays out of scope
-  - clarified that corridor ordering is display-only and keeps longer spans plus
-    Jita connectors visible
-- `PROJECT_STATE.md`
-  - aligned the current capability and known-limit wording with the actual
-    private-deploy scope of the web seam
-  - recorded that corridor ordering keeps direct legs first without dropping
-    longer profitable spans or Jita connectors
-- `TASK_QUEUE.md`
-  - tightened the completed task wording around single-user/private scope
-  - added one follow-up backlog item for stronger private web deploy semantics,
-    sensitive-page minimization, and targeted security regressions
-- `docs/module-maps/webapp.md`
-  - clarified the web module as a private single-user browser surface
-  - made the non-goals around public / multi-user / reverse-proxy hardening
-    explicit
-- `docs/module-maps/execution_plan.md`
-  - clarified that corridor ordering is presentation-only and preserves direct
-    legs, longer profitable spans, and Jita connectors
+- `webapp/security.py`
+  - tightened request classification so passwordless mode only accepts direct
+    localhost request shape
+  - proxy hint headers and non-loopback host/client combinations now fall into
+    the blocked path until a password is configured
+- `webapp/app.py`
+  - aligned the dev-server warning text with the stricter localhost-only
+    passwordless mode
+- `webapp/services/config_service.py`
+  - removed raw config objects from the template payload
+  - kept only explicit redacted view fields, including masked web password data
+- `webapp/services/character_service.py`
+  - removed raw config/context objects from the template payload
+  - now passes only sanitized auth, character-context, and summary fields
+- `tests/test_webapp.py`
+  - added regressions for `Cache-Control: no-store` on `/config` and
+    `/character`
+  - added config redaction and sanitized character-context checks
+  - added direct tests for `describe_request_access()` with proxy-shaped inputs
+- `.github/workflows/ci.yml`
+  - removed unused `pyflakes` installation so the workflow matches the real
+    maintained quality path
+- `README.md`, `PROJECT_STATE.md`, `TASK_QUEUE.md`, `ARCHITECTURE.md`,
+  `docs/module-maps/webapp.md`
+  - aligned docs with the stricter private-deploy semantics and the sensitive
+    page minimization now in code
 
 ## Tests And Verification
 
-- no additional tests were run in this documentation-only session
-- the wording was aligned against the current code, existing queue/state files,
-  and the already verified route-display / web-access behavior from the prior
-  implementation session
+- `python -m pytest -q tests/test_webapp.py`
+  - **21 passed**
+- `python -m pytest -q tests/test_route_search.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_webapp.py tests/test_shipping.py tests/test_integration.py`
+  - **164 passed**
+- `python scripts/quality_check.py`
+  - **187 passed**
 
 ## Remaining Limits
 
-- the current web protection remains intentionally small and private-deploy
-  oriented; it is not a public or multi-user auth/session system
-- direct localhost is the intended unprotected mode; stronger semantics for
-  reverse-proxy / tunnel / broader remote deployment remain follow-up work
-- sensitive browser pages are called out and protected by the same seam, but
-  stricter minimization of config/context passed into those pages remains a
-  separate follow-up
-- `scripts/quality_check.py` and CI still intentionally target the maintained
-  execution-plan / web regression surface rather than the full historical suite
+- the web seam remains intentionally small and private-deploy oriented; it is
+  still not a public or multi-user auth/session system
+- the supported passwordless mode is direct localhost use by one operator;
+  proxy/tunnel/private remote use is intentionally password-required
+- a fully opaque local proxy that strips all proxy hints before forwarding is
+  not distinguishable from a direct localhost client at the HTTP app layer, so
+  deployment guidance stays simple: treat any proxy/tunnel setup as
+  password-required
+- `scripts/quality_check.py` and CI still intentionally cover the maintained
+  regression surface rather than the entire historical suite
 
 ## Next Recommended Task
 
-Implement the queued follow-up for private web deploy semantics: make direct
-localhost the only clearly supported unprotected mode, minimize sensitive page
-context further, and add regressions for `Cache-Control`, redaction, and
-request classification.
+If further hardening is needed later, decide explicitly whether the project
+wants a trusted reverse-proxy model or to keep the simpler rule that any
+proxy/tunnel deployment must run behind a password.
 
 ## Files Touched
 
+- `.github/workflows/ci.yml`
+- `webapp/app.py`
+- `webapp/security.py`
+- `webapp/services/character_service.py`
+- `webapp/services/config_service.py`
+- `tests/test_webapp.py`
 - `README.md`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
+- `ARCHITECTURE.md`
 - `SESSION_HANDOFF.md`
 - `docs/module-maps/webapp.md`
-- `docs/module-maps/execution_plan.md`

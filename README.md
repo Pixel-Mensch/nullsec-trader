@@ -166,9 +166,10 @@ Aktuelle Seiten:
 
 Kleine Zugriffssicherung fuer private Deploys:
 
-- ohne gesetztes Web-Passwort ist direkter localhost-Betrieb der vorgesehene
-  Modus; als remote erkannte Requests werden explizit geblockt, statt die App
-  still offen zu lassen
+- ohne gesetztes Web-Passwort ist ausschliesslich direkter localhost-Betrieb
+  der vorgesehene Modus; Proxy-, Tunnel- oder sonstige als nicht-direkt
+  erkennbare Requests werden explizit geblockt, statt die App still offen zu
+  lassen
 - fuer privaten non-local Single-User-Betrieb kann ein kleines Basic-Auth-Gate
   gesetzt werden:
   `NULLSEC_WEBAPP_PASSWORD=...` oder lokal `webapp.access_password`
@@ -176,6 +177,10 @@ Kleine Zugriffssicherung fuer private Deploys:
   `port` koennen optional lokal oder per Env ueberschrieben werden
 - `Character` und `Config` gelten browserseitig als sensibel und werden mit
   `Cache-Control: no-store` ausgeliefert
+- `Character` und `Config` bekommen in den Templates nur noch explizit
+  benoetigte, redigierte View-Model-Felder; rohe Secrets wie
+  `esi.client_secret` oder `webapp.access_password` werden dort nicht
+  durchgereicht
 
 Wichtige Grenzen:
 
@@ -185,7 +190,8 @@ Wichtige Grenzen:
 - keine Session-, Rollen- oder CSRF-Haertung; oeffentliche Multi-User-Haertung
   bleibt bewusst ausserhalb dieses Blocks
 - Reverse Proxy / Tunnel / oeffentliche Exponierung ohne Passwort sind
-  absichtlich kein unterstuetzter Betriebsmodus dieses Blocks
+  absichtlich kein unterstuetzter Betriebsmodus dieses Blocks; wenn solcher
+  Betrieb gewuenscht ist, muss Schutz aktiv sein
 - keine Shell-Wrapper im Browser; die Web-Schicht nutzt kleine Services und
   fuer Vollruns einen in-process Runtime-Bridge auf `runtime_runner.run_cli()`
 - CLI, Route-Ranking, Candidate-Scoring, `no_trade`, Reconciliation und
@@ -693,6 +699,10 @@ python .\tests\run_all.py
 python .\test_nullsectrader.py
 python .\scripts\quality_check.py
 ```
+
+Der minimale gepflegte CI-Pfad laeuft ueber `python .\scripts\quality_check.py`
+und spiegelt damit denselben Compile- und Pytest-Subset wie der Workflow unter
+`.github/workflows/ci.yml`.
 
 ### Was die Tests absichern
 

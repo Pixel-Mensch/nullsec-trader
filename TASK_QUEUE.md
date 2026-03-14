@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 28 docs alignment for private web deploy scope)
+Last updated: 2026-03-14 (session 29 reviewer follow-up for private web deploy semantics)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -21,11 +21,13 @@ full backlog scrape.
   `scripts/quality_check.py`, `.github/workflows/ci.yml`
 - What was done:
   - added a small web access seam: optional Basic Auth when a web password is
-    configured, otherwise explicit blocking of non-local requests
+    configured; without a password only direct localhost request shape is
+    supported, while proxy-shaped requests are blocked
   - scoped that seam to private single-user use instead of inventing a public
     multi-user web architecture
   - sensitive browser pages (`/character`, `/config`) now run behind the same
-    seam and emit `Cache-Control: no-store`
+    seam, emit `Cache-Control: no-store`, and receive only redacted/sanitized
+    template view models instead of broader raw config/context payloads
   - restored `1st` normalization so corridor routes such as `O4T -> 1ST` and
     Jita-to-1ST connectors remain visible
   - route-profile results now carry presentation-only corridor metadata;
@@ -33,13 +35,14 @@ full backlog scrape.
     while keeping longer profitable spans and Jita connectors visible without
     touching route-search scoring
   - synchronized `scripts/quality_check.py` with the pytest-based quality path
-    used by this block and added a minimal CI workflow
+    used by this block, removed CI drift around unused `pyflakes`, and added a
+    minimal CI workflow
   - focused regression:
     `pytest -q tests/test_route_search.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_webapp.py tests/test_shipping.py tests/test_integration.py`
-    -> **155 passed**
+    -> **164 passed**
   - quality path:
     `python scripts/quality_check.py`
-    -> **178 passed**
+    -> **187 passed**
 
 ### Task 0: Restore execution-plan consistency for route profiles
 
@@ -183,16 +186,24 @@ full backlog scrape.
 ### Task 0i: Tighten private web deploy semantics and sensitive-page minimization
 
 - Priority: P1
-- Status: ready
+- Status: DONE
+- Completed: 2026-03-14
 - Relevant files: `webapp/security.py`, `webapp/app.py`,
   `webapp/services/config_service.py`, `webapp/services/character_service.py`,
-  `tests/test_webapp.py`, `README.md`
-- Expected result:
-  - direct localhost without password is the only unprotected supported mode
-  - private non-local single-user deploys remain password-gated
-  - sensitive browser pages stop carrying broader config/context than needed
-  - web regressions prove `Cache-Control: no-store`, config redaction, and the
-    intended request-classification behavior
+  `tests/test_webapp.py`, `.github/workflows/ci.yml`,
+  `scripts/quality_check.py`
+- What was done:
+  - made direct localhost without password the only supported unprotected mode
+    in the app seam; proxy-shaped or non-local requests are blocked until a
+    password is configured
+  - trimmed `/config` and `/character` template payloads down to explicit
+    redacted/sanitized view-model fields so secrets do not land in template
+    context
+  - added regressions for `Cache-Control: no-store`, config redaction,
+    sanitized character payloads, and request classification around proxy
+    headers / loopback host shapes
+  - removed CI drift by aligning the workflow with the maintained
+    `scripts/quality_check.py` path instead of installing unused `pyflakes`
 
 ### Task 0f: Add a safe clean-start command for runtime artifacts
 

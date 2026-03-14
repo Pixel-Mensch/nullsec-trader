@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import json
 
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
+from webapp import security as web_security
 from webapp.app import create_app
 from webapp.routes import pages
-from webapp.services import runtime_bridge
+from webapp.services import character_service as character_service_module, config_service as config_service_module, runtime_bridge
 
 
 def _dashboard_data() -> dict:
@@ -270,6 +273,28 @@ def _config_page() -> dict:
     }
 
 
+def _access_request(*, path: str = "/", headers: dict[str, str] | None = None, client: tuple[str, int] = ("127.0.0.1", 1234)) -> Request:
+    raw_headers = [
+        (str(name).lower().encode("latin-1"), str(value).encode("latin-1"))
+        for name, value in dict(headers or {"host": "127.0.0.1:8000"}).items()
+    ]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode("latin-1"),
+        "query_string": b"",
+        "headers": raw_headers,
+        "client": client,
+        "server": ("127.0.0.1", 8000),
+        "root_path": "",
+    }
+    return Request(scope)
+
+
 def _client(monkeypatch) -> TestClient:
     monkeypatch.setattr(pages.dashboard_service, "get_dashboard_data", lambda: _dashboard_data())
     monkeypatch.setattr(pages.analysis_service, "get_analysis_form_data", lambda: _analysis_form())
@@ -358,6 +383,14 @@ def test_config_page_renders(monkeypatch) -> None:
     assert "config.json" in response.text
 
 
+def test_sensitive_pages_emit_no_store(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    config_response = client.get("/config")
+    character_response = client.get("/character")
+    assert config_response.headers.get("Cache-Control") == "no-store"
+    assert character_response.headers.get("Cache-Control") == "no-store"
+
+
 def test_static_assets_are_served(monkeypatch) -> None:
     client = _client(monkeypatch)
     response = client.get("/static/css/app.css")
@@ -393,6 +426,13 @@ def test_remote_access_without_password_is_blocked(monkeypatch) -> None:
     assert "NULLSEC_WEBAPP_PASSWORD" in response.text
 
 
+def test_loopback_proxy_shape_without_password_is_blocked(monkeypatch) -> None:
+    client = _client(monkeypatch)
+    response = client.get("/config", headers={"Host": "127.0.0.1:8000", "X-Forwarded-For": "203.0.113.10"})
+    assert response.status_code == 403
+    assert "direct localhost requests are allowed" in response.text
+
+
 def test_password_protection_requires_basic_auth(monkeypatch) -> None:
     monkeypatch.setenv("NULLSEC_WEBAPP_PASSWORD", "secret-pass")
     client = _client(monkeypatch)
@@ -408,3 +448,135 @@ def test_password_protection_allows_authorized_request(monkeypatch) -> None:
     response = client.get("/character", headers={"Authorization": f"Basic {auth}"})
     assert response.status_code == 200
     assert "Character / Auth" in response.text
+
+
+def test_describe_request_access_marks_direct_loopback_request_as_local() -> None:
+    request = _access_request(headers={"Host": "127.0.0.1:8000"}, client=("127.0.0.1", 12000))
+    context = web_security.describe_request_access(request, {"password_configured": False, "username": "trader", "sensitive_prefixes": ["/character", "/config"]})
+    assert context["request_is_local"] is True
+    assert context["remote_access_blocked"] is False
+    assert context["proxy_headers_present"] is False
+
+
+def test_describe_request_access_blocks_proxy_headers_without_password() -> None:
+    request = _access_request(
+        headers={"Host": "127.0.0.1:8000", "X-Forwarded-For": "203.0.113.10", "X-Forwarded-Host": "remote.example"},
+        client=("127.0.0.1", 12000),
+    )
+    context = web_security.describe_request_access(request, {"password_configured": False, "username": "trader", "sensitive_prefixes": ["/character", "/config"]})
+    assert context["request_is_local"] is False
+    assert context["remote_access_blocked"] is True
+    assert context["proxy_headers_present"] is True
+    assert context["forwarded_host"] == "203.0.113.10"
+    assert context["forwarded_request_host"] == "remote.example"
+
+
+def test_describe_request_access_marks_loopback_proxy_host_as_non_local() -> None:
+    request = _access_request(headers={"Host": "remote.example"}, client=("127.0.0.1", 12000))
+    context = web_security.describe_request_access(request, {"password_configured": False, "username": "trader", "sensitive_prefixes": ["/character", "/config"]})
+    assert context["request_is_local"] is False
+    assert context["remote_access_blocked"] is True
+
+
+def test_describe_request_access_allows_proxy_shape_only_when_password_is_configured() -> None:
+    request = _access_request(
+        headers={"Host": "127.0.0.1:8000", "X-Forwarded-For": "203.0.113.10"},
+        client=("127.0.0.1", 12000),
+    )
+    context = web_security.describe_request_access(request, {"password_configured": True, "username": "trader", "sensitive_prefixes": ["/character", "/config"]})
+    assert context["request_is_local"] is False
+    assert context["remote_access_blocked"] is False
+    assert context["proxy_headers_present"] is True
+
+
+def test_config_service_redacts_web_password_and_omits_raw_config(monkeypatch) -> None:
+    cfg = {
+        "defaults": {"budget_isk": 500000000},
+        "replay": {"enabled": False},
+        "route_search": {"enabled": True},
+        "route_profiles": {"enabled": True},
+        "character_context": {"enabled": True},
+        "confidence_calibration": {"enabled": True},
+        "personal_history_policy": {"enabled": True},
+        "webapp": {"access_password": "web-secret", "access_username": "pilot"},
+        "esi": {"client_id": "visible-id", "client_secret": "esi-secret"},
+    }
+    monkeypatch.setattr(config_service_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(config_service_module, "validate_config", lambda value: {"errors": [], "warnings": []})
+    page = config_service_module.get_config_page()
+    payload = json.dumps(page, ensure_ascii=False)
+    assert "config" not in page
+    assert "sections" not in page
+    assert "web-secret" not in payload
+    assert "esi-secret" not in payload
+    assert "***" in page["sections_json"]["webapp"]
+
+
+def test_character_service_omits_raw_config_and_sanitizes_context(monkeypatch) -> None:
+    class _FakeSSO:
+        def describe_token_status(self) -> dict:
+            return {
+                "has_token": True,
+                "valid": True,
+                "scopes": ["scope.one"],
+                "token_path": "cache/token.json",
+                "character_name": "Capsuleer",
+                "character_id": 42,
+            }
+
+    context = {
+        "character_name": "Capsuleer",
+        "source": "cache",
+        "warnings": ["character context disabled"],
+        "wallet_snapshot": {"secret": "wallet-secret"},
+    }
+    summary = {"character_name": "Capsuleer", "source": "cache", "wallet_balance": 123.0}
+    cfg = {"defaults": {"budget_isk": 500000000}, "esi": {"client_id": "id", "client_secret": "esi-secret"}, "character_context": {}}
+    monkeypatch.setattr(character_service_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(character_service_module, "_build_sso", lambda value: _FakeSSO())
+    monkeypatch.setattr(character_service_module, "resolve_character_context", lambda *args, **kwargs: context)
+    monkeypatch.setattr(character_service_module, "build_character_context_summary", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(character_service_module, "character_status_lines", lambda *args, **kwargs: ["Character context: generic defaults"])
+    monkeypatch.setattr(character_service_module, "requested_character_scopes", lambda value: ["scope.one"])
+    page = character_service_module.get_character_page()
+    payload = json.dumps(page, ensure_ascii=False)
+    assert "config" not in page
+    assert page["character_context"] == {"character_name": "Capsuleer", "source": "cache", "warnings": ["character context disabled"]}
+    assert page["character_summary"] == {"character_name": "Capsuleer", "source": "cache"}
+    assert "esi-secret" not in payload
+    assert "wallet-secret" not in payload
+
+
+def test_character_sync_action_sanitizes_context(monkeypatch) -> None:
+    class _FakeSSO:
+        def describe_token_status(self) -> dict:
+            return {
+                "has_token": False,
+                "valid": False,
+                "scopes": [],
+                "token_path": "cache/token.json",
+                "character_name": "",
+                "character_id": 0,
+            }
+
+    context = {
+        "character_name": "Capsuleer",
+        "source": "live",
+        "warnings": ["sync warning"],
+        "wallet_snapshot": {"secret": "wallet-secret"},
+    }
+    summary = {"character_name": "Capsuleer", "source": "live", "wallet_balance": 123.0}
+    cfg = {"defaults": {"budget_isk": 500000000}, "esi": {"client_id": "id", "client_secret": "esi-secret"}, "character_context": {}}
+    monkeypatch.setattr(character_service_module, "load_config", lambda: cfg)
+    monkeypatch.setattr(character_service_module, "_build_sso", lambda value: _FakeSSO())
+    monkeypatch.setattr(character_service_module, "resolve_character_context", lambda *args, **kwargs: context)
+    monkeypatch.setattr(character_service_module, "build_character_context_summary", lambda *args, **kwargs: summary)
+    monkeypatch.setattr(character_service_module, "character_status_lines", lambda *args, **kwargs: ["Character status"])
+    monkeypatch.setattr(character_service_module, "requested_character_scopes", lambda value: ["scope.one"])
+    monkeypatch.setattr(character_service_module, "sync_character_profile", lambda *args, **kwargs: context)
+    page = character_service_module.run_character_action("sync")
+    payload = json.dumps(page, ensure_ascii=False)
+    assert page["character_context"] == {"character_name": "Capsuleer", "source": "live", "warnings": ["sync warning"]}
+    assert page["character_summary"] == {"character_name": "Capsuleer", "source": "live"}
+    assert "wallet-secret" not in payload
+    assert "esi-secret" not in payload

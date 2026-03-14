@@ -15,7 +15,10 @@ journal, character, and config workflows without replacing the CLI.
 - keep process lifetime simple; the local server no longer uses browser
   heartbeat or idle auto-shutdown logic
 - enforce a small private-deploy access seam: optional Basic Auth when a web
-  password exists, otherwise explicit blocking of non-local requests
+  password exists, otherwise allow only direct localhost request shape and
+  block proxy-shaped or non-local requests
+- keep sensitive template payloads narrow: config and character pages should
+  receive redacted/sanitized view-models, not raw secret-bearing config blobs
 - keep public or multi-user web hardening explicitly out of scope for this seam
 
 ## Inputs
@@ -90,9 +93,12 @@ journal, character, and config workflows without replacing the CLI.
 - runtime bridge currently calls `run_cli()` in-process; stdout/artifact parsing
   must stay aligned with CLI output
 - character and reconcile actions must remain robust without live ESI
-- templates can drift from real service payloads if not covered by tests
+- templates can drift from real service payloads if not covered by tests,
+  especially on sensitive pages where only redacted/sanitized fields should
+  reach Jinja
 - request locality is intentionally a small seam; reverse-proxy / public
-  deployment assumptions should not be inferred from this module
+  deployment assumptions should not be inferred from this module, and any
+  proxy/tunnel deployment should be treated as password-required
 
 ## Tests
 

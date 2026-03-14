@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (docs alignment for private web deploy scope)
+Last updated: 2026-03-14 (session 29 reviewer follow-up for private web deploy semantics)
 
 ## Snapshot
 
@@ -151,8 +151,16 @@ Not fully re-audited this session:
 - the local web UI now has a small private-deploy access seam: if a web
   password is configured it requires HTTP Basic Auth, otherwise non-local
   requests are blocked instead of exposing the app unguarded
+- without a web password, that seam now only treats direct localhost request
+  shape as the supported unprotected mode; proxy-shaped requests require
+  protection instead of sliding through as local
 - that web seam is intentionally aimed at private single-user operation; public
   multi-user hardening remains out of scope for this block
+- sensitive web pages now receive redacted or sanitized view models instead of
+  the broader raw config/context payloads previously passed into templates
+- web security regressions now cover `Cache-Control: no-store`, config
+  redaction, and proxy-shaped request classification; minimal CI uses the same
+  `scripts/quality_check.py` path as local quality runs
 - full analysis runs in the web UI currently use an in-process bridge to
   `runtime_runner.run_cli()` and read the existing artifact files instead of
   re-implementing trading logic
@@ -326,6 +334,8 @@ centered on:
 - a first local browser UI over the existing runtime and journal workflows
 - local browser hardening plus corridor-ordered route presentation near the
   web entry and execution-plan path
+- reviewer follow-up on private web deploy semantics, sensitive-page
+  minimization, and matching security regressions
 
 Files that indicate this focus:
 
@@ -363,12 +373,16 @@ Files that indicate this focus:
   messaging, but browser/UI surfaces were not re-audited in this session.
 - the new web protection seam is intentionally small and private-deploy
   oriented; it is not a full multi-user auth/session system
-- without a web password, the intended supported web mode is direct localhost
-  use by one operator; reverse-proxy / tunnel / public exposure semantics were
-  deliberately not expanded into a broader deployment model in this block
+- without a web password, the supported web mode is now direct localhost use by
+  one operator; proxy-/tunnel-shaped requests are blocked and non-local private
+  use requires a password
 - public multi-user web hardening, session/role controls, and stronger reverse-
   proxy trust handling remain explicit follow-up work rather than implied
   guarantees of the current seam
+- a fully opaque local proxy that strips all proxy hints before forwarding is
+  not distinguishable from a direct localhost client at the HTTP app layer; the
+  supported operator rule therefore stays simple: any proxy/tunnel deployment
+  should be treated as password-required
 - the corridor ordering is presentation-only and intentionally leaves route
   search formulas, ranking, and scoring untouched
 - replay calibration used the focused O4T/Jita fixture plus a narrow

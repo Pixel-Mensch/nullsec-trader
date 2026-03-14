@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14
+Last updated: 2026-03-14 (session 29 reviewer follow-up)
 
 ## Evidence And Limits
 
@@ -151,10 +151,14 @@ The web entry also owns a small private-deploy security seam:
 
 - if `NULLSEC_WEBAPP_PASSWORD` or `webapp.access_password` is configured, the
   whole browser surface requires HTTP Basic Auth
-- if no password is configured, remote/non-local requests are blocked instead
-  of exposing the app unguarded
+- if no password is configured, only direct localhost request shape is treated
+  as supported; proxy-shaped or non-local requests are blocked instead of
+  exposing the app unguarded
 - `/character` and `/config` are treated as sensitive pages and emit
   `Cache-Control: no-store`
+- `webapp/services/config_service.py` and
+  `webapp/services/character_service.py` now pass redacted/sanitized
+  view-models into templates instead of the broader raw config/context payloads
 
 The journal web path has two distinct data sources on purpose:
 
@@ -310,7 +314,8 @@ Known test and quality entry points:
 `tests/run_all.py` currently imports targeted test modules instead of scanning
 the repository dynamically. `scripts/quality_check.py` now compiles the full
 Python source set but runs the maintained pytest subset for the web /
-execution-plan / corridor-display surface.
+execution-plan / corridor-display surface; the minimal CI workflow uses that
+same script instead of a separate drifting command set.
 
 ## Current Hotspots
 

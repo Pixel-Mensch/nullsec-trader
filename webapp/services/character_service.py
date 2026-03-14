@@ -44,6 +44,35 @@ def _build_sso(cfg: dict) -> EveSSOAuth | None:
     )
 
 
+def _auth_status_view(status: dict | None) -> dict:
+    raw = dict(status or {})
+    return {
+        "has_token": bool(raw.get("has_token", False)),
+        "valid": bool(raw.get("valid", False)),
+        "scopes": [str(scope) for scope in list(raw.get("scopes", []) or []) if str(scope).strip()],
+        "token_path": str(raw.get("token_path", "") or ""),
+        "character_name": str(raw.get("character_name", "") or ""),
+        "character_id": int(raw.get("character_id", 0) or 0),
+    }
+
+
+def _character_context_view(context: dict | None) -> dict:
+    raw = dict(context or {})
+    return {
+        "character_name": str(raw.get("character_name", "") or ""),
+        "source": str(raw.get("source", "") or ""),
+        "warnings": [str(warning) for warning in list(raw.get("warnings", []) or []) if str(warning).strip()],
+    }
+
+
+def _character_summary_view(summary: dict | None) -> dict:
+    raw = dict(summary or {})
+    return {
+        "character_name": str(raw.get("character_name", "") or ""),
+        "source": str(raw.get("source", "") or ""),
+    }
+
+
 def get_character_page(*, action_message: str = "", action_error: str = "") -> dict:
     cfg = load_config()
     cfg_for_char = _cfg_with_enabled_character_context(cfg)
@@ -52,11 +81,10 @@ def get_character_page(*, action_message: str = "", action_error: str = "") -> d
     context = resolve_character_context(cfg_for_char, replay_enabled=False, allow_live=False)
     summary = build_character_context_summary(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0)))
     return {
-        "config": cfg,
-        "auth_status": auth_status,
+        "auth_status": _auth_status_view(auth_status),
         "required_scopes": requested_character_scopes(cfg_for_char),
-        "character_context": context,
-        "character_summary": summary,
+        "character_context": _character_context_view(context),
+        "character_summary": _character_summary_view(summary),
         "character_status_lines": character_status_lines(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0))),
         "action_message": str(action_message or "").strip(),
         "action_error": str(action_error or "").strip(),
@@ -117,8 +145,8 @@ def run_character_action(action: str) -> dict:
             summary = build_character_context_summary(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0)))
             return {
                 **get_character_page(action_message="Character sync abgeschlossen."),
-                "character_context": context,
-                "character_summary": summary,
+                "character_context": _character_context_view(context),
+                "character_summary": _character_summary_view(summary),
                 "character_status_lines": character_status_lines(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0))),
             }
         return get_character_page(action_message="Character status aktualisiert.")

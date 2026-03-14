@@ -14,10 +14,8 @@ def _redact_webapp_section(section: dict) -> dict:
     return out
 
 
-def get_config_page() -> dict:
-    cfg = load_config()
-    validation = validate_config(cfg)
-    sections = {
+def _config_sections(cfg: dict) -> dict:
+    return {
         "defaults": dict(cfg.get("defaults", {}) or {}),
         "replay": dict(cfg.get("replay", {}) or {}),
         "route_search": dict(cfg.get("route_search", {}) or {}),
@@ -27,9 +25,14 @@ def get_config_page() -> dict:
         "personal_history_policy": dict(cfg.get("personal_history_policy", {}) or {}),
         "webapp": _redact_webapp_section(dict(cfg.get("webapp", {}) or {})),
     }
+
+
+def get_config_page() -> dict:
+    cfg = load_config()
+    validation = validate_config(cfg)
+    sections = _config_sections(cfg)
     access_settings = resolve_access_settings(cfg)
     return {
-        "config": cfg,
         "config_valid": not bool(validation.get("errors", [])),
         "config_errors": list(validation.get("errors", []) or []),
         "config_warnings": list(validation.get("warnings", []) or []),
@@ -38,7 +41,6 @@ def get_config_page() -> dict:
             "journal_db_path": JOURNAL_DB_PATH,
             "character_profile_path": CHARACTER_PROFILE_PATH,
         },
-        "sections": sections,
         "sections_json": {name: json.dumps(value, indent=2, ensure_ascii=False) for name, value in sections.items()},
         "webapp_security": {
             "password_configured": bool(access_settings.get("password_configured", False)),

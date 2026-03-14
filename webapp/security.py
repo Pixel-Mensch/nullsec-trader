@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, Response
 
 _AUTH_REALM = "Nullsec Trader Tool"
 _LOCAL_HOST_TOKENS = {"", "localhost", "127.0.0.1", "::1", "testserver", "testclient"}
+_PROXY_HINT_HEADERS = ("forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "x-real-ip", "via")
 _SENSITIVE_PREFIXES = ("/character", "/config")
 
 
@@ -57,6 +58,10 @@ def _request_client_host(request: Request) -> str:
     return str(request.client.host or "").strip()
 
 
+def _proxy_headers_present(request: Request) -> bool:
+    return any(str(request.headers.get(name, "") or "").strip() for name in _PROXY_HINT_HEADERS)
+
+
 def resolve_access_settings(cfg: dict | None = None) -> dict:
     raw_cfg = {}
     if isinstance(cfg, dict) and isinstance(cfg.get("webapp", {}), dict):
@@ -77,18 +82,21 @@ def describe_request_access(request: Request, settings: dict | None = None) -> d
     settings = dict(settings or {})
     client_host = _request_client_host(request)
     forwarded_host = _forwarded_client_host(request)
-    host_header = _host_token(str(request.headers.get("x-forwarded-host", "") or request.headers.get("host", "") or ""))
-    local_signals = [_is_local_host(item) for item in (client_host, forwarded_host, host_header) if str(item or "").strip()]
-    request_is_local = all(local_signals) if local_signals else True
+    forwarded_request_host = _host_token(str(request.headers.get("x-forwarded-host", "") or ""))
+    host_header = _host_token(str(request.headers.get("host", "") or ""))
+    proxy_headers = _proxy_headers_present(request)
+    direct_local_request = bool(client_host and host_header and _is_local_host(client_host) and _is_local_host(host_header) and not proxy_headers)
     sensitive_path = any(str(request.url.path or "").startswith(prefix) for prefix in list(settings.get("sensitive_prefixes", []) or []))
     return {
         "password_configured": bool(settings.get("password_configured", False)),
         "username": str(settings.get("username", "trader") or "trader"),
-        "request_is_local": bool(request_is_local),
-        "remote_access_blocked": bool(not request_is_local and not settings.get("password_configured", False)),
+        "request_is_local": bool(direct_local_request),
+        "remote_access_blocked": bool(not direct_local_request and not settings.get("password_configured", False)),
         "sensitive_path": bool(sensitive_path),
+        "proxy_headers_present": bool(proxy_headers),
         "client_host": client_host,
         "forwarded_host": forwarded_host,
+        "forwarded_request_host": forwarded_request_host,
         "request_host": host_header,
     }
 
@@ -119,10 +127,11 @@ def _remote_blocked_response(request: Request) -> HTMLResponse:
         "<title>Remote Access Blocked</title></head><body>"
         "<h1>Remote access blocked</h1>"
         "<p>This web app is running without a configured access password.</p>"
-        "<p>Non-local requests to "
+        "<p>Without a password, only direct localhost requests are allowed.</p>"
+        "<p>Proxy, tunnel, and other non-direct requests to "
         f"<code>{path}</code> are blocked until <code>NULLSEC_WEBAPP_PASSWORD</code> "
         "or <code>webapp.access_password</code> is configured.</p>"
-        "<p>Local localhost access remains available.</p>"
+        "<p>Direct localhost access remains available.</p>"
         "</body></html>"
     )
     return HTMLResponse(body, status_code=403)

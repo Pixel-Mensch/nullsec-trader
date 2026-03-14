@@ -52,7 +52,7 @@ def run_dev_server() -> None:
         else:
             print(
                 "[webapp] WARN: non-local bind without web password. "
-                "Remote requests will be blocked until NULLSEC_WEBAPP_PASSWORD or webapp.access_password is set."
+                "Only direct localhost requests will work until NULLSEC_WEBAPP_PASSWORD or webapp.access_password is set."
             )
     uvicorn.run("webapp.app:create_app", factory=True, host=host, port=port, reload=False)
 
