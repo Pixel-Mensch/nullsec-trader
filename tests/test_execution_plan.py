@@ -653,6 +653,18 @@ class TestWriteExecutionPlanProfiles:
         assert "Internal Route Floor" not in content
         assert "Internal Route Note" not in content
 
+    def test_pruned_route_diagnosis_is_rendered(self):
+        result = _make_route_result(picks=[])
+        result["route_prune_reason"] = "candidates_failed_confidence"
+        result["route_failure_hints"] = [
+            "Candidates existed, but the active profile removed them on confidence.",
+            "Orderbook depth was too thin on source or destination.",
+        ]
+        result["route_failure_summary"] = " | ".join(result["route_failure_hints"])
+        content = self._write_and_read([result])
+        assert "diagnosis: Candidates existed, but the active profile removed them on confidence." in content
+        assert "Orderbook depth was too thin on source or destination." in content
+
     def test_price_sensitive_pick_shows_profit_basis_block(self):
         pick = _planned_pick(
             target_price_basis="best_ask_undercut",

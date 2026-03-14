@@ -989,6 +989,7 @@ def _prune_reason_bucket(reason: str) -> str:
         "planned_queue_ahead_too_heavy",
         "planned_demand_cap_zero",
         "planned_demand_cap_too_low",
+        "planned_price_unreliable_orderbook",
         "planned_structure_micro_liquidity",
         "planned_history_order_count",
         "no_history_volume",
@@ -1010,13 +1011,31 @@ def _derive_route_prune_reason(result: dict) -> str:
     if current_reason and current_reason != "no_picks":
         return current_reason
 
-    reason_counts = result.get("why_out_summary", {})
+    reason_counts = _route_reason_counts(result.get("why_out_summary", {}))
+    passed_all = int(result.get("passed_all_filters", 0) or 0)
+    profile_bucket_counts = _route_bucket_counts(reason_counts, profile_only=True)
+    if passed_all > 0 and profile_bucket_counts:
+        return _dominant_prune_bucket(profile_bucket_counts)
+
+    bucket_counts = _route_bucket_counts(reason_counts)
+    if bucket_counts:
+        return _dominant_prune_bucket(bucket_counts)
+
+    total_candidates = int(result.get("total_candidates", 0) or 0)
+    if passed_all > 0:
+        return "no_picks_after_portfolio_constraints"
+    if total_candidates <= 0:
+        return "no_candidates"
+    return current_reason or "no_picks"
+
+
+def _route_reason_counts(reason_counts: object) -> dict[str, int]:
     if not isinstance(reason_counts, dict):
-        reason_counts = {}
-    bucket_counts: dict[str, int] = {}
+        return {}
+    out: dict[str, int] = {}
     for reason, count in reason_counts.items():
-        bucket = _prune_reason_bucket(reason)
-        if not bucket:
+        key = str(reason or "").strip().lower()
+        if not key:
             continue
         try:
             n = int(count or 0)
@@ -1024,17 +1043,122 @@ def _derive_route_prune_reason(result: dict) -> str:
             n = 0
         if n <= 0:
             continue
-        bucket_counts[bucket] = int(bucket_counts.get(bucket, 0) or 0) + n
-    if bucket_counts:
-        return max(bucket_counts.items(), key=lambda item: (item[1], item[0]))[0]
+        out[key] = int(out.get(key, 0) or 0) + n
+    return out
 
+
+def _is_profile_rejection_reason(reason: str) -> bool:
+    key = str(reason or "").strip().lower()
+    return bool(key) and (key.startswith("profile_") or key == "planned_low_confidence")
+
+
+def _route_bucket_counts(reason_counts: object, *, profile_only: bool = False) -> dict[str, int]:
+    bucket_counts: dict[str, int] = {}
+    for reason, count in _route_reason_counts(reason_counts).items():
+        if profile_only and not _is_profile_rejection_reason(reason):
+            continue
+        bucket = _prune_reason_bucket(reason)
+        if not bucket:
+            continue
+        bucket_counts[bucket] = int(bucket_counts.get(bucket, 0) or 0) + int(count or 0)
+    return bucket_counts
+
+
+def _dominant_prune_bucket(bucket_counts: dict[str, int]) -> str:
+    if not bucket_counts:
+        return ""
+    return max(bucket_counts.items(), key=lambda item: (item[1], item[0]))[0]
+
+
+def _derive_route_failure_hints(result: dict) -> list[str]:
+    if bool(result.get("route_actionable", False)) and not bool(result.get("route_blocked_due_to_transport", False)):
+        return []
+
+    hints: list[str] = []
+    route_prune_reason = str(result.get("route_prune_reason", "") or "").strip().lower()
+    reason_counts = _route_reason_counts(result.get("why_out_summary", {}))
     total_candidates = int(result.get("total_candidates", 0) or 0)
     passed_all = int(result.get("passed_all_filters", 0) or 0)
-    if passed_all > 0:
-        return "no_picks_after_portfolio_constraints"
-    if total_candidates <= 0:
-        return "no_candidates"
-    return current_reason or "no_picks"
+    profile_bucket = _dominant_prune_bucket(_route_bucket_counts(reason_counts, profile_only=True))
+
+    def _add_hint(text: str) -> None:
+        message = str(text or "").strip()
+        if message and message not in hints:
+            hints.append(message)
+
+    if bool(result.get("route_blocked_due_to_transport", False)):
+        _add_hint("Transport blocked: no usable cost model.")
+    if route_prune_reason == "internal_route_profit_below_operational_floor":
+        _add_hint("Internal route profit stayed below the operational floor.")
+
+    if passed_all > 0 and profile_bucket:
+        profile_messages = {
+            "candidates_below_profit_floor": "Candidates existed, but the active profile removed them on profit floors.",
+            "candidates_failed_budget_rule": "Candidates existed, but the active profile removed them on budget concentration.",
+            "candidates_failed_confidence": "Candidates existed, but the active profile removed them on confidence.",
+            "candidates_failed_fill_probability": "Candidates existed, but the active profile removed them on liquidity or market quality.",
+            "candidates_failed_sell_time": "Candidates existed, but the active profile removed them on sell-time limits.",
+        }
+        _add_hint(profile_messages.get(profile_bucket, "Candidates existed, but the active profile removed them."))
+
+    category_scores = [
+        (
+            int(
+                reason_counts.get("non_positive_profit", 0)
+                + reason_counts.get("non_positive_profit_90d", 0)
+                + reason_counts.get("expected_profit_too_low", 0)
+                + reason_counts.get("expected_profit_too_low_after_shipping", 0)
+                + reason_counts.get("min_profit_pct", 0)
+                + reason_counts.get("min_profit_pct_after_shipping", 0)
+                + reason_counts.get("profit_threshold", 0)
+            ),
+            "Most candidates stayed unprofitable after fees or logistics.",
+        ),
+        (
+            int(
+                reason_counts.get("min_depth_units", 0)
+                + reason_counts.get("orderbook_window_units_too_low", 0)
+                + reason_counts.get("dest_buy_depth_units", 0)
+                + reason_counts.get("fill_probability", 0)
+            ),
+            "Orderbook depth was too thin on source or destination.",
+        ),
+        (
+            int(
+                reason_counts.get("planned_price_unreliable_orderbook", 0)
+                + reason_counts.get("planned_queue_ahead_too_heavy", 0)
+                + reason_counts.get("planned_demand_cap_zero", 0)
+                + reason_counts.get("planned_demand_cap_too_low", 0)
+                + reason_counts.get("planned_structure_micro_liquidity", 0)
+                + reason_counts.get("planned_history_order_count", 0)
+                + reason_counts.get("no_history_volume", 0)
+                + reason_counts.get("strict_no_fallback_volume", 0)
+            ),
+            "Planned-sell pricing looked too unreliable on the destination book.",
+        ),
+        (
+            int(reason_counts.get("orderbook_min_source_sell_price", 0)),
+            "Source sell orders did not support a reliable entry price.",
+        ),
+        (
+            int(reason_counts.get("invalid_volume", 0)),
+            "Some candidates had invalid volume data.",
+        ),
+    ]
+    for score, text in sorted(category_scores, key=lambda item: (-item[0], item[1])):
+        if score > 0:
+            _add_hint(text)
+        if len(hints) >= 3:
+            return hints[:3]
+
+    if not hints:
+        if total_candidates <= 0:
+            _add_hint("No candidates reached the route search window.")
+        elif passed_all > 0:
+            _add_hint("Candidates survived search, but portfolio selection kept no valid route.")
+        else:
+            _add_hint("Candidates were found, but none survived the route filters.")
+    return hints[:3]
 
 
 def _refresh_route_result_from_current_picks(result: dict) -> dict:
@@ -1084,6 +1208,8 @@ def _refresh_route_result_from_current_picks(result: dict) -> dict:
         else ""
     )
     result["route_prune_reason"] = _derive_route_prune_reason(result)
+    result["route_failure_hints"] = _derive_route_failure_hints(result)
+    result["route_failure_summary"] = " | ".join(result["route_failure_hints"])
 
     csv_path = str(result.get("csv_path", "") or "").strip()
     if csv_path:

@@ -1,120 +1,134 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 33 web active character seam)
+Date: 2026-03-14 (session 34 web active profile + internal route diagnosis)
 Branch: `dev`
 
 ## Completed This Session
 
-Implemented a small single-user active-character seam for the local web UI.
-The browser can now switch the active character at any time, and that switch
-really changes the token/profile basis used by later analysis and journal /
-reconcile views. The journal page also now surfaces active-character sell-order
-context, and the `trade_plan_*.json` manifest no longer drops route/transport
-confidence to `0.0` when the route record itself omitted those fields.
+Implemented a small single-user active-profile seam for the local web UI and
+tightened the explanation path for empty internal nullsec routes.
+
+The browser can now switch the active built-in risk profile at any time from
+the header. New browser analysis runs default to that selected profile through
+the existing CLI/runtime path, so the change is not cosmetic. The internal
+route output path now also distinguishes profile-side removals from broader
+candidate scarcity more clearly and carries a short diagnosis string into text
+artifacts and browser result cards.
 
 ## Root Cause
 
-- the web UI previously read only the one current active character/token state
-  from the existing runtime paths, so there was no safe browser seam to pivot
-  analysis and journal views between locally known characters
-- runtime analysis, character status, and journal/reconcile already depended on
-  the same active token/profile files, so the smallest correct solution was to
-  switch those files deliberately instead of adding a parallel browser-only
-  character layer
-- the confidence mismatch came from `trade_plan_*.json` serializing raw route
-  fields directly even when text-plan / leaderboard confidence was derived
-  later from `route_search.summarize_route_for_ranking()`
+- the web UI already exposed available built-in profiles in the analysis form,
+  but it had no persistent active-profile seam; each run only used the form
+  field or config fallback
+- real replay artifacts showed that many empty internal nullsec routes are not
+  failing in transport wiring: `internal_self_haul` is already recognized
+  correctly, but candidate generation often ends on weak books,
+  non-positive-profit paths, or unreliable planned-sell orderbooks
+- a smaller second class of internal routes did produce at least one candidate,
+  but those survivors were later removed by the active profile on confidence or
+  quality while the coarse final prune label still looked like a profit-floor
+  failure
 
 ## What Changed
 
-- `webapp/services/active_character_service.py`
-  - new small single-user registry of locally saved characters under
-    `cache/character_context/`
-  - captures currently active characters into per-character saved slots
-  - activates a chosen character by copying its saved token/profile into the
-    existing active runtime paths
+- `webapp/services/active_profile_service.py`
+  - new tiny single-user web state for the active built-in risk profile under
+    `cache/web_active_profile.json`
+  - validates selections against `risk_profiles.BUILTIN_PROFILES`
 - `webapp/routes/pages.py`
-  - injects global active-character switch state into page templates
-  - adds `POST /character/activate` with safe redirect-back behavior
-  - normalizes switch return targets so switching from `/analysis/run` returns
-    to `/analysis` instead of a POST-only endpoint
-- `webapp/services/character_service.py`
-  - captures characters after login/sync and exposes saved local characters to
-    the character page
-- `webapp/services/journal_service.py`
-  - adds active-character sell-order summary from the cached character profile
-  - matches those sell-order types against local journal entries by
-    `item_type_id` and optional `character_id`
+  - injects global active-profile switch state into templates
+  - adds `POST /profile/activate` with redirect-back behavior parallel to the
+    character switcher
+- `webapp/services/analysis_service.py`
+  - analysis form now knows the active profile and preselects it
+  - browser runs now fall back to the active profile when the form does not
+    explicitly override it
 - `webapp/templates/base.html`
-  - adds the global `Active character` switcher in the header
+  - adds the global `Active profile` switcher in the header
 - `webapp/templates/analysis.html`
-  - states that new analyses use the active local character slot
-- `webapp/templates/journal.html`
-  - states that journal/reconcile use the active slot and shows active sell
-    orders for that character
-- `webapp/templates/character.html`
-  - lists locally saved characters and lets the operator activate one directly
+  - states which profile is currently active and makes the one-run override in
+    the analysis form explicit
+- `webapp/templates/results.html`
+  - surfaces the short route diagnosis on no-trade route cards
 - `webapp/static/css/app.css`
-  - styles the new switcher and compact sell-order / saved-character blocks
+  - styles the stacked character/profile switchers
+- `runtime_runner.py`
+  - final prune-reason derivation now prefers post-search profile buckets when
+    candidates did pass search and were then removed by profile rules
+  - adds short route-failure hints for transport block, internal operational
+    floor, profile-side removals, thin books, unreliable planned pricing, and
+    broad non-positive-profit candidate pools
+- `execution_plan.py`
+  - renders concise `diagnosis` / `route_diagnosis` lines for pruned routes and
+    near misses
 - `journal_models.py`
-  - uses derived route-summary confidence as a manifest fallback when raw route
-    confidence fields are absent or zero
-- `tests/test_active_character_service.py`
-  - verifies that character activation swaps the real active token/profile
-    files and clears stale profile state when needed
+  - carries route-failure hints/summary into `trade_plan_*.json` so browser
+    surfaces stay aligned with runtime text output
+- `tests/test_active_profile_service.py`
+  - covers persistence, config fallback, rejection of invalid profiles, and
+    builtin-profile list parity
 - `tests/test_webapp.py`
-  - covers the global switcher, redirect-back behavior, analysis basis note,
-    journal sell-order block, and character saved-slot view
-- `tests/test_journal.py`
-  - covers the confidence fallback in `trade_plan_*.json`
+  - covers the global profile switcher, redirect-back behavior, active-profile
+    rendering, and browser-run fallback to the active profile
+- `tests/test_runtime_runner.py`
+  - covers profile-aware prune-reason preference and short route-diagnosis hints
+- `tests/test_execution_plan.py`
+  - covers rendering of pruned-route diagnosis text
 
 ## Tests And Verification
 
-- `python -m pytest -q tests/test_webapp.py tests/test_active_character_service.py tests/test_journal.py tests/test_runtime_runner.py tests/test_execution_plan.py`
-  - **118 passed**
+- `python -m pytest -q tests/test_webapp.py tests/test_active_profile_service.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_no_trade.py tests/test_journal.py tests/test_runtime_reports.py`
+  - **165 passed**
 
-Additional verification from the prior live/replay check still relevant here:
+Runtime evidence used for the internal-route diagnosis in this session:
 
-- the exact live command
-  `python .\main.py --profile small_wallet_hub_safe --cargo-m3 12000 --budget-isk 800m --compact`
-  wrote the live snapshot but did not finish after more than 20 minutes
-- the direct replay against that fresh snapshot completed successfully and
-  showed the expected safe-route output
+- replay on the fresh 2026-03-14 snapshot with `--profile balanced` finished
+  successfully and showed mixed internal behavior:
+  some internal routes still had `0 profitable trade candidates found`,
+  while at least one internal route produced a candidate that was later removed
+  by the profile on confidence
+- the strongest repeated reject reasons in the inspected candidate dumps were
+  `non_positive_profit`, `planned_price_unreliable_orderbook`,
+  `orderbook_window_units_too_low`, and `min_depth_units`
 
 ## Remaining Limits
 
-- the active-character seam is intentionally local and single-user; it is not
-  a multi-user/session architecture and does not handle concurrent operators
-- journal sell-order visibility is intentionally narrow: cached open orders are
-  matched against local journal entries by `item_type_id` and optional
-  `character_id`, not by a deeper order-to-trade linkage model
+- the active-profile seam is intentionally local and single-user; it is not a
+  multi-user/session design and does not change CLI/profile precedence outside
+  the web flow
+- this session did not relax internal-market candidate thresholds or route
+  scoring; it improved diagnosis only because the evidence did not justify a
+  broader safe market-logic change yet
 - the slow live-run path is still only localized at a coarse level: snapshot
-  creation happened quickly, so the long-running part appears to be later in
-  the live path, but this session did not perform a full runtime profiling pass
+  creation finished quickly, so the long-running work appears to be later in
+  the live path, but this session did not profile that path further
 
 ## Next Recommended Task
 
-Narrow the slow live-run path after snapshot creation: identify whether the
-remaining long-running work is cache/type enrichment, extra live fetch work, or
-later post-fetch processing, without doing a broad performance refactor first.
+Narrow the slow live-run path after snapshot creation, then decide whether
+internal nullsec coverage needs a truly safe candidate-stage tweak or whether
+the current honest diagnosis is sufficient.
 
 ## Files Touched
 
-- `webapp/services/active_character_service.py`
+- `webapp/services/active_profile_service.py`
 - `webapp/routes/pages.py`
-- `webapp/services/character_service.py`
-- `webapp/services/journal_service.py`
+- `webapp/services/analysis_service.py`
 - `webapp/templates/base.html`
 - `webapp/templates/analysis.html`
-- `webapp/templates/journal.html`
-- `webapp/templates/character.html`
+- `webapp/templates/results.html`
 - `webapp/static/css/app.css`
+- `runtime_runner.py`
+- `execution_plan.py`
 - `journal_models.py`
-- `tests/test_active_character_service.py`
+- `tests/test_active_profile_service.py`
 - `tests/test_webapp.py`
-- `tests/test_journal.py`
+- `tests/test_runtime_runner.py`
+- `tests/test_execution_plan.py`
 - `README.md`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
 - `SESSION_HANDOFF.md`
 - `docs/module-maps/webapp.md`
+- `docs/module-maps/runtime_runner.md`
+- `docs/module-maps/execution_plan.md`

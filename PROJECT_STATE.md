@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 33 web active character seam)
+Last updated: 2026-03-14 (session 34 web active profile + internal route diagnosis)
 
 ## Snapshot
 
@@ -32,6 +32,7 @@ Reviewed this session:
 - `webapp/app.py`
 - `webapp/routes/pages.py`
 - `webapp/services/analysis_service.py`
+- `webapp/services/active_profile_service.py`
 - `webapp/services/dashboard_service.py`
 - `webapp/services/journal_service.py`
 - `webapp/services/character_service.py`
@@ -56,9 +57,11 @@ Reviewed this session:
 - `tests/test_integration.py`
 - `tests/test_journal.py`
 - `tests/test_active_character_service.py`
+- `tests/test_active_profile_service.py`
 - `tests/test_journal_reconciliation.py`
 - `tests/test_eve_sso.py`
 - `tests/test_execution_plan.py`
+- `tests/test_no_trade.py`
 - `tests/test_portfolio.py`
 - `tests/test_route_search.py`
 - `tests/test_risk_profiles.py`
@@ -246,6 +249,9 @@ Not fully re-audited this session:
 - browser analysis runs now explicitly state which active character slot is
   used; subsequent runtime calls still flow through the same CLI/runtime seam
   and therefore really use that selected character basis
+- the local web UI now also has a global active-profile switcher backed by a
+  small local state file; new browser analysis runs default to that selected
+  built-in risk profile instead of only showing a cosmetic label
 - the web journal now follows the same active character slot and shows cached
   sell-order exposure for that active character, matched against local journal
   entries by item type where data exists
@@ -253,6 +259,11 @@ Not fully re-audited this session:
   values when those fields are absent or zero on a route record, keeping the
   manifest/browser path aligned with execution-plan and leaderboard confidence
   output for the same actionable route
+- route prune output is now more honest when candidates did exist but later
+  died in profile rules: the final prune bucket prefers post-search profile
+  rejections when `passed_all_filters > 0`, and runtime artifacts now carry a
+  short route-failure diagnosis instead of collapsing everything into one coarse
+  profit-floor label
 - config validation now rejects unknown `risk_profile.name` values instead of
   silently falling back on typos in local config
 - route-profile pick filtering is now shared across `run_route()` and
@@ -388,9 +399,15 @@ centered on:
 - active-character switching in the local web UI so analysis and journal views
   can pivot between locally saved single-user character slots without changing
   the CLI/runtime architecture
+- active built-in risk-profile switching in the local web UI so analysis runs
+  can pivot between `balanced`, `small_wallet_hub_safe`, and other existing
+  profiles without changing CLI/config wiring
 - additive internal travel realism for `internal_self_haul` routes through a
   small directed ansiblex layer and more transparent route/output travel
   metadata
+- clearer diagnosis for empty internal nullsec routes, with the current code
+  evidence pointing to candidate scarcity and weak internal orderbooks first,
+  and profile cleanup only as a secondary cause on some surviving routes
 - cautious preparation for Imperium watch nodes and future market/station
   expansion without hardcoding unverified hubs into route-search logic
 
@@ -490,6 +507,9 @@ Files that indicate this focus:
   it persists saved character slots under `cache/character_context/` and
   switches by replacing the existing active token/profile files. It is not a
   multi-user/session model and does not arbitrate concurrent operators.
+- the new web active-profile seam is intentionally local and single-user too:
+  it persists only a small browser-side default for existing built-in profiles
+  and does not replace CLI/profile config precedence outside the web flow
 - Journal reconciliation is also optional by design. Without wallet data, the
   manual journal remains usable and reconciliation does not persist empty
   results over existing entries.
@@ -522,6 +542,12 @@ Files that indicate this focus:
   snapshot completed quickly. That makes it reasonably likely that the current
   slow path sits after snapshot creation in the live path, but this was not yet
   fully localized in code.
+- focused replay evidence from 2026-03-14 indicates that many empty internal
+  nullsec routes are caused first by weak internal market coverage
+  (`non_positive_profit`, thin books, unreliable planned-sell pricing), while a
+  smaller subset does produce a candidate that is later removed by the active
+  profile on confidence or quality. This session improved the diagnosis path
+  but did not relax those market-quality gates.
 - The local journal remains plan-centric by design: overview/open/closed/report/
   personal/calibration still depend on imported or recorded journal entries.
   The web UI now makes that clearer by showing character snapshot counts and by

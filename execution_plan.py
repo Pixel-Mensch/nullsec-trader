@@ -967,6 +967,12 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         route_prune_reason = str(leg.get("route_prune_reason", route_summary.get("route_prune_reason", "")) or "")
         if route_prune_reason:
             lines.append(f"route_prune_reason: {route_prune_reason}")
+        route_failure_hints = [str(item).strip() for item in list(leg.get("route_failure_hints", []) or []) if str(item).strip()]
+        route_failure_summary = str(leg.get("route_failure_summary", "") or "").strip()
+        if not route_failure_summary and route_failure_hints:
+            route_failure_summary = " | ".join(route_failure_hints)
+        if route_failure_summary:
+            lines.append(f"route_diagnosis: {route_failure_summary}")
 
         lines.append("")
 
@@ -1242,6 +1248,12 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
                 reason_code = str(pruned_reason.get("code", "") or "")
             suffix = f" [{reason_code}]" if reason_code else ""
             lines.append(f"- {r.get('route_label', '')}: {reason}{suffix}")
+            route_failure_hints = [str(item).strip() for item in list(r.get("route_failure_hints", []) or []) if str(item).strip()]
+            route_failure_summary = str(r.get("route_failure_summary", "") or "").strip()
+            if not route_failure_summary and route_failure_hints:
+                route_failure_summary = " | ".join(route_failure_hints)
+            if route_failure_summary:
+                lines.append(f"  diagnosis: {route_failure_summary}")
             if _internal_route_metadata_applicable(r):
                 operational_floor = float(r.get("operational_profit_floor_isk", 0.0) or 0.0)
                 if operational_floor > 0.0:
@@ -1339,6 +1351,12 @@ def write_no_trade_report(
                 operational_note = str(nm.get("operational_filter_note", "") or "")
                 if operational_note:
                     lines.append(f"    Internal Route Note: {operational_note}")
+            route_failure_hints = [str(item).strip() for item in list(nm.get("route_failure_hints", []) or []) if str(item).strip()]
+            route_failure_summary = str(nm.get("route_failure_summary", "") or "").strip()
+            if not route_failure_summary and route_failure_hints:
+                route_failure_summary = " | ".join(route_failure_hints)
+            if route_failure_summary:
+                lines.append(f"    Diagnose: {route_failure_summary}")
             why = dict(nm.get("why_out_summary", {}) or {})
             if why:
                 top_why = sorted(why.items(), key=lambda kv: kv[1], reverse=True)[:3]

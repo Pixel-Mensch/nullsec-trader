@@ -6,6 +6,7 @@
     <p class="eyebrow">Runtime output</p>
     <h2>Analysis results</h2>
     <p class="hero-copy">Existing route ranking and planning logic rendered for browser use. Personal history remains advisory unless explicitly enabled in config.</p>
+    <p class="muted">Active profile default: <strong>{{ profile_switch.active_profile.name or result.selected_profile or "balanced" }}</strong>. This run used <strong>{{ result.selected_profile or "-" }}</strong>.</p>
   </div>
   <div class="hero-actions">
     <a class="button secondary" href="/analysis">Run another analysis</a>
@@ -149,7 +150,7 @@
           {% endfor %}
         </ul>
         {% endif %}
-        {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason %}
+        {% if route.warnings or route.calibration_warning or route.cost_model_warning or route.route_prune_reason or route.route_failure_summary %}
         <ul class="plain-list">
           {% for warning in route.warnings %}
           <li class="warning-item">{{ warning }}</li>
@@ -157,6 +158,7 @@
           {% if route.cost_model_warning and route.cost_model_warning not in route.warnings %}<li class="warning-item">{{ route.cost_model_warning }}</li>{% endif %}
           {% if route.calibration_warning and route.calibration_warning not in route.warnings %}<li class="warning-item">{{ route.calibration_warning }}</li>{% endif %}
           {% if route.route_prune_reason and route.route_prune_reason not in route.warnings %}<li>{{ route.route_prune_reason }}</li>{% endif %}
+          {% if route.route_failure_summary %}<li>Diagnosis: {{ route.route_failure_summary }}</li>{% endif %}
         </ul>
         {% endif %}
         <div class="table-wrap">

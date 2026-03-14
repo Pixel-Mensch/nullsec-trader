@@ -1,12 +1,38 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 33 web active character seam)
+Last updated: 2026-03-14 (session 34 web active profile + internal route diagnosis)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0n: Add active web risk-profile switching and clearer internal-route diagnosis
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/routes/pages.py`,
+  `webapp/services/active_profile_service.py`,
+  `webapp/services/analysis_service.py`, `webapp/templates/`,
+  `runtime_runner.py`, `execution_plan.py`, `journal_models.py`, `tests/`
+- What was done:
+  - added a small single-user `Active profile` switcher in the web header,
+    backed by a tiny local state file and sourced directly from
+    `risk_profiles.BUILTIN_PROFILES`
+  - browser analysis now defaults to that active built-in profile, while still
+    allowing a one-run override in the form
+  - checked the current internal nullsec no-pick path against real artifacts:
+    the primary cause is still candidate scarcity / weak orderbook quality on
+    internal markets, not broken `internal_self_haul` transport wiring
+  - made final route prune output more honest when candidates passed search but
+    were later removed by profile rules
+  - added short route-diagnosis lines to execution-plan / no-trade output and
+    browser result cards so empty internal routes explain themselves better
+  - focused regression:
+    `python -m pytest -q tests/test_webapp.py tests/test_active_profile_service.py tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_no_trade.py tests/test_journal.py tests/test_runtime_reports.py`
+    -> **165 passed**
 
 ### Task 0m: Add a small active-character switch seam to the local web UI
 
@@ -312,6 +338,17 @@ full backlog scrape.
     or later post-fetch runtime processing
   - keep this diagnostic narrow; no broad performance rewrite unless the hot
     path is clearly identified
+
+### Task 1b: Decide whether internal nullsec market coverage needs a narrow candidate-stage tweak
+
+- Priority: P1
+- Status: TODO
+- Relevant files: `candidate_engine.py`, `runtime_runner.py`,
+  `execution_plan.py`, replay artifacts
+- Expected result:
+  - use replay evidence to decide whether there is a safe small internal-market
+    improvement to make, or whether the current honest diagnosis is the right
+    stopping point for now
 
 ### Task 0i: Tighten private web deploy semantics and sensitive-page minimization
 

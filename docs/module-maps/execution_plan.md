@@ -21,6 +21,8 @@ This map is based on focused output and test inspection, not a full audit.
   final route selection
 - exposes profit-basis context for price-sensitive / materially repriced picks
   so visible quote vs displayed profit stays explainable
+- renders short route-diagnosis lines for non-actionable routes when runtime
+  metadata provides a concise explanation
 - can render corridor-ordered route sections when runtime metadata provides a
   display-only direct-leg vs longer-span / Jita-connector grouping without
   changing ranking, and without dropping longer profitable spans from view
@@ -79,6 +81,8 @@ This map is based on focused output and test inspection, not a full audit.
 - add or adjust warnings
 - change compact/detail behavior
 - surface new route or profile metadata
+- keep non-actionable route diagnosis concise and presentation-only, without
+  re-deriving candidate logic inside the plan writer
 - keep any profile-specific compact summary honest and actionable instead of
   duplicating the whole plan in a second format
 - surface personal-layer state and explainability without inventing business logic

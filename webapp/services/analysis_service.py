@@ -8,6 +8,7 @@ from risk_profiles import BUILTIN_PROFILES, DEFAULT_PROFILE
 from runtime_common import TOKEN_PATH, parse_isk
 
 from config_loader import load_config, validate_config
+from webapp.services import active_profile_service
 from webapp.services.runtime_bridge import extract_personal_layer_lines, invoke_runtime
 
 
@@ -87,6 +88,8 @@ def _route_cards(manifest: dict) -> list[dict]:
                 "candidate_node_summary": str(route.get("candidate_node_summary", "") or ""),
                 "candidate_nodes": [dict(node) for node in list(route.get("candidate_nodes", []) or []) if isinstance(node, dict)],
                 "warnings": [str(item).strip() for item in list(route.get("warnings", []) or []) if str(item).strip()],
+                "route_failure_hints": [str(item).strip() for item in list(route.get("route_failure_hints", []) or []) if str(item).strip()],
+                "route_failure_summary": str(route.get("route_failure_summary", "") or "").strip(),
                 "display": display,
                 "route_logic_label": str(display.get("logic_label", "") or ""),
                 "picks": picks,
@@ -129,18 +132,25 @@ def get_analysis_form_data() -> dict:
     validation = validate_config(cfg)
     defaults = dict(cfg.get("defaults", {}) or {})
     replay_cfg = dict(cfg.get("replay", {}) or {})
+    active_profile_name = active_profile_service.resolve_active_profile_name(cfg)
+    config_profile_cfg = cfg.get("risk_profile", {}) if isinstance(cfg, dict) else {}
+    if not isinstance(config_profile_cfg, dict):
+        config_profile_cfg = {}
+    config_profile_name = str(config_profile_cfg.get("name", "") or "").strip().lower()
+    if config_profile_name not in BUILTIN_PROFILES:
+        config_profile_name = DEFAULT_PROFILE
     return {
         "config": cfg,
         "config_valid": not bool(validation.get("errors", [])),
         "config_errors": list(validation.get("errors", []) or []),
         "defaults": defaults,
         "replay_enabled": bool(replay_cfg.get("enabled", False)),
-        "risk_profiles": [
-            {"name": name, "description": str((spec or {}).get("description", "") or "")}
-            for name, spec in BUILTIN_PROFILES.items()
-        ],
+        "risk_profiles": active_profile_service.list_builtin_profiles(),
         "route_mode": str(cfg.get("route_mode", "roundtrip") or "roundtrip"),
         "default_profile_name": DEFAULT_PROFILE,
+        "config_profile_name": config_profile_name,
+        "active_profile_name": active_profile_name,
+        "selected_profile_name": active_profile_name,
         "market_auth": _market_auth_info(),
     }
 
@@ -184,6 +194,14 @@ def run_analysis(
                 "form": get_analysis_form_data(),
             }
     profile_name = str(risk_profile or "").strip().lower()
+    if profile_name and profile_name not in BUILTIN_PROFILES:
+        return {
+            "ok": False,
+            "error": f"Unbekanntes Risk Profile: '{risk_profile}'.",
+            "form": get_analysis_form_data(),
+        }
+    if not profile_name:
+        profile_name = active_profile_service.resolve_active_profile_name(cfg)
     if profile_name:
         argv.extend(["--profile", profile_name])
     replay_override = "1" if bool(use_replay) else "0"
@@ -227,7 +245,7 @@ def run_analysis(
         "no_trade_text": no_trade_text,
         "personal_layer_lines": personal_layer_lines,
         "form": get_analysis_form_data(),
-        "selected_profile": profile_name or str((cfg.get("risk_profile", {}) or {}).get("name", "balanced")),
+        "selected_profile": profile_name or DEFAULT_PROFILE,
         "used_replay": bool(use_replay),
     }
 

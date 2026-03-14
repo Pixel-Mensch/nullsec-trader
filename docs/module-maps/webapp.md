@@ -21,6 +21,10 @@ journal, character, and config workflows without replacing the CLI.
   may switch between locally saved characters, but it should do so by
   replacing the existing active runtime token/profile files rather than
   inventing a parallel multi-user runtime model
+- keep one equally small active-profile seam for private single-user use: the
+  web UI may switch between existing built-in risk profiles, but it should do
+  so through a tiny local default-state file instead of inventing a session or
+  multi-user profile layer
 - keep sensitive template payloads narrow: config and character pages should
   receive redacted/sanitized view-models, not raw secret-bearing config blobs
 - keep public or multi-user web hardening explicitly out of scope for this seam
@@ -45,6 +49,7 @@ journal, character, and config workflows without replacing the CLI.
 - `webapp/routes/pages.py`
 - `webapp/services/runtime_bridge.py`
 - `webapp/services/analysis_service.py`
+- `webapp/services/active_profile_service.py`
 - `webapp/services/active_character_service.py`
 - `webapp/services/dashboard_service.py`
 - `webapp/services/journal_service.py`
@@ -87,6 +92,8 @@ journal, character, and config workflows without replacing the CLI.
 - expose more status metadata without changing trading logic
 - surface active-character state globally and switch it without bypassing the
   existing runtime/journal character-context files
+- surface active-profile state globally and keep browser analysis defaults
+  aligned with that selected built-in profile
 - make the journal web flow clearly distinguish local journal entries from
   current character snapshot / reconcile data
 - expose active-character sell-order context in the journal page using real
@@ -111,6 +118,8 @@ journal, character, and config workflows without replacing the CLI.
 - active-character switching must not leave mismatched token/profile state
   behind; when a saved character lacks one side of the data, the web seam
   should clear the stale active file rather than silently mixing characters
+- active-profile switching must stay sourced from `BUILTIN_PROFILES`; the web
+  layer should not grow a second profile registry or drift from runtime names
 - templates can drift from real service payloads if not covered by tests,
   especially on sensitive pages where only redacted/sanitized fields should
   reach Jinja

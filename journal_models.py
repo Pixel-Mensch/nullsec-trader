@@ -214,6 +214,10 @@ def build_trade_plan_manifest(
             if text:
                 route_warning_lines.append(text)
         route_warning_lines = list(dict.fromkeys(route_warning_lines))
+        route_failure_hints = [str(item).strip() for item in list(route.get("route_failure_hints", []) or []) if str(item).strip()]
+        route_failure_summary = str(route.get("route_failure_summary", "") or "").strip()
+        if not route_failure_summary and route_failure_hints:
+            route_failure_summary = " | ".join(route_failure_hints)
         display_meta = route.get("_route_display", {})
         if not isinstance(display_meta, dict):
             display_meta = {}
@@ -363,6 +367,8 @@ def build_trade_plan_manifest(
                 "transport_mode_note": str(route.get("transport_mode_note", "") or ""),
                 "budget_left_reason": str(route.get("budget_left_reason", "") or ""),
                 "warnings": json.loads(json.dumps(route_warning_lines, ensure_ascii=False)),
+                "route_failure_hints": json.loads(json.dumps(route_failure_hints, ensure_ascii=False)),
+                "route_failure_summary": route_failure_summary,
                 "display": json.loads(json.dumps(display_meta, ensure_ascii=False)),
                 "picks": picks_out,
             }

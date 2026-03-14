@@ -9,7 +9,7 @@ from starlette.requests import Request
 from webapp import security as web_security
 from webapp.app import create_app
 from webapp.routes import pages
-from webapp.services import character_service as character_service_module, config_service as config_service_module, runtime_bridge
+from webapp.services import analysis_service as analysis_service_module, character_service as character_service_module, config_service as config_service_module, runtime_bridge
 
 
 def _character_switch(current_path: str = "/") -> dict:
@@ -46,6 +46,25 @@ def _character_switch(current_path: str = "/") -> dict:
         ],
         "return_to": current_path,
         "basis_note": "Analysis, journal, and reconcile use this active character slot.",
+    }
+
+
+def _profile_switch(current_path: str = "/") -> dict:
+    return {
+        "available": True,
+        "active_profile": {
+            "name": "small_wallet_hub_safe",
+            "description": "Small-wallet profile",
+            "is_active": True,
+        },
+        "profiles": [
+            {"name": "balanced", "description": "Default", "is_active": False},
+            {"name": "small_wallet_hub_safe", "description": "Small-wallet profile", "is_active": True},
+            {"name": "aggressive", "description": "Wide-open profile", "is_active": False},
+        ],
+        "return_to": current_path,
+        "config_profile_name": "balanced",
+        "basis_note": "New analysis runs default to this active profile unless the form overrides it.",
     }
 
 
@@ -86,10 +105,17 @@ def _analysis_form() -> dict:
         "config_valid": True,
         "config_errors": [],
         "defaults": {"budget_isk": 500000000, "cargo_m3": 12000},
-        "risk_profiles": [{"name": "balanced", "description": "Default"}],
+        "risk_profiles": [
+            {"name": "balanced", "description": "Default"},
+            {"name": "small_wallet_hub_safe", "description": "Small-wallet profile"},
+            {"name": "aggressive", "description": "Wide-open profile"},
+        ],
         "replay_enabled": False,
         "route_mode": "roundtrip",
         "default_profile_name": "balanced",
+        "config_profile_name": "balanced",
+        "active_profile_name": "small_wallet_hub_safe",
+        "selected_profile_name": "small_wallet_hub_safe",
         "config": {},
         "market_auth": {"character_name": "Navi Selerith", "has_token": True, "token_path": "cache/token.json"},
     }
@@ -216,6 +242,8 @@ def _analysis_result() -> dict:
             "warnings": ["shipping warning"],
             "calibration_warning": "",
             "route_prune_reason": "confidence",
+            "route_failure_hints": ["Candidates existed, but the active profile removed them on confidence."],
+            "route_failure_summary": "Candidates existed, but the active profile removed them on confidence.",
             "route_logic_label": "Jita outbound connector",
             "display": {
                 "section_key": "jita_0_from_jita",
@@ -394,6 +422,7 @@ def _client(monkeypatch) -> TestClient:
     monkeypatch.setattr(pages.character_service, "run_character_action", lambda action: {**_character_page(), "action_message": f"character {action}"})
     monkeypatch.setattr(pages.config_service, "get_config_page", lambda: _config_page())
     monkeypatch.setattr(pages.active_character_service, "get_switcher_context", lambda current_path="/": _character_switch(current_path))
+    monkeypatch.setattr(pages.active_profile_service, "get_switcher_context", lambda current_path="/": _profile_switch(current_path))
     return TestClient(create_app())
 
 
@@ -413,8 +442,11 @@ def test_analysis_form_renders(monkeypatch) -> None:
     assert 'class="page-analysis"' in response.text
     assert "Run analysis" in response.text
     assert "balanced" in response.text
+    assert "small_wallet_hub_safe" in response.text
     assert "Active basis:" in response.text
     assert "New runs use this local character token/profile slot." in response.text
+    assert "Active profile:" in response.text
+    assert "Change it in the header or override it for a single run below." in response.text
 
 
 def test_analysis_run_renders_results(monkeypatch) -> None:
@@ -435,6 +467,7 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     assert "Candidate nodes: corridor RE-C26 [corridor_checkpoint]" in response.text
     assert "R-ARKN -&gt; WT-2J9" in response.text
     assert "Snapshot C:/tmp/replay_snapshot.json" in response.text
+    assert "Diagnosis: Candidates existed, but the active profile removed them on confidence." in response.text
     assert 'class="log-output"' in response.text
 
 
@@ -491,6 +524,62 @@ def test_global_character_switcher_redirects_back_to_page(monkeypatch) -> None:
     assert response.status_code == 303
     assert response.headers["location"] == "/journal?tab=overview"
     assert activated == [90000002]
+
+
+def test_global_profile_switcher_redirects_back_to_page(monkeypatch) -> None:
+    activated: list[str] = []
+
+    def _activate(profile_name: str) -> dict:
+        activated.append(str(profile_name))
+        return {"ok": True, "profile_name": str(profile_name)}
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(pages.active_profile_service, "activate_profile", _activate)
+    response = client.post(
+        "/profile/activate",
+        data={"profile_name": "balanced", "return_to": "/journal?tab=overview"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/journal?tab=overview"
+    assert activated == ["balanced"]
+
+
+def test_run_analysis_uses_active_profile_when_form_field_is_empty(monkeypatch) -> None:
+    captured: dict = {}
+    monkeypatch.setattr(analysis_service_module, "load_config", lambda: {"defaults": {}, "replay": {}, "risk_profile": {"name": "balanced"}})
+    monkeypatch.setattr(analysis_service_module, "validate_config", lambda cfg: {"errors": []})
+    monkeypatch.setattr(analysis_service_module.active_profile_service, "resolve_active_profile_name", lambda cfg=None: "small_wallet_hub_safe")
+
+    def _invoke(argv: list[str], env_overrides: dict | None = None) -> dict:
+        captured["argv"] = list(argv)
+        captured["env_overrides"] = dict(env_overrides or {})
+        return {
+            "ok": True,
+            "error": "",
+            "exit_code": 0,
+            "stdout": "",
+            "plan_id": "plan-123",
+            "created_files": [],
+            "snapshot_path": "",
+            "manifest": {"route_count": 0},
+            "text_files": {},
+        }
+
+    monkeypatch.setattr(analysis_service_module, "invoke_runtime", _invoke)
+    monkeypatch.setattr(analysis_service_module, "get_analysis_form_data", lambda: _analysis_form())
+
+    result = analysis_service_module.run_analysis(
+        budget_isk_raw="500m",
+        cargo_m3_raw="12000",
+        snapshot_only=False,
+        use_replay=False,
+        risk_profile="",
+    )
+
+    assert result["ok"] is True
+    assert captured["argv"] == ["--cargo-m3", "12000.0", "--budget-isk", "500000000", "--profile", "small_wallet_hub_safe"]
+    assert result["selected_profile"] == "small_wallet_hub_safe"
 
 
 def test_config_page_renders(monkeypatch) -> None:

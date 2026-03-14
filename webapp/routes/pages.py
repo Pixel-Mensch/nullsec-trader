@@ -6,7 +6,15 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from webapp.services import active_character_service, analysis_service, character_service, config_service, dashboard_service, journal_service
+from webapp.services import (
+    active_character_service,
+    active_profile_service,
+    analysis_service,
+    character_service,
+    config_service,
+    dashboard_service,
+    journal_service,
+)
 from webapp.security import describe_request_access
 
 
@@ -46,6 +54,7 @@ def _render(request: Request, template_name: str, **context):
             "security": security,
             "current_path": current_path,
             "character_switch": active_character_service.get_switcher_context(current_path=current_path),
+            "profile_switch": active_profile_service.get_switcher_context(current_path=current_path),
             **context,
         },
     )
@@ -78,6 +87,23 @@ def analysis_run(
         risk_profile=str(risk_profile or ""),
     )
     return _render(request, "results.html", page="analysis", result=result, data=result.get("form", analysis_service.get_analysis_form_data()))
+
+
+@router.post("/profile/activate")
+def profile_activate(request: Request, profile_name: str = Form(""), return_to: str = Form("/")):
+    result = active_profile_service.activate_profile(profile_name)
+    if bool(result.get("ok", False)):
+        return RedirectResponse(url=_safe_return_path(return_to), status_code=303)
+    return _render(
+        request,
+        "analysis.html",
+        page="analysis",
+        result=None,
+        data={
+            **analysis_service.get_analysis_form_data(),
+            "action_error": str(result.get("error", "Risk Profile konnte nicht aktiviert werden.") or "").strip(),
+        },
+    )
 
 
 @router.get("/journal", response_class=HTMLResponse)

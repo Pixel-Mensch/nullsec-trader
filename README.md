@@ -46,6 +46,7 @@ Der Schwerpunkt liegt auf konservativen Entscheidungen fuer echte Nutzung: reali
 - Shipping- und zusaetzliche Routenkosten werden vor dem finalen Ranking vom Profit abgezogen.
 - Wenn fuer eine Route kein belastbares Transportmodell existiert, wird sie standardmaessig blockiert. Eine Zero-Cost-Ausnahme ist nur explizit ueber `route_search.allow_zero_transport_cost_for_routes` moeglich.
 - Interne Struktur-zu-Struktur-Routen ohne Jita werden dabei separat behandelt: sie laufen standardmaessig als `internal_self_haul` und werden nicht wegen fehlender externer Shipping-Lanes blockiert. Solange keine expliziten internen `route_costs` gesetzt sind, gelten dort aktuell `0 ISK` Transportkosten.
+- Wenn interne Routen leer bleiben, schreibt der Runtime jetzt zusaetzlich eine kurze Diagnose in Plan-/No-Trade-Output und Browser-Ergebnisse, statt nur grob `candidates_below_profit_floor` stehen zu lassen. Der Fokus liegt auf ehrlichen Hinweisen wie duenne Orderbuecher, unprofitabler Kandidatenbasis, aktive Profilfilter oder interner operativer Profit-Floor.
 - Optional kann fuer interne Corridor-Wege ein kleiner Ansiblex-Layer zugeschaltet werden. Die Source of Truth ist [`docs/Ansis.txt`](./docs/Ansis.txt) mit gerichteten Zeilen im Format `FROM -> TO`; Gate-Wege bleiben dabei weiter erhalten und werden nicht ersetzt.
 - Das aktuelle Ansiblex-Kostenmodell bleibt absichtlich klein und additiv: pro genutztem Ansiblex-Leg wird ein geschaetzter Fuel-/Toll-Kostenblock berechnet und zusaetzlich zu bestehenden Route-/Shipping-Kosten verbucht, statt das Route-Scoring oder die Profitformeln neu zu schreiben.
 
@@ -166,7 +167,7 @@ Aktuelle Seiten:
 - Character
 - Config
 
-Web-Character-Seam:
+Web Character / Profile seams:
 
 - im Header gibt es jetzt einen globalen `Active character`-Switcher fuer den
   privaten Single-User-Betrieb
@@ -178,6 +179,15 @@ Web-Character-Seam:
 - die Journal-Seite zeigt zusaetzlich offene Sell-Order-Exponierung des
   aktiven Characters aus dem gecachten Character-Profil und ordnet sie, soweit
   lokal moeglich, vorhandenen Journal-Eintraegen nach `item_type_id` zu
+- im Header gibt es jetzt zusaetzlich einen globalen `Active profile`-Switcher
+  fuer denselben privaten Single-User-Betrieb
+- die Auswahl kommt direkt aus `risk_profiles.BUILTIN_PROFILES`; es gibt keine
+  separat gepflegte Web-Profilliste
+- neue Browser-Analysen nutzen standardmaessig dieses aktive Profil; das
+  Analyse-Formular startet mit demselben Profil vorbelegt und kann es fuer
+  einen einzelnen Run noch explizit ueberschreiben
+- der aktive Profilzustand bleibt lokal in einem kleinen Web-State erhalten
+  und ersetzt keine CLI-/Config-Profile global
 
 Kleine Zugriffssicherung fuer private Deploys:
 

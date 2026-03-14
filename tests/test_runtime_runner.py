@@ -1,5 +1,7 @@
 """Targeted tests for shared runtime_runner post-processing helpers."""
 
+import runtime_runner as runtime_runner_module
+
 from tests.shared import *  # noqa: F401,F403
 from route_search import summarize_route_for_ranking
 
@@ -104,6 +106,42 @@ def test_derive_route_prune_reason_prefers_invalid_volume_bucket() -> None:
         "passed_all_filters": 0,
     }
     assert nst._derive_route_prune_reason(result) == "candidates_invalid_volume"
+
+
+def test_derive_route_prune_reason_prefers_profile_bucket_after_candidates_passed_search() -> None:
+    result = {
+        "picks": [],
+        "route_blocked_due_to_transport": False,
+        "route_prune_reason": "",
+        "why_out_summary": {
+            "non_positive_profit": 120,
+            "profile_min_confidence": 1,
+        },
+        "total_candidates": 1,
+        "passed_all_filters": 1,
+    }
+    assert nst._derive_route_prune_reason(result) == "candidates_failed_confidence"
+
+
+def test_derive_route_failure_hints_surface_profile_and_market_depth_causes() -> None:
+    result = {
+        "picks": [],
+        "route_actionable": False,
+        "route_blocked_due_to_transport": False,
+        "route_prune_reason": "candidates_failed_confidence",
+        "why_out_summary": {
+            "profile_min_confidence": 1,
+            "orderbook_window_units_too_low": 14,
+            "min_depth_units": 7,
+        },
+        "total_candidates": 1,
+        "passed_all_filters": 1,
+    }
+
+    hints = runtime_runner_module._derive_route_failure_hints(result)
+
+    assert "Candidates existed, but the active profile removed them on confidence." in hints
+    assert "Orderbook depth was too thin on source or destination." in hints
 
 
 def test_internal_self_haul_operational_filter_suppresses_low_profit_route() -> None:
