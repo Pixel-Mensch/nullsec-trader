@@ -86,6 +86,7 @@ from runtime_reports import (
     write_top_candidate_dump,
 )
 from eve_sso import EveSSOAuth
+from runtime_cleanup import run_safe_cleanup
 
 
 def run_snapshot_only(cfg: dict, structure_ids: list[int], snapshot_out: str | None = None) -> None:
@@ -1909,6 +1910,19 @@ def run_cli() -> None:
     command = str(cli.get("command", "run") or "run").strip().lower()
     if command == "journal":
         run_journal_cli(list(cli.get("journal_argv", []) or []))
+        return
+    if command == "clean":
+        result = run_safe_cleanup()
+        print("Clean-Start Bereinigung abgeschlossen.")
+        print(f"  Dateien entfernt: {len(list(result.get('removed_files', []) or []))}")
+        print(f"  Verzeichnisse entfernt: {len(list(result.get('removed_dirs', []) or []))}")
+        print("  Behalten: cache/token.json, cache/trade_journal.sqlite3, cache/character_context/")
+        failures = list(result.get("failures", []) or [])
+        if failures:
+            print("  Fehler:")
+            for failure in failures:
+                print(f"    - {failure.get('path', '')}: {failure.get('error', '')}")
+            raise SystemExit(1)
         return
     cfg = load_config(CONFIG_PATH)
     if not cfg:

@@ -1,97 +1,81 @@
 # Session Handoff
 
-Date: 2026-03-13 (session 24 route-mix cleanup)
+Date: 2026-03-14 (session 25 clean-start command)
 Branch: `dev`
 
 ## Completed This Session
 
-Added a narrow post-selection route-mix cleanup so weak optional/speculative
-add-on picks can be removed from the final route only when they clearly hurt
-route confidence / route quality more than they help.
+Added a safe operator-facing clean-start command so the repo can be reset for a
+fresh runtime without manually deleting dozens of generated artifacts or wiping
+local auth/journal state.
 
 ## Root Cause
 
-- `portfolio_builder.py` optimizes pick-level selection, cargo fill, and local
-  search before the final route summary exists
-- `route_search.py` then evaluates the whole selected mix via average pick
-  confidence / market quality, so a weak low-impact add-on can still depress a
-  good route after final selection
-- this is a final-mix problem, not a candidate-generation problem, so a small
-  post-selection pass is the right seam
+- the tool writes many timestamped reports, snapshots, and large transient HTTP
+  caches into the working tree during normal use
+- there was no first-class cleanup path, so a "clean restart" required manual
+  deletion and carried needless risk around tokens, journal data, and cached
+  character state
+- `.gitignore` already treated most of these outputs as ephemeral, which made a
+  small explicit cleanup seam the low-risk fix
 
 ## What Changed
 
+- `runtime_common.py`
+  - `parse_cli_args()` now recognizes `clean` and `cleanup` as a dedicated
+    maintenance command
+- `runtime_cleanup.py`
+  - new focused helper module for safe cleanup target discovery and deletion
+  - removes generated root artifacts plus `cache/http_cache.json`,
+    `cache/types.json`, `.pytest_cache`, and recursive `__pycache__`
+  - preserves `cache/token.json`, `cache/trade_journal.sqlite3`, and
+    `cache/character_context/`
 - `runtime_runner.py`
-  - added `_apply_post_selection_route_mix_cleanup()` and called it from
-    `_finalize_route_result_runtime_state()`
-  - cleanup only evaluates non-mandatory picks
-  - removal requires:
-    - small removed profit share
-    - material recovery in route confidence or market quality
-    - route score improvement, or near-identical route score for very small
-      add-ons with clear quality drag
-  - cleanup will not:
-    - remove robust mandatory picks
-    - drop below the current profile's minimum strong-pick count
-    - push an internal self-haul route below its operational route floor
-  - removed picks are recorded in `route_mix_cleanup_removed_picks` and
-    `route_mix_cleanup_notes`
-- `execution_plan.py`
-  - execution plans now surface route-mix cleanup notes in the route summary /
-    warnings block
-  - route leaderboard now prints `route_mix_cleanup:` lines when cleanup ran
-- `nullsectrader.py`
-  - exported the cleanup helper for focused tests
+  - `run_cli()` now dispatches `python main.py clean` before config loading
+    and prints a concise cleanup summary
+- `.gitignore`
+  - now also ignores `roundtrip_plan_*.txt`, `no_trade_*.txt`,
+    `trade_plan_*.json`, and `snapshot_*.json`
+- `README.md` / control files
+  - documented the new clean-start path and its safety boundaries
 
-## Replay / Artifact Verification
+## Runtime Verification
 
-- motivating artifact before this change:
-  - narrow `replay_snapshot.json` O4T->Jita artifact showed
-    `Noise-5 'Needlejack' Filament` as an optional add-on with only ~5.8m
-    expected profit and much weaker confidence than the two core picks, while
-    the route sat at `Route Confidence: 0.66`
-- current narrow rerun after this change:
-  - `o4t -> jita_44` now came in at `Route Confidence: 0.72`
-  - cleanup did not fire on that rerun because the route no longer crossed the
-    new removal threshold; this is intentional because the pass is meant for
-    clear trade-off cases, not for cosmetic beautification
-- focused replay fixture stayed stable:
-  - `o4t -> jita_44`
-  - `Noise-25 'Needlejack' Filament`
-  - `Polarized Heavy Neutron Blaster`
+- executed `python main.py clean` in the repo root
+- result: **111 files** and **7 directories** removed
+- preserved state confirmed afterwards:
+  - `cache/token.json`
+  - `cache/trade_journal.sqlite3`
+  - `cache/character_context/`
 
 ## Tests And Verification
 
 - focused regression:
-  - `pytest -q tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_route_search.py`
-    -> **86 passed**
-  - `pytest -q tests/test_no_trade.py tests/test_integration.py -k "replay_live_focused_fixture_keeps_real_pick_set or same_snapshot_keeps_stable_plan_and_pick_ids or no_trade"`
-    -> **39 passed**
+  - `pytest -q tests/test_runtime_cleanup.py tests/test_config.py tests/test_character_context.py tests/test_execution_plan.py -k "clean or parse_cli_args or compact_flag"`
+    -> **8 passed**
 - new coverage proves:
-  - a weak optional add-on is removed when route quality gains outweigh its
-    small profit contribution
-  - cleanup does not remove an optional pick if the active profile would lose a
-    required second strong pick
-  - execution plan and leaderboard surface cleanup notes
+  - CLI parsing recognizes `clean`
+  - cleanup removes generated artifacts and transient caches
+  - cleanup preserves auth token, journal DB, and character-context cache
 
 ## Remaining Limits
 
-- the cleanup is intentionally narrow and may not fire on every low-confidence
-  optional pick; it only acts on clear small-share / quality-drag trade-offs
-- current replay evidence did not produce a live cleanup removal after the
-  latest market-quality calibration; the removal case is covered by targeted
-  runtime tests built from the observed artifact pattern
+- this is a safe cleanup, not a destructive full reset; operator identity,
+  journal history, and character cache are intentionally retained
+- if a future session needs a full credential/history wipe, that should be a
+  separate explicit command or manual step, not folded into `clean`
 - an unrelated pre-existing local modification in `location_utils.py` remains
   intentionally untouched
 
 ## Files Touched
 
+- `.gitignore`
+- `runtime_common.py`
+- `runtime_cleanup.py`
 - `runtime_runner.py`
-- `execution_plan.py`
-- `nullsectrader.py`
-- `tests/test_runtime_runner.py`
-- `tests/test_execution_plan.py`
-- `tests/test_route_search.py`
+- `tests/run_all.py`
+- `tests/test_runtime_cleanup.py`
+- `README.md`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
 - `ARCHITECTURE.md`

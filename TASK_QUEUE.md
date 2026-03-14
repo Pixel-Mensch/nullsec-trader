@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-13 (session 24 route-mix cleanup)
+Last updated: 2026-03-14 (session 25 clean-start command)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -124,6 +124,30 @@ full backlog scrape.
   - Full suite: 239 passed.
 
 ## P1
+
+### Task 0f: Add a safe clean-start command for runtime artifacts
+
+- Priority: P1
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `runtime_common.py`, `runtime_runner.py`,
+  `runtime_cleanup.py`, `.gitignore`, `README.md`, `tests/test_runtime_cleanup.py`
+- What was done:
+  - added a CLI `clean` / `cleanup` subcommand that can be run via
+    `python .\main.py clean`
+  - the cleanup path removes generated root artifacts, `market_snapshot.json`,
+    `replay_snapshot.json`, default `snapshot_*.json`, `trade_plan_*.json`,
+    `cache/http_cache.json`, `cache/types.json`, `.pytest_cache`, and
+    recursive `__pycache__` directories
+  - the cleanup deliberately preserves `cache/token.json`,
+    `cache/trade_journal.sqlite3`, and `cache/character_context/`
+  - `.gitignore` now also ignores generated `roundtrip_plan_*.txt`,
+    `no_trade_*.txt`, `trade_plan_*.json`, and `snapshot_*.json` files
+  - targeted regression:
+    `pytest -q tests/test_runtime_cleanup.py tests/test_config.py tests/test_character_context.py tests/test_execution_plan.py -k "clean or parse_cli_args or compact_flag"`
+    -> **8 passed**
+  - live repo cleanup run:
+    `python main.py clean` -> **111 files** and **7 directories** removed
 
 ### Task 0b: Mirror route-profile plan semantics in chain and roundtrip artifacts
 

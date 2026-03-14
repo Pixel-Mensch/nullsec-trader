@@ -11,6 +11,7 @@ functions used across the CLI stack.
 - owns `parse_cli_args()` and `parse_isk()`
 - provides small CLI/input helpers
 - provides basic auth helper generation
+- recognizes maintenance subcommands such as `clean`
 
 ## Inputs
 
@@ -52,7 +53,7 @@ functions used across the CLI stack.
 
 ## Common Change Types
 
-- add CLI flags
+- add CLI flags or small subcommands
 - adjust shared path handling
 - change credential detection rules
 - add small startup helpers

@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 ## Evidence And Limits
 
@@ -51,6 +51,7 @@ import facade used by tests and local tooling.
 Use this section to avoid loading large unrelated modules.
 
 - CLI argument parsing and shared runtime helpers: `runtime_common.py`
+- Safe runtime-artifact cleanup and cache reset: `runtime_cleanup.py`
 - Runtime orchestration, mode selection, replay/live flow, output fan-out:
   `runtime_runner.py`
 - Config loading, validation, overrides, and directory setup: `config_loader.py`
@@ -103,6 +104,17 @@ The main runtime flow is:
 -> `route_search.py`
 -> `execution_plan.py` / `runtime_reports.py`
 -> journal artifacts and report files
+
+Safe clean-start flow:
+
+`main.py clean`
+-> `runtime_common.py`
+-> `runtime_runner.py`
+-> `runtime_cleanup.py`
+-> removes generated root artifacts, transient HTTP/type caches, and Python
+   cache directories
+-> preserves `cache/token.json`, `cache/trade_journal.sqlite3`, and
+   `cache/character_context/`
 
 Journal reconciliation flow:
 
@@ -226,10 +238,13 @@ Confirmed output families from the current docs and entry modules:
 - `execution_plan_<timestamp>.txt`
 - `route_leaderboard_<timestamp>.txt`
 - `roundtrip_plan_<timestamp>.txt`
+- `no_trade_<timestamp>.txt`
 - `*_to_*_<timestamp>.csv`
 - `*_top_candidates_<timestamp>.txt`
 - `trade_plan_<plan_id>.json`
+- `snapshot_<timestamp>.json`
 - `market_snapshot.json`
+- `replay_snapshot.json`
 
 `plan_id` / `pick_id` identity is now intentionally deterministic for identical
 snapshot+input runs. The human-readable text artifacts still keep their own
@@ -241,6 +256,10 @@ Local mutable state:
 - `config.local.json` is local-only and ignored by Git
 - `cache/` holds runtime cache, SSO token/metadata, character profile cache,
   and journal data
+- `runtime_cleanup.py` powers `python main.py clean` and intentionally deletes
+  only generated artifacts plus transient caches (`cache/http_cache.json`,
+  `cache/types.json`, `.pytest_cache`, `__pycache__`) while preserving local
+  auth and journal state
 - `trade_journal.sqlite3` now stores both manual trade events and optional
   wallet-reconciliation summaries on each entry, including wallet-snapshot
   quality fields that keep personal-history output independent from a fresh

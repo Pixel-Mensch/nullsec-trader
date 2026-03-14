@@ -82,6 +82,9 @@ def parse_cli_args(argv: list[str]) -> dict:
         args["command"] = "character"
         args["character_action"] = str(argv[1]).strip().lower() if len(argv) > 1 else "status"
         return args
+    if argv and str(argv[0]).strip().lower() in ("clean", "cleanup"):
+        args["command"] = "clean"
+        return args
     i = 0
     while i < len(argv):
         tok = argv[i]

@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-13
+Last updated: 2026-03-14
 
 ## Snapshot
 
@@ -18,10 +18,12 @@ Reviewed this session:
 
 - `AGENTS.md`
 - `README.md`
+- `.gitignore`
 - `ARCHITECTURE.md`
 - `pyproject.toml`
 - `config.json`
 - `main.py`
+- `runtime_cleanup.py`
 - `runtime_runner.py`
 - `candidate_engine.py`
 - `character_profile.py`
@@ -55,6 +57,7 @@ Reviewed this session:
 - `tests/test_route_search.py`
 - `tests/test_risk_profiles.py`
 - `tests/test_webapp.py`
+- `tests/test_runtime_cleanup.py`
 - current `git status`
 - `python -m pytest -q`
 - focused live CLI run on 2026-03-08 using local overlay config
@@ -78,6 +81,9 @@ Not fully re-audited this session:
 ## Confirmed Implemented Capabilities
 
 - CLI entry path: `main.py` -> `runtime_runner.run_cli()`
+- safe CLI `clean` / `cleanup` mode for removing generated reports, snapshots,
+  transient HTTP/type caches, and Python cache directories while preserving
+  local auth tokens, character cache, and journal state
 - live and replay client support
 - route profile, chain, roundtrip, and snapshot-only modes
 - candidate generation for `instant`, `fast_sell`, and `planned_sell`
@@ -233,6 +239,8 @@ Not fully re-audited this session:
 - `ARCHITECTURE.md` and module naming are strong enough to build a narrow file map
 - hotspot module maps can now live under `docs/module-maps/` to reduce repeat
   source-file loading
+- the repo now has a low-risk clean-start path for report clutter and oversized
+  transient runtime caches
 - project dependencies are minimal in `pyproject.toml`
 - the runtime entry path is clear and non-magical
 - tests are split into targeted modules instead of one giant file
@@ -396,6 +404,10 @@ Files that indicate this focus:
   contain behavior not yet reflected here.
 - `config.local.json` exists locally but is Git-ignored; secret values were not
   inspected.
+- `clean` / `cleanup` is intentionally conservative: it preserves
+  `cache/token.json`, `cache/trade_journal.sqlite3`, and
+  `cache/character_context/` rather than doing a full local identity/history
+  reset.
 - Always check `git status --short` before editing. This repository often has
   in-flight work on core runtime and journal modules.
 

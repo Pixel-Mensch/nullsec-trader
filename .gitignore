@@ -28,3 +28,7 @@ replay_snapshot.json
 *_chain_summary_*.txt
 execution_plan_*.txt
 route_leaderboard_*.txt
+roundtrip_plan_*.txt
+no_trade_*.txt
+trade_plan_*.json
+snapshot_*.json

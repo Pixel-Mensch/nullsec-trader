@@ -10,6 +10,7 @@ not a full line-by-line review.
 
 - owns `run_cli()` and the top-level runtime path
 - coordinates route, route-wide, chain, and snapshot-only execution
+- dispatches the safe clean-start maintenance path
 - wires profiles, calibration, reporting, and plan artifacts together
 - applies the opt-in personal-history layer after generic calibration
 - attaches character/personal-history metadata and explainability to runtime results
@@ -56,6 +57,7 @@ not a full line-by-line review.
 ## Depends On
 
 - `runtime_common.py`
+- `runtime_cleanup.py`
 - `config_loader.py`
 - `runtime_clients.py`
 - `candidate_engine.py`
