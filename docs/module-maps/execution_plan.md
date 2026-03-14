@@ -12,6 +12,8 @@ This map is based on focused output and test inspection, not a full audit.
 - categorizes picks and generates warnings
 - handles compact/detail output differences
 - renders compact character/history metadata in the plan header
+- can render a compact top-of-plan actionable buy block for profiles that ask
+  for one
 - renders applied personal-layer scope/effect lines when a route actually used them
 - distinguishes per-route actionable summaries from aggregate-alternative totals
 - surfaces internal-route operational floor notes and suppressed low-profit routes
@@ -27,6 +29,8 @@ This map is based on focused output and test inspection, not a full audit.
   logistics, and visible ansiblex travel legs
 - can render compact candidate-node summaries when runtime metadata marks a
   start/end/corridor hit for a configured watch node
+- can render protected-budget metadata such as spendable budget and held-back
+  reserve when runtime metadata provides it
 
 ## Inputs
 
@@ -75,6 +79,8 @@ This map is based on focused output and test inspection, not a full audit.
 - add or adjust warnings
 - change compact/detail behavior
 - surface new route or profile metadata
+- keep any profile-specific compact summary honest and actionable instead of
+  duplicating the whole plan in a second format
 - surface personal-layer state and explainability without inventing business logic
 - keep "best actionable route" vs "aggregate alternatives" semantics honest
 - keep internal-route floor messaging scoped to real internal routes only

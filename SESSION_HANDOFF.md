@@ -1,102 +1,93 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 31 imperium candidate nodes)
+Date: 2026-03-14 (session 32 small wallet hub safe)
 Branch: `dev`
 
 ## Completed This Session
 
-Implemented a small config-driven candidate-node seam for Imperium watch
-systems without turning them into hardcoded trade hubs or altering route-search
-scoring.
+Implemented a new conservative profile `small_wallet_hub_safe` for small-wallet
+nullsec trading with protected reserve liquidity, harsh final liquidity /
+market-quality gates, and a compact `SAFE BUYS TODAY` execution-plan summary.
 
 ## Root Cause
 
-- the project had no clean place to track "watch this system later" nodes
-  separately from real stations, player-market candidates, or pure corridor
-  checkpoints
-- that forced either silence or overly strong assumptions in code and docs
-- the new Ansiblex/corridor output path already had a good presentation seam,
-  so the right fix was a small display-only metadata layer, not another scoring
-  heuristic
+- existing profiles covered generic conservative behavior but not the specific
+  small-wallet operating model: keep reserve liquid, avoid capital lock, cap
+  per-item exposure hard, and only show a short safe-buy list for today
+- the runtime already had a clean risk-profile seam and a compact shopping-list
+  seam, so the right fix was to extend those seams instead of inventing a new
+  mode-specific runner or report type
 
 ## What Changed
 
-- `candidate_nodes.py`
-  - added a small config-driven helper for `station_candidate`,
-    `market_candidate`, and `corridor_checkpoint`
-  - resolves enabled nodes, normalizes labels/aliases, and annotates routes
-    when a configured node is matched at route start, route end, or along the
-    corridor path
-- `config.json`
-  - added a default `candidate_nodes` block for:
-    `1DQ1-A`, `YZ-LQL`, `319-3D`, `PR-8CA`, `FWST-8`, `KFIE-Z`,
-    and `RE-C26`
-  - the first six are loaded cautiously as `market_candidate`
-  - `RE-C26` is loaded only as `corridor_checkpoint`
-- `config_loader.py`
-  - added validation for `candidate_nodes.enabled`, node lists, labels,
-    aliases, and valid kinds
+- `risk_profiles.py`
+  - added built-in profile `small_wallet_hub_safe`
+  - added optional final pick gates for sell-time, liquidity, market quality,
+    manipulation risk, and profit/spend
+  - added `resolve_profile_budget_window()` for protected reserve handling
 - `runtime_runner.py`
-  - attaches candidate-node annotations to final route results as display-only
-    metadata
+  - applies the profile reserve before route planning and attaches the budget
+    reserve metadata to route results
+  - extends profile rejection metrics / prune-reason mapping for the stricter
+    final gates
 - `execution_plan.py`
-  - renders a compact candidate-node summary when present
-- `journal_models.py`
-  - persists candidate-node metadata into `trade_plan_*.json`
-- `webapp/services/analysis_service.py`, `webapp/templates/results.html`
-  - surface the same compact candidate-node summary in browser results
-- `tests/test_candidate_nodes.py`, `tests/test_config.py`,
-  `tests/test_execution_plan.py`, `tests/test_webapp.py`
-  - added focused regression for config parsing, RE-C26 classification, and
-    plan/browser rendering
+  - adds `SAFE BUYS TODAY` to the top of plans when the active profile requests
+    it
+  - fixes internal-route near-miss floor rendering for explicit
+    `internal_route_profit_below_operational_floor` rejections
+- `config_loader.py`
+  - validates `risk_profile.name` against the built-in profile registry
+- `no_trade.py`
+  - carries `transport_mode` through near-miss records for report parity
+- `nullsectrader.py`
+  - re-exports the new risk-profile budget helper for test/tool parity
+- `tests/test_risk_profiles.py`, `tests/test_config.py`,
+  `tests/test_execution_plan.py`, `tests/test_runtime_runner.py`
+  - added focused coverage for the new profile, reserve-budget math,
+    safe-buy output, config validation, and new prune buckets
 
 ## Tests And Verification
 
-- `python -m pytest -q tests/test_candidate_nodes.py tests/test_config.py tests/test_execution_plan.py tests/test_webapp.py`
-  - **118 passed**
-- `python -m pytest -q tests/test_candidate_nodes.py tests/test_config.py tests/test_route_search.py tests/test_runtime_runner.py tests/test_shipping.py tests/test_execution_plan.py tests/test_webapp.py`
-  - **181 passed**
+- `python -m pytest -q tests/test_risk_profiles.py tests/test_config.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_webapp.py`
+  - **195 passed**
+- `python -m pytest -q tests/test_no_trade.py tests/test_execution_plan.py`
+  - **108 passed**
 - `python scripts/quality_check.py`
-  - **199 passed**
+  - **203 passed**
 
 ## Remaining Limits
 
-- candidate nodes are intentionally descriptive only in this block; they do not
-  fetch markets, add new route pairs, or create hub scoring
-- no default node in this block is promoted to `station_candidate`; that type
-  now exists as a clean config category, but the shipped Imperium watch list
-  stays cautious
-- `RE-C26` is intentionally only a routing/corridor watch node in the default
-  config
+- `small_wallet_hub_safe` currently protects reserve liquidity by shrinking the
+  spendable planning budget; it does not yet show separate reserve handling in
+  every non-route-profile artifact
+- the reserve floor intentionally soft-caps itself at 50% of budget on very
+  small wallets so the profile still leaves some deployable capital
+- the mode strongly prefers direct exits by blocking planned sells and
+  hard-gating final picks, but it still relies on the existing hub / market
+  evidence already modeled elsewhere in the runtime
 
 ## Next Recommended Task
 
-If a future session wants to promote any watch node into real market or station
-logic, do that only with explicit operator intent or verified data, not by
-overloading the descriptive candidate-node list.
+Add one narrow CLI smoke test that proves `--profile small_wallet_hub_safe`
+parses and reaches the runtime path without needing a full market-data run.
 
 ## Files Touched
 
-- `candidate_nodes.py`
-- `config.json`
-- `config_loader.py`
+- `risk_profiles.py`
 - `runtime_runner.py`
 - `execution_plan.py`
-- `journal_models.py`
-- `webapp/services/analysis_service.py`
-- `webapp/templates/results.html`
+- `config_loader.py`
+- `no_trade.py`
 - `nullsectrader.py`
-- `tests/test_candidate_nodes.py`
 - `tests/test_config.py`
+- `tests/test_risk_profiles.py`
 - `tests/test_execution_plan.py`
-- `tests/test_webapp.py`
-- `scripts/quality_check.py`
+- `tests/test_runtime_runner.py`
 - `README.md`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
 - `ARCHITECTURE.md`
 - `SESSION_HANDOFF.md`
-- `docs/module-maps/candidate_nodes.md`
-- `docs/module-maps/runtime_runner.md`
+- `docs/module-maps/risk_profiles.md`
 - `docs/module-maps/execution_plan.md`
-- `docs/module-maps/webapp.md`
+- `docs/module-maps/runtime_runner.md`

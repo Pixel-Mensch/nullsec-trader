@@ -1,12 +1,41 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 31 imperium candidate nodes)
+Last updated: 2026-03-14 (session 32 small wallet hub safe)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0l: Add a small-wallet conservative hub-safe profile
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `risk_profiles.py`, `runtime_runner.py`,
+  `execution_plan.py`, `config_loader.py`, `no_trade.py`, `tests/`
+- What was done:
+  - added built-in profile `small_wallet_hub_safe` for low-downside
+    nullsec-to-hub trading with direct exits, harsh liquidity / market-quality
+    gates, small per-item exposure, and shorter sell-time tolerance
+  - added reserve-budget handling so this profile keeps part of the budget
+    liquid before route planning instead of merely warning about concentration
+  - added a compact `SAFE BUYS TODAY` section to execution plans for this
+    profile so the operator gets a short actionable buy list first
+  - tightened config validation for `risk_profile.name`
+  - fixed adjacent no-trade near-miss rendering so internal-route floor
+    metadata is shown whenever the near miss is explicitly an internal-floor
+    rejection
+  - focused regression:
+    `python -m pytest -q tests/test_risk_profiles.py tests/test_config.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_webapp.py`
+    -> **195 passed**
+  - adjacent regression:
+    `python -m pytest -q tests/test_no_trade.py tests/test_execution_plan.py`
+    -> **108 passed**
+  - quality path:
+    `python scripts/quality_check.py`
+    -> **203 passed**
 
 ### Task 0k: Add config-driven Imperium candidate nodes without hardcoded hub claims
 
@@ -388,7 +417,8 @@ full backlog scrape.
   `tests/`, `test_nullsectrader.py`
 - Expected result: one narrow automated test or smoke-test script confirms that
   the CLI can parse profile flags and reach the expected runtime path without
-  requiring a broad end-to-end environment.
+  requiring a broad end-to-end environment, including newer profiles such as
+  `small_wallet_hub_safe`.
 
 ### Task 3b: Stop falsely blocking profitable internal nullsec routes
 

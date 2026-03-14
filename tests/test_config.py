@@ -110,6 +110,13 @@ def test_validate_config_rejects_invalid_mode() -> None:
     assert any("filters_forward.mode must be one of" in str(e) for e in vr.get("errors", []))
 
 
+def test_validate_config_rejects_unknown_risk_profile_name() -> None:
+    cfg = _minimal_valid_config()
+    cfg["risk_profile"] = {"name": "imaginary_profile"}
+    vr = nst.validate_config(cfg)
+    assert any("risk_profile.name must be one of" in str(e) for e in vr.get("errors", []))
+
+
 def test_validate_config_rejects_negative_internal_self_haul_profit_floor() -> None:
     cfg = _minimal_valid_config()
     cfg["route_search"] = {"internal_self_haul_min_expected_profit_isk": -1}

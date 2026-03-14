@@ -202,6 +202,7 @@ _EXPORTS = {
     "filter_picks_by_profile": _risk_profiles.filter_picks_by_profile,
     "profile_header_lines": _risk_profiles.profile_header_lines,
     "profile_restrictions_summary": _risk_profiles.profile_restrictions_summary,
+    "resolve_profile_budget_window": _risk_profiles.resolve_profile_budget_window,
     "resolve_active_profile": _risk_profiles.resolve_active_profile,
     "_parse_route_pair_token": _route_search._parse_route_pair_token,
     "_resolve_allowed_route_pair_lane_overrides": _route_search._resolve_allowed_route_pair_lane_overrides,

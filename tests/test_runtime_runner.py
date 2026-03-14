@@ -86,6 +86,14 @@ def test_prune_reason_bucket_maps_budget_rule() -> None:
     assert nst._prune_reason_bucket("profile_max_item_share_of_budget") == "candidates_failed_budget_rule"
 
 
+def test_prune_reason_bucket_maps_small_wallet_quality_rule() -> None:
+    assert nst._prune_reason_bucket("profile_min_market_quality_score") == "candidates_failed_fill_probability"
+
+
+def test_prune_reason_bucket_maps_small_wallet_sell_time_rule() -> None:
+    assert nst._prune_reason_bucket("profile_max_expected_days_to_sell") == "candidates_failed_sell_time"
+
+
 def test_derive_route_prune_reason_prefers_invalid_volume_bucket() -> None:
     result = {
         "picks": [],

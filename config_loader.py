@@ -647,9 +647,24 @@ def validate_config(cfg: dict) -> dict:
         err("config root must be an object")
         return result
 
+    from risk_profiles import BUILTIN_PROFILES
+
     for key in ("esi", "fees", "structures", "locations", "structure_regions", "filters_forward", "filters_return", "route_chain", "defaults", "diagnostics", "replay", "route_costs", "shipping_lanes", "shipping_defaults", "route_profiles", "route_search", "confidence_calibration", "character_context", "personal_history_policy", "ansiblex", "candidate_nodes"):
         if key in cfg and not isinstance(cfg.get(key), dict):
             err(f"{key} must be an object")
+
+    risk_profile_cfg = cfg.get("risk_profile")
+    if risk_profile_cfg is not None:
+        if isinstance(risk_profile_cfg, str):
+            profile_name = str(risk_profile_cfg).strip().lower()
+            if profile_name and profile_name not in BUILTIN_PROFILES:
+                err(f"risk_profile must be one of: {', '.join(sorted(BUILTIN_PROFILES))}")
+        elif isinstance(risk_profile_cfg, dict):
+            raw_name = str(risk_profile_cfg.get("name", "") or "").strip().lower()
+            if raw_name and raw_name not in BUILTIN_PROFILES:
+                err(f"risk_profile.name must be one of: {', '.join(sorted(BUILTIN_PROFILES))}")
+        else:
+            err("risk_profile must be a string or an object")
 
     esi_cfg = cfg.get("esi", {})
     replay_cfg = cfg.get("replay", {})

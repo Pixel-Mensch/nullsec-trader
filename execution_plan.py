@@ -148,7 +148,8 @@ def _show_profit_basis_block(p: dict) -> bool:
 
 def _internal_route_metadata_applicable(record: dict) -> bool:
     transport_mode = str(record.get("transport_mode", "") or "").strip().lower()
-    if transport_mode != "internal_self_haul":
+    prune_reason = str(record.get("route_prune_reason", record.get("prune_reason", "")) or "").strip().lower()
+    if transport_mode != "internal_self_haul" and prune_reason != "internal_route_profit_below_operational_floor":
         return False
     if float(record.get("operational_profit_floor_isk", 0.0) or 0.0) > 0.0:
         return True
@@ -415,6 +416,94 @@ def _write_shopping_list(lines: list[str], categorized: dict, fmt_isk_de) -> Non
             global_idx += 1
     if not any_picks:
         lines.append("  Keine Picks.")
+    lines.append("")
+
+
+def _pick_profit_to_cost_ratio(p: dict) -> float:
+    cost = float(p.get("cost", 0.0) or 0.0)
+    if cost <= 0.0:
+        return 0.0
+    return float(_pick_displayed_profit(p) / cost)
+
+
+def _best_actionable_entry(route_results: list[dict]) -> tuple[dict | None, dict | None]:
+    actionable_entries = [
+        (leg, summarize_route_for_ranking(leg))
+        for leg in list(route_results or [])
+        if bool(summarize_route_for_ranking(leg).get("actionable", False))
+    ]
+    if not actionable_entries:
+        return None, None
+    best_leg, best_summary = max(
+        actionable_entries,
+        key=lambda entry: (
+            _route_ranking_value(entry[0], "risk_adjusted_expected_profit"),
+            float(entry[1].get("total_expected_realized_profit", 0.0) or 0.0),
+        ),
+    )
+    return best_leg, best_summary
+
+
+def _write_safe_buys_today(
+    lines: list[str],
+    best_leg: dict | None,
+    best_summary: dict | None,
+    profile_params: dict,
+    fmt_isk_de,
+) -> None:
+    limit = int(profile_params.get("safe_buy_today_limit", 0) or 0)
+    if limit <= 0:
+        return
+
+    lines.append("SAFE BUYS TODAY")
+    lines.append("-" * 42)
+    if not best_leg or not best_summary:
+        lines.append("  No route cleared the safe-buy bar today.")
+        lines.append("  Keep the reserve liquid and do not force a trade.")
+        lines.append("")
+        return
+
+    budget_meta = dict(best_leg.get("_profile_budget_meta", {}) or {})
+    reserved_budget = float(budget_meta.get("reserved_budget_isk", 0.0) or 0.0)
+    spendable_budget = float(budget_meta.get("spendable_budget_isk", best_leg.get("budget_total", 0.0)) or 0.0)
+    lines.append(
+        f"  Best Route: {best_leg.get('route_label', '')}  "
+        f"| Route Confidence {float(best_summary.get('route_confidence', 0.0) or 0.0):.2f}"
+    )
+    if reserved_budget > 0.0 or spendable_budget > 0.0:
+        lines.append(
+            f"  Spendable Today: {fmt_isk_de(spendable_budget)}"
+            f"  | Reserve Held Back: {fmt_isk_de(reserved_budget)}"
+        )
+
+    picks = [
+        p
+        for p in sorted(
+            list(best_leg.get("picks", []) or []),
+            key=lambda pick: float(_pick_displayed_profit(pick)),
+            reverse=True,
+        )
+        if _categorize_pick(p) == _CAT_MANDATORY
+    ]
+    if not picks:
+        lines.append("  No pick cleared the safe-buy bar today.")
+        lines.append("  Review optional ideas only if you want to accept more downside.")
+        lines.append("")
+        return
+
+    for idx, pick in enumerate(picks[:limit], start=1):
+        spend = float(pick.get("cost", float(pick.get("buy_avg", 0.0) or 0.0) * int(pick.get("qty", 0) or 0)) or 0.0)
+        lines.append(
+            f"  {idx}. {_fmt_item_name(str(pick.get('name', '?')), width=24)}  "
+            f"qty={int(pick.get('qty', 0) or 0):>8,}  "
+            f"spend {fmt_isk_de(spend)}"
+        )
+        lines.append(
+            f"     route {best_leg.get('route_label', '')}"
+            f"  | max buy {fmt_isk_de(float(pick.get('buy_avg', 0.0) or 0.0))}/unit"
+            f"  | expected profit {fmt_isk_de(_pick_displayed_profit(pick))}"
+            f"  | ROI { _pick_profit_to_cost_ratio(pick):.1%}"
+        )
     lines.append("")
 
 
@@ -748,6 +837,8 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
     lines.append("")
     lines.append("Display:   Corridor order for plan sections; direct legs stay before longer spans, Jita connectors stay separate.")
     lines.append("")
+    best_leg, best_summary = _best_actionable_entry(route_results)
+    _write_safe_buys_today(lines, best_leg, best_summary, active_profile_params, fmt_isk_de)
 
     total_cost = 0.0
     total_revenue = 0.0
@@ -1007,22 +1098,10 @@ def write_execution_plan_profiles(path: str, timestamp: str, route_results: list
         lines.append(SEP)
         lines.append("")
 
-    actionable_entries = [
-        (leg, summarize_route_for_ranking(leg))
-        for leg in list(route_results or [])
-        if bool(summarize_route_for_ranking(leg).get("actionable", False))
-    ]
     lines.append(SEP)
     lines.append("BEST ACTIONABLE ROUTE")
     lines.append(SEP)
-    if actionable_entries:
-        best_leg, best_summary = max(
-            actionable_entries,
-            key=lambda entry: (
-                _route_ranking_value(entry[0], "risk_adjusted_expected_profit"),
-                float(entry[1].get("total_expected_realized_profit", 0.0) or 0.0),
-            ),
-        )
+    if best_leg and best_summary:
         lines.append(f"Route:                         {best_leg.get('route_label', '')}")
         lines.append(f"Budget Used:                   {fmt_isk_de(float(best_leg.get('isk_used', 0.0) or 0.0))}")
         lines.append(

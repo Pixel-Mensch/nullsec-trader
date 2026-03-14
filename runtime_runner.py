@@ -846,21 +846,36 @@ def _merge_reason_counts(dst: dict, src: dict) -> None:
 def _profile_rejection_metrics(pick: dict, filters_used: dict, budget_isk: float) -> dict:
     cost = float(pick.get("cost", 0.0) or 0.0)
     budget_total = float(budget_isk or 0.0)
+    expected_profit = float(
+        pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0
+    )
     return {
-        "expected_realized_profit_90d": float(
-            pick.get("expected_realized_profit_90d", pick.get("expected_profit_90d", pick.get("profit", 0.0))) or 0.0
-        ),
+        "expected_realized_profit_90d": expected_profit,
         "expected_realized_profit_per_m3_90d": float(
             pick.get("expected_realized_profit_per_m3_90d", pick.get("expected_profit_per_m3_90d", pick.get("profit_per_m3", 0.0))) or 0.0
         ),
         "decision_overall_confidence": float(
             pick.get("decision_overall_confidence", pick.get("calibrated_overall_confidence", pick.get("overall_confidence", 0.0))) or 0.0
         ),
+        "expected_days_to_sell": float(pick.get("expected_days_to_sell", 0.0) or 0.0),
+        "liquidity_confidence": float(pick.get("liquidity_confidence", pick.get("fill_probability", 0.0)) or 0.0),
+        "market_quality_score": float(
+            pick.get("market_quality_score", pick.get("market_plausibility_score", 1.0)) or 1.0
+        ),
+        "manipulation_risk_score": float(pick.get("manipulation_risk_score", 0.0) or 0.0),
+        "profit_to_cost_ratio": (expected_profit / cost) if cost > 0.0 else 0.0,
         "profile_min_expected_profit_isk": float(filters_used.get("_profile_min_expected_profit_isk", 0.0) or 0.0),
         "profile_min_profit_per_m3": float(
             filters_used.get("_profile_min_profit_density_isk_per_m3", filters_used.get("_profile_min_profit_per_m3", 0.0)) or 0.0
         ),
         "profile_min_confidence": float(filters_used.get("_profile_min_confidence", 0.0) or 0.0),
+        "profile_max_expected_days_to_sell": float(filters_used.get("_profile_max_expected_days_to_sell", 0.0) or 0.0),
+        "profile_min_liquidity_confidence": float(filters_used.get("_profile_min_liquidity_confidence", 0.0) or 0.0),
+        "profile_min_market_quality_score": float(filters_used.get("_profile_min_market_quality_score", 0.0) or 0.0),
+        "profile_max_manipulation_risk_score": float(
+            filters_used.get("_profile_max_manipulation_risk_score", 0.0) or 0.0
+        ),
+        "profile_min_profit_to_cost_ratio": float(filters_used.get("_profile_min_profit_to_cost_ratio", 0.0) or 0.0),
         "profile_max_item_share_of_budget": float(filters_used.get("_profile_max_item_share_of_budget", 0.0) or 0.0),
         "budget_share": (cost / budget_total) if budget_total > 0.0 else 0.0,
     }
@@ -947,6 +962,7 @@ def _prune_reason_bucket(reason: str) -> str:
         "orderbook_min_source_sell_price",
         "profile_min_expected_profit_isk",
         "profile_min_profit_per_m3",
+        "profile_min_profit_to_cost_ratio",
     }:
         return "candidates_below_profit_floor"
     if key in {"profile_min_confidence", "planned_low_confidence"}:
@@ -958,6 +974,9 @@ def _prune_reason_bucket(reason: str) -> str:
         "dest_buy_depth_units",
         "min_depth_units",
         "orderbook_window_units_too_low",
+        "profile_min_liquidity_confidence",
+        "profile_min_market_quality_score",
+        "profile_max_manipulation_risk_score",
     }:
         return "candidates_failed_fill_probability"
     if key in {
@@ -974,6 +993,7 @@ def _prune_reason_bucket(reason: str) -> str:
         "planned_history_order_count",
         "no_history_volume",
         "strict_no_fallback_volume",
+        "profile_max_expected_days_to_sell",
     }:
         return "candidates_failed_sell_time"
     if key in {"invalid_volume"}:
@@ -2160,6 +2180,7 @@ def run_cli() -> None:
         apply_profile_to_portfolio_cfg,
         apply_profile_to_route_result,
         profile_header_lines,
+        resolve_profile_budget_window,
         resolve_active_profile,
     )
     cli_profile = cli.get("profile") or None
@@ -2246,6 +2267,27 @@ def run_cli() -> None:
 
     if cargo_m3 <= 0 or budget_isk <= 0:
         die("Cargo und Budget muessen positiv sein.")
+
+    input_budget_isk = float(budget_isk)
+    spendable_budget_isk, reserved_budget_isk = resolve_profile_budget_window(active_profile_params, input_budget_isk)
+    if spendable_budget_isk <= 0.0:
+        die("Aktives Profil reserviert das komplette Budget. Budget erhoehen oder Profil anpassen.")
+    profile_budget_meta = {
+        "input_budget_isk": float(input_budget_isk),
+        "spendable_budget_isk": float(spendable_budget_isk),
+        "reserved_budget_isk": float(reserved_budget_isk),
+        "reserve_budget_ratio": float(active_profile_params.get("reserve_budget_ratio", 0.0) or 0.0),
+        "reserve_budget_isk_floor": float(active_profile_params.get("reserve_budget_isk", 0.0) or 0.0),
+    }
+    cfg["_profile_budget_meta"] = dict(profile_budget_meta)
+    budget_isk = int(spendable_budget_isk)
+    if reserved_budget_isk > 0.0:
+        print(
+            "Profile Budget Guard: "
+            f"{fmt_isk(reserved_budget_isk)} Reserve bleibt liquid | "
+            f"Spendable heute {fmt_isk(float(budget_isk))} "
+            f"(Input {fmt_isk(input_budget_isk)})"
+        )
 
     character_summary = build_character_context_summary(character_context, budget_isk=budget_isk)
     cfg["_character_context_summary"] = character_summary
@@ -2486,6 +2528,7 @@ def run_cli() -> None:
             apply_profile_to_route_result(active_profile_name, active_profile_params, result)
             result["_active_risk_profile"] = active_profile_name
             result["_active_risk_profile_params"] = dict(active_profile_params)
+            result["_profile_budget_meta"] = dict(profile_budget_meta)
             _attach_runtime_advisories_to_result(result, character_context, personal_calibration_runtime, budget_isk=budget_isk)
             route_results.append(result)
             if "csv_path" in result:

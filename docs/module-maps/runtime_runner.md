@@ -12,9 +12,11 @@ not a full line-by-line review.
 - coordinates route, route-wide, chain, and snapshot-only execution
 - dispatches the safe clean-start maintenance path
 - wires profiles, calibration, reporting, and plan artifacts together
+- applies profile-derived spendable-budget windows before route planning
 - applies the opt-in personal-history layer after generic calibration
 - attaches character/personal-history metadata and explainability to runtime results
 - owns the shared post-build pick-gating seam after transport and calibration
+- carries protected-budget metadata into final route results for output use
 - owns the post-selection route-mix cleanup seam for weak non-mandatory add-ons
 - owns the internal-self-haul operational route floor before artifact emission
 - keeps external routes from carrying misleading internal-route floor metadata
@@ -85,6 +87,8 @@ not a full line-by-line review.
 
 - add or adjust CLI/runtime modes
 - wire new profile, calibration, or ranking behavior into the main flow
+- keep reserve-budget behavior explicit and visible when a profile reduces the
+  spendable budget before planning
 - surface runtime metadata and keep personal-layer effects explicit
 - change artifact generation or route/chain branching
 - tune the weak-tail cleanup seam without weakening candidate-stage anti-bait gates

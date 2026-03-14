@@ -209,6 +209,7 @@ Per CLI-Argument:
 
 ```powershell
 python .\main.py --profile conservative --cargo-m3 10000 --budget-isk 500m
+python .\main.py --profile small_wallet_hub_safe --cargo-m3 12000 --budget-isk 800m --compact
 python .\main.py --profile aggressive
 python .\main.py --profile instant_only
 python .\main.py --profile low_maintenance
@@ -248,6 +249,7 @@ Einzelne Parameter koennen im Config-Block ueberschrieben werden (werden auf das
 | Profil | Beschreibung | planned_sell | Max Items | Max Tage |
 |---|---|---|---|---|
 | `conservative` | Nur liquide Instant-Exits, enge Confidence-Schwellen | blockiert | 20 | 14 |
+| `small_wallet_hub_safe` | Kleine Wallet, direkte Exits, Reserve bleibt frei, harte Book-/Hub-Qualitaet | blockiert | 8 | 7 |
 | `balanced` | Standardverhalten, gemischte Exits (Standard-Profil) | erlaubt | 40 | 45 |
 | `aggressive` | Maximaler Papierprofit, duenne Maerkte toleriert | erlaubt | 100 | 90 |
 | `instant_only` | Kein planned_sell, nur Buy-Order-Exits | blockiert | 50 | 1 |
@@ -258,13 +260,17 @@ Einzelne Parameter koennen im Config-Block ueberschrieben werden (werden auf das
 
 - **Candidate Filter**: `min_fill_probability`, `max_expected_days_to_sell`, `planned_min_liquidity_confidence`, `min_expected_profit_isk`, `min_profit_per_m3`
 - **Portfolio**: `max_item_share_of_budget`, `max_items`, `max_liquidation_days_per_position`
+- **Finale Safety Gates**: Profile koennen nach dem Portfoliobau nochmals auf `liquidity_confidence`, `market_quality_score`, `manipulation_risk_score`, `expected_days_to_sell` und `profit/spend` hart filtern
+- **Reserve Liquidity**: `small_wallet_hub_safe` haelt einen Teil des Budgets als Reserve zurueck und plant nur mit dem spendable Budget
 - **planned_sell-Blockierung**: Profile wie `instant_only`, `conservative` und `low_maintenance` blockieren den planned_sell-Pfad vollstaendig
 - **Route-Ranking**: Jedes Profil gewichtet `stale_market_penalty`, `speculative_penalty`, `concentration_penalty` und `capital_lock_risk` unterschiedlich
-- **Output**: Das aktive Profil und seine Restriktionen erscheinen im Execution Plan Header
+- **Output**: Das aktive Profil und seine Restriktionen erscheinen im Execution Plan Header; `small_wallet_hub_safe` bekommt zusaetzlich einen kompakten `SAFE BUYS TODAY`-Block
 
 #### Beispiel: konservativ vs. aggressiv
 
 Bei denselben Marktdaten:
+
+- `small_wallet_hub_safe` ist noch wallet-schonender: direkte Exits only, 25% Reserve-Liquiditaet (mit 150m ISK Floor wenn das Budget es hergibt), 15% Max Budget/Item und zusaetzliche finale Gates fuer Liquidity, Market Quality und Profit/Spend.
 
 - `conservative` laesst nur Kandidaten mit >= 70% Fill-Probability, max. 14 Tage Verkaufsdauer, min. 5m ISK konservativem Profit durch — und blockiert planned_sell.
 - `aggressive` akzeptiert bereits 10% Fill-Probability, bis zu 90 Tage, keine ISK-Untergrenze und erlaubt speculative Exits.
@@ -574,6 +580,7 @@ Im Route-Profile- und Chain-Pfad schreibt das Tool ein `execution_plan_<timestam
 
 Pro Route werden unter anderem ausgegeben:
 
+- fuer `small_wallet_hub_safe` zusaetzlich ein kompakter `SAFE BUYS TODAY`-Block am Anfang: beste sichere Route, spendable Budget heute, geschuetzte Reserve und nur die saubersten Mandatory-Picks
 - Buy-/Sell-Ort
 - `Exit Type`
 - `Total Expected Realized Profit`

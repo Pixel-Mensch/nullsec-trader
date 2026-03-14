@@ -1,6 +1,6 @@
 # Architecture
 
-Last updated: 2026-03-14 (session 31 imperium candidate nodes)
+Last updated: 2026-03-14 (session 32 small wallet hub safe)
 
 ## Evidence And Limits
 
@@ -207,7 +207,13 @@ transport and confidence calibration:
 - `risk_profiles.filter_picks_by_profile()` is applied to final picks in both
   `run_route()` and `run_route_wide_leg()`
 - that shared seam is responsible for hard pick-level profile enforcement
-  (expected profit, profit density, confidence, and max budget share)
+  (expected profit, profit density, confidence, max budget share, and now also
+  optional sell-time / liquidity / market-quality / manipulation-risk /
+  profit-spend gates for stricter profiles)
+- before route planning starts, `runtime_runner.py` can now also apply a
+  profile-owned spendable-budget window from `risk_profiles.py` so a profile
+  such as `small_wallet_hub_safe` keeps reserve liquidity out of the planned
+  portfolio entirely instead of only warning after the fact
 - after that, `runtime_runner.py` can apply a narrow post-selection route-mix
   cleanup that removes clearly weak optional/speculative add-ons when route
   confidence / market quality recover materially and the route score stays
@@ -249,6 +255,9 @@ Trade quality now has one central seam instead of separate ad-hoc penalties:
   PRICE-SENS / materially repriced picks show the quote basis, visible-book
   profit proxy, conservative executable profit proxy, retention, and the
   displayed profit basis actually used in the plan
+- profiles may now also drive a compact top-of-plan actionable summary:
+  `small_wallet_hub_safe` uses a `SAFE BUYS TODAY` block with the best route,
+  spendable budget, protected reserve, and mandatory picks only
 - internal-route operational floor metadata is now presentation-scoped to
   `internal_self_haul` routes instead of any route result that merely carried a
   floor value
@@ -344,7 +353,8 @@ same script instead of a separate drifting command set.
 
 Most recent focused work on 2026-03-13 touched:
 
-- risk profiles and profile-aware ranking/output
+- risk profiles and profile-aware ranking/output, especially the new
+  small-wallet safe profile
 - replay-based market-quality calibration against focused execution-plan and
   top-candidate artifacts
 - post-selection route-mix cleanup for weak optional/speculative add-ons

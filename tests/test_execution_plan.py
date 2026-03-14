@@ -29,6 +29,7 @@ from execution_plan import (
     _write_route_trip_summary,
     write_execution_plan_profiles,
 )
+from risk_profiles import BUILTIN_PROFILES
 from runtime_common import parse_cli_args
 
 
@@ -597,6 +598,22 @@ class TestWriteExecutionPlanProfiles:
         }
         content = self._write_and_read([result])
         assert "Resolved runtime override" in content
+
+    def test_small_wallet_profile_writes_safe_buys_today_section(self):
+        result = _make_route_result(picks=[_instant_pick(name="Clean Hub Pick"), _planned_pick(name="Slow Exit")])
+        result["_active_risk_profile"] = "small_wallet_hub_safe"
+        result["_active_risk_profile_params"] = dict(BUILTIN_PROFILES["small_wallet_hub_safe"])
+        result["_profile_budget_meta"] = {
+            "input_budget_isk": 500_000_000.0,
+            "spendable_budget_isk": 350_000_000.0,
+            "reserved_budget_isk": 150_000_000.0,
+        }
+        content = self._write_and_read([result], compact_mode=True)
+        assert "SAFE BUYS TODAY" in content
+        assert "Spendable Today:" in content
+        assert "Reserve Held Back:" in content
+        assert "Clean Hub Pick" in content
+        assert "ROI" in content
 
     def test_character_summary_shown_in_header(self):
         result = _make_route_result()

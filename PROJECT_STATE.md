@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 31 imperium candidate nodes)
+Last updated: 2026-03-14 (session 32 small wallet hub safe)
 
 ## Snapshot
 
@@ -222,9 +222,18 @@ Not fully re-audited this session:
 - local journal initialization now migrates older `trade_journal.sqlite3`
   schemas before creating reconciliation-related indexes, so existing caches do
   not break dashboard or journal pages after schema expansion
-- configurable risk profiles (6 built-in) with end-to-end enforcement in
+- configurable risk profiles (7 built-in) with end-to-end enforcement in
   `runtime_runner.py`: candidate filter, min_profit_per_m3 gate,
   min_confidence gate, portfolio config, and route score multiplier
+- new conservative profile `small_wallet_hub_safe` for sub-1B wallet work:
+  blocks planned exits, keeps reserve liquidity back before planning, caps
+  per-item exposure harder, and adds final pick gates for liquidity,
+  market-quality, manipulation risk, sell-time, and profit/spend efficiency
+- execution plans for `small_wallet_hub_safe` now start with a compact
+  `SAFE BUYS TODAY` block that names the best safe route, spendable budget,
+  held-back reserve, and the few mandatory picks worth buying now
+- config validation now rejects unknown `risk_profile.name` values instead of
+  silently falling back on typos in local config
 - route-profile pick filtering is now shared across `run_route()` and
   `run_route_wide_leg()`: pick-level expected profit, profit density,
   confidence, and max-budget-share rules are enforced after final transport and
@@ -334,6 +343,8 @@ Observed worktree activity on 2026-03-13 suggests current feature work is
 centered on:
 
 - hard pick-level profile enforcement and explainable prune reasons
+- small-wallet conservative mode behavior through the existing risk-profile
+  and execution-plan seams
 - route-ranking adjustments by profile
 - replay-based calibration of market-quality and anti-bait thresholds
 - post-selection route-mix cleanup for weak optional/speculative add-ons
@@ -430,6 +441,9 @@ Files that indicate this focus:
   `route_search.py` intentionally caps by average pick market quality across
   the whole selected route mix. That behavior was left unchanged in this
   session.
+- `small_wallet_hub_safe` reserve protection currently soft-caps the absolute
+  reserve floor at 50% of the available budget so very small wallets still
+  keep some spendable capital. That cap is deliberate but still heuristic.
 - a narrow post-selection route-mix cleanup seam now exists, but the current
   narrow `replay_snapshot.json` rerun did not previously produce a live removal
   after the latest market-quality calibration; the cleanup is now slightly more
