@@ -52,6 +52,12 @@ body.page-analysis {
   margin-bottom: 28px;
 }
 
+.header-meta {
+  display: grid;
+  gap: 14px;
+  justify-items: end;
+}
+
 .site-header h1 {
   margin: 0;
   font-size: clamp(2rem, 4vw, 2.8rem);
@@ -140,7 +146,8 @@ body.page-analysis {
 .hero-card,
 .panel,
 .info-card,
-.route-card {
+.route-card,
+.character-switcher {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 24px;
@@ -161,6 +168,20 @@ body.page-analysis {
 .hero-copy,
 .muted {
   color: var(--muted);
+}
+
+.character-switcher {
+  display: grid;
+  gap: 12px;
+  min-width: min(100%, 420px);
+  padding: 18px 20px;
+  background: rgba(9, 15, 25, 0.78);
+}
+
+.switcher-title {
+  margin: 0 0 6px;
+  font-size: 1.05rem;
+  font-weight: 700;
 }
 
 .hero-actions,
@@ -275,9 +296,48 @@ details {
   margin: 0 0 6px;
 }
 
+.row-list {
+  display: grid;
+  gap: 12px;
+}
+
+.row-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(7, 12, 21, 0.65);
+}
+
+.row-item-main {
+  display: grid;
+  gap: 6px;
+}
+
+.row-item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
 .analysis-form {
   display: grid;
   gap: 14px;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.inline-form select {
+  min-width: min(100%, 240px);
 }
 
 .analysis-form label {
@@ -433,6 +493,18 @@ summary {
   color: #7ce5a8;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ── Analysis loading overlay ── */
 .run-overlay {
   display: none;
@@ -493,5 +565,9 @@ summary {
   .hero-card {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .header-meta {
+    justify-items: stretch;
   }
 }

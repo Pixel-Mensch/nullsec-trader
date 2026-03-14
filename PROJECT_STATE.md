@@ -1,6 +1,6 @@
 # Project State
 
-Last updated: 2026-03-14 (session 32 small wallet hub safe)
+Last updated: 2026-03-14 (session 33 web active character seam)
 
 ## Snapshot
 
@@ -35,7 +35,12 @@ Reviewed this session:
 - `webapp/services/dashboard_service.py`
 - `webapp/services/journal_service.py`
 - `webapp/services/character_service.py`
+- `webapp/services/active_character_service.py`
 - `webapp/services/runtime_bridge.py`
+- `webapp/templates/base.html`
+- `webapp/templates/analysis.html`
+- `webapp/templates/journal.html`
+- `webapp/templates/character.html`
 - `webapp/templates/results.html`
 - `journal_reconciliation.py`
 - `journal_store.py`
@@ -50,6 +55,7 @@ Reviewed this session:
 - `tests/test_character_context.py`
 - `tests/test_integration.py`
 - `tests/test_journal.py`
+- `tests/test_active_character_service.py`
 - `tests/test_journal_reconciliation.py`
 - `tests/test_eve_sso.py`
 - `tests/test_execution_plan.py`
@@ -197,10 +203,11 @@ Not fully re-audited this session:
 - execution plans, browser results, and `trade_plan_*.json` now surface those
   internal travel fields so ansiblex usage is visible without inventing a
   second ranking model
-- the repo now also has a small config-driven candidate-node seam for Imperium
-  watch systems: `station_candidate`, `market_candidate`, and
-  `corridor_checkpoint` stay distinct instead of implicitly treating every
-  named system as a real station market
+- the repo has a small config-driven candidate-node seam: `station_candidate`,
+  `market_candidate`, and `corridor_checkpoint` stay distinct instead of
+  implicitly treating every named system as a real station market; the default
+  `nodes` list in `config.json` is intentionally empty — nodes must be manually
+  verified and added by the operator before use
 - candidate-node hits are display-only metadata on routes; execution plans,
   browser results, and `trade_plan_*.json` can now show when a route starts,
   ends, or passes through such a configured node
@@ -232,6 +239,20 @@ Not fully re-audited this session:
 - execution plans for `small_wallet_hub_safe` now start with a compact
   `SAFE BUYS TODAY` block that names the best safe route, spendable budget,
   held-back reserve, and the few mandatory picks worth buying now
+- the local web UI now has a global active-character switcher that keeps a
+  small single-user registry of locally seen characters and activates one by
+  copying that character's saved token/profile into the existing runtime
+  active paths instead of inventing a second character-selection stack
+- browser analysis runs now explicitly state which active character slot is
+  used; subsequent runtime calls still flow through the same CLI/runtime seam
+  and therefore really use that selected character basis
+- the web journal now follows the same active character slot and shows cached
+  sell-order exposure for that active character, matched against local journal
+  entries by item type where data exists
+- `trade_plan_*.json` now falls back to derived route/transport confidence
+  values when those fields are absent or zero on a route record, keeping the
+  manifest/browser path aligned with execution-plan and leaderboard confidence
+  output for the same actionable route
 - config validation now rejects unknown `risk_profile.name` values instead of
   silently falling back on typos in local config
 - route-profile pick filtering is now shared across `run_route()` and
@@ -339,7 +360,7 @@ Not fully re-audited this session:
 
 ## Current Focus
 
-Observed worktree activity on 2026-03-13 suggests current feature work is
+Observed worktree activity on 2026-03-14 suggests current feature work is
 centered on:
 
 - hard pick-level profile enforcement and explainable prune reasons
@@ -364,6 +385,9 @@ centered on:
 - a first local browser UI over the existing runtime and journal workflows
 - local browser hardening plus corridor-ordered route presentation near the
   web entry and execution-plan path
+- active-character switching in the local web UI so analysis and journal views
+  can pivot between locally saved single-user character slots without changing
+  the CLI/runtime architecture
 - additive internal travel realism for `internal_self_haul` routes through a
   small directed ansiblex layer and more transparent route/output travel
   metadata
@@ -426,10 +450,10 @@ Files that indicate this focus:
 - candidate nodes are intentionally descriptive only in this block: they do not
   fetch markets, create routes, or turn a system into a location/structure by
   themselves
-- the default candidate-node block is intentionally cautious: the current
-  Imperium watch list is preloaded as `market_candidate` or
-  `corridor_checkpoint`; no default node in this block is hardcoded as a real
-  `station_candidate`
+- the default candidate-node block is intentionally empty: no system is
+  preloaded; only manually verified, clearly blue nodes may be added by the
+  operator — NPC space, neutral, or unverified systems must not appear as
+  defaults
 - replay calibration used the focused O4T/Jita fixture plus a narrow
   `replay_snapshot.json` route search. Those checks confirmed that prior bait
   picks such as `Large Warhead Calefaction Catalyst II`, `IFFA Compact Damage
@@ -462,9 +486,17 @@ Files that indicate this focus:
 - Character context is optional by design. Live sync now falls back to cache or
   generic defaults, but order exposure is currently surfaced as a diagnostic
   signal only, not a route-ranking penalty.
+- the new web active-character seam is intentionally local and single-user:
+  it persists saved character slots under `cache/character_context/` and
+  switches by replacing the existing active token/profile files. It is not a
+  multi-user/session model and does not arbitrate concurrent operators.
 - Journal reconciliation is also optional by design. Without wallet data, the
   manual journal remains usable and reconciliation does not persist empty
   results over existing entries.
+- the new journal sell-order block is intentionally narrow: it uses the active
+  character's cached open-order snapshot and matches local journal entries by
+  `item_type_id` plus optional `character_id` where present. It does not yet
+  build a deeper order-to-entry linkage model.
 - Wallet reconciliation now exposes snapshot freshness, page coverage, and
   truncation warnings in the journal views. This reduces false confidence, but
   does not create a historical backfill system.
@@ -485,6 +517,11 @@ Files that indicate this focus:
   exposed by `runtime_runner.py`.
 - Browser analysis no longer depends on heartbeat semantics; the local web app
   stays alive until it is stopped explicitly.
+- the focused live run on 2026-03-14 wrote `replay_snapshot.json` quickly but
+  did not finish after more than 20 minutes, while replay on that fresh
+  snapshot completed quickly. That makes it reasonably likely that the current
+  slow path sits after snapshot creation in the live path, but this was not yet
+  fully localized in code.
 - The local journal remains plan-centric by design: overview/open/closed/report/
   personal/calibration still depend on imported or recorded journal entries.
   The web UI now makes that clearer by showing character snapshot counts and by

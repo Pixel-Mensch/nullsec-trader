@@ -45,6 +45,23 @@ def _safe_ratio(numerator: float, denominator: float, default: float = 0.0) -> f
     return float(numerator) / float(denominator)
 
 
+def _route_confidence_value(route: dict, key: str, fallback: float) -> float:
+    try:
+        value = float(route.get(key, fallback) or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    fallback_value = float(fallback or 0.0)
+    if value <= 0.0 and fallback_value > 0.0:
+        return fallback_value
+    return value
+
+
+def _summarize_route_for_manifest(route: dict) -> dict:
+    from route_search import summarize_route_for_ranking
+
+    return summarize_route_for_ranking(route)
+
+
 def make_run_id(timestamp: str | None = None, stable_suffix_source: str | None = None) -> str:
     base = str(timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")).strip() or "run"
     safe_base = "".join(ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in base)
@@ -179,6 +196,7 @@ def build_trade_plan_manifest(
     for route in list(route_results or []):
         if not isinstance(route, dict):
             continue
+        route_summary = _summarize_route_for_manifest(route)
         source_location_id = _node_location_id(route.get("source_node_info"))
         target_location_id = _node_location_id(route.get("dest_node_info"))
         character_summary = route.get("_character_context_summary", {})
@@ -279,17 +297,31 @@ def build_trade_plan_manifest(
                 "route_label": str(route.get("route_label", "") or ""),
                 "source_market": str(route.get("source_label", "") or ""),
                 "target_market": str(route.get("dest_label", "") or ""),
-                "route_confidence": float(route.get("route_confidence", 0.0) or 0.0),
-                "raw_route_confidence": float(route.get("raw_route_confidence", route.get("route_confidence", 0.0)) or 0.0),
-                "calibrated_route_confidence": float(
-                    route.get("calibrated_route_confidence", route.get("route_confidence", 0.0)) or 0.0
+                "route_confidence": _route_confidence_value(route, "route_confidence", float(route_summary.get("route_confidence", 0.0) or 0.0)),
+                "raw_route_confidence": _route_confidence_value(
+                    route,
+                    "raw_route_confidence",
+                    float(route_summary.get("raw_route_confidence", route_summary.get("route_confidence", 0.0)) or 0.0),
                 ),
-                "transport_confidence": float(route.get("transport_confidence", 0.0) or 0.0),
-                "raw_transport_confidence": float(
-                    route.get("raw_transport_confidence", route.get("transport_confidence", 0.0)) or 0.0
+                "calibrated_route_confidence": _route_confidence_value(
+                    route,
+                    "calibrated_route_confidence",
+                    float(route_summary.get("calibrated_route_confidence", route_summary.get("route_confidence", 0.0)) or 0.0),
                 ),
-                "calibrated_transport_confidence": float(
-                    route.get("calibrated_transport_confidence", route.get("transport_confidence", 0.0)) or 0.0
+                "transport_confidence": _route_confidence_value(
+                    route,
+                    "transport_confidence",
+                    float(route_summary.get("transport_confidence", 0.0) or 0.0),
+                ),
+                "raw_transport_confidence": _route_confidence_value(
+                    route,
+                    "raw_transport_confidence",
+                    float(route_summary.get("raw_transport_confidence", route_summary.get("transport_confidence", 0.0)) or 0.0),
+                ),
+                "calibrated_transport_confidence": _route_confidence_value(
+                    route,
+                    "calibrated_transport_confidence",
+                    float(route_summary.get("calibrated_transport_confidence", route_summary.get("transport_confidence", 0.0)) or 0.0),
                 ),
                 "capital_lock_risk": float(route.get("capital_lock_risk", 0.0) or 0.0),
                 "calibration_warning": str(route.get("calibration_warning", "") or ""),

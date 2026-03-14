@@ -166,6 +166,19 @@ Aktuelle Seiten:
 - Character
 - Config
 
+Web-Character-Seam:
+
+- im Header gibt es jetzt einen globalen `Active character`-Switcher fuer den
+  privaten Single-User-Betrieb
+- lokal bekannte Characters werden aus bereits gesehenen Token/Profile-Slots
+  angeboten; ein Wechsel kopiert den gewaehlten Token/Profile-Slot in die
+  bestehenden aktiven Runtime-Pfade statt einen zweiten Analysepfad zu bauen
+- neue Analysen, Character-Status und Journal-/Reconcile-Ansichten nutzen
+  damit denselben aktiv gewaehlten Character-Basiszustand
+- die Journal-Seite zeigt zusaetzlich offene Sell-Order-Exponierung des
+  aktiven Characters aus dem gecachten Character-Profil und ordnet sie, soweit
+  lokal moeglich, vorhandenen Journal-Eintraegen nach `item_type_id` zu
+
 Kleine Zugriffssicherung fuer private Deploys:
 
 - ohne gesetztes Web-Passwort ist ausschliesslich direkter localhost-Betrieb
@@ -364,6 +377,8 @@ Artefakte liegen unter dem ohnehin ignorierten `cache/`-Bereich:
 - `cache/character_context/sso_token.json`
 - `cache/character_context/sso_metadata.json`
 - `cache/character_context/character_profile.json`
+- `cache/character_context/saved_characters/`
+- `cache/character_context/web_character_registry.json`
 
 Der Safe-Cleanup ueber `python .\main.py clean` entfernt diese Dateien bewusst
 nicht.
@@ -651,6 +666,10 @@ Je nach Modus entstehen ausserdem:
 - `trade_plan_<plan_id>.json` enthaelt jetzt zusaetzlich Travel-Metadaten fuer
   Gate-/Ansiblex-Legs, geschaetzte Ansiblex-Kosten sowie Profit vor und nach
   Logistik fuer Browser- und Journal-Paritaet
+- `trade_plan_<plan_id>.json` leitet Route-/Transport-Confidence jetzt
+  notfalls aus derselben Route-Summary-Seam wie Leaderboard und Execution Plan
+  ab, damit JSON-/Browser-Ausgabe nicht mit `0.0` neben sinnvollen Textwerten
+  auseinanderlaufen
 - `snapshot_<timestamp>.json` im Snapshot-Only-Modus
 - `market_snapshot.json` als Laufzeit-Snapshot
 - `replay_snapshot.json`, wenn ein Live-Run einen Replay-Snapshot schreibt
@@ -721,6 +740,10 @@ Eine kompakte technische Pfadbeschreibung steht zusaetzlich in [`ARCHITECTURE.md
 - Candidate Nodes sind absichtlich nur konfigurierbare Beobachtungspunkte.
   `market_candidate` oder `corridor_checkpoint` bedeuten nicht automatisch,
   dass dort ein belastbarer Handelsmarkt oder eine echte Station aktiv ist.
+  Die Default-`nodes`-Liste in `config.json` ist bewusst leer — Nodes duerfen
+  erst nach manueller Verifikation durch den Operator eingetragen werden.
+  NPC-Raum-, neutrale oder nicht verifizierte Kandidaten gehoeren nicht in die
+  Defaults.
 - Gebuehren haengen von den in der Config hinterlegten Skills und Markttypen ab. Wenn dein Charakter oder Markt-Setup davon abweicht, driftet das Ergebnis.
 - Open-Order-Exposure wird derzeit als Diagnose/Hinweis ausgegeben, nicht als
   harte Route-Strafe. Das ist bewusst konservativ und vermeidet Heuristik-Muell

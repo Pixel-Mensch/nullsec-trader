@@ -14,6 +14,7 @@ from character_profile import (
 from config_loader import load_config
 from eve_sso import EveSSOAuth
 from runtime_common import TOKEN_PATH
+from webapp.services import active_character_service
 
 
 def _cfg_with_enabled_character_context(cfg: dict) -> dict:
@@ -73,9 +74,29 @@ def _character_summary_view(summary: dict | None) -> dict:
     }
 
 
+def _saved_characters_view(characters: list[dict] | None) -> list[dict]:
+    out: list[dict] = []
+    for raw in list(characters or []):
+        if not isinstance(raw, dict):
+            continue
+        out.append(
+            {
+                "character_id": int(raw.get("character_id", 0) or 0),
+                "character_name": str(raw.get("character_name", "") or ""),
+                "display_name": str(raw.get("display_name", "") or ""),
+                "has_token": bool(raw.get("has_token", False)),
+                "has_profile": bool(raw.get("has_profile", False)),
+                "is_active": bool(raw.get("is_active", False)),
+                "last_seen_at": str(raw.get("last_seen_at", "") or ""),
+            }
+        )
+    return out
+
+
 def get_character_page(*, action_message: str = "", action_error: str = "") -> dict:
     cfg = load_config()
     cfg_for_char = _cfg_with_enabled_character_context(cfg)
+    active_character_service.capture_current_character()
     sso = _build_sso(cfg)
     auth_status = sso.describe_token_status() if sso is not None else {"has_token": False, "valid": False, "scopes": [], "token_path": "", "character_name": "", "character_id": 0}
     context = resolve_character_context(cfg_for_char, replay_enabled=False, allow_live=False)
@@ -88,6 +109,7 @@ def get_character_page(*, action_message: str = "", action_error: str = "") -> d
         "character_status_lines": character_status_lines(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0))),
         "action_message": str(action_message or "").strip(),
         "action_error": str(action_error or "").strip(),
+        "saved_characters": _saved_characters_view(active_character_service.list_known_characters()),
     }
 
 
@@ -131,6 +153,7 @@ def run_auth_action(action: str) -> dict:
             # Mirror the token to TOKEN_PATH so the runtime uses the same character.
             char_cfg = resolve_character_context_cfg(cfg_for_auth)
             _sync_market_token(str(char_cfg.get("token_path", "") or ""))
+            active_character_service.capture_current_character()
         return get_character_page(action_message=f"Auth action '{action}' abgeschlossen.")
     except Exception as exc:
         return get_character_page(action_error=f"Auth action fehlgeschlagen: {exc}")
@@ -142,6 +165,7 @@ def run_character_action(action: str) -> dict:
     try:
         if str(action or "").strip().lower() == "sync":
             context = sync_character_profile(cfg_for_char, allow_login=True)
+            active_character_service.capture_current_character()
             summary = build_character_context_summary(context, budget_isk=((cfg.get("defaults", {}) or {}).get("budget_isk", 0)))
             return {
                 **get_character_page(action_message="Character sync abgeschlossen."),
@@ -152,4 +176,8 @@ def run_character_action(action: str) -> dict:
         return get_character_page(action_message="Character status aktualisiert.")
     except Exception as exc:
         return get_character_page(action_error=f"Character action fehlgeschlagen: {exc}")
+
+
+def activate_character(character_id: int | str) -> dict:
+    return active_character_service.activate_character(character_id)
 

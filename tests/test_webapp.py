@@ -12,6 +12,43 @@ from webapp.routes import pages
 from webapp.services import character_service as character_service_module, config_service as config_service_module, runtime_bridge
 
 
+def _character_switch(current_path: str = "/") -> dict:
+    return {
+        "available": True,
+        "active_character": {
+            "character_id": 90000001,
+            "character_name": "Capsuleer",
+            "display_name": "Capsuleer",
+            "has_token": True,
+            "has_profile": True,
+            "is_active": True,
+            "last_seen_at": "2026-03-14T09:10:47+00:00",
+        },
+        "characters": [
+            {
+                "character_id": 90000001,
+                "character_name": "Capsuleer",
+                "display_name": "Capsuleer",
+                "has_token": True,
+                "has_profile": True,
+                "is_active": True,
+                "last_seen_at": "2026-03-14T09:10:47+00:00",
+            },
+            {
+                "character_id": 90000002,
+                "character_name": "Hauler Alt",
+                "display_name": "Hauler Alt",
+                "has_token": True,
+                "has_profile": True,
+                "is_active": False,
+                "last_seen_at": "2026-03-13T22:00:00+00:00",
+            },
+        ],
+        "return_to": current_path,
+        "basis_note": "Analysis, journal, and reconcile use this active character slot.",
+    }
+
+
 def _dashboard_data() -> dict:
     return {
         "character_summary": {
@@ -262,6 +299,23 @@ def _journal_page(tab: str = "overview") -> dict:
             "wallet_data_freshness": "fresh",
             "wallet_history_quality": "usable",
         },
+        "active_sell_orders": {
+            "available": True,
+            "character_id": 90000001,
+            "character_name": "Capsuleer",
+            "sell_orders": [
+                {
+                    "type_id": 34,
+                    "name": "Tritanium",
+                    "sell_order_count": 3,
+                    "sell_units": 12000,
+                    "sell_gross_isk": 4200000.0,
+                    "location_ids": [60003760],
+                    "journal_match_count": 2,
+                    "active_character_match_count": 1,
+                }
+            ],
+        },
         "empty_notice": "",
     }
 
@@ -280,6 +334,7 @@ def _character_page() -> dict:
         "character_summary": {"character_name": "", "source": "generic"},
         "character_context": {"warnings": ["character context disabled"]},
         "character_status_lines": ["Character context: generic defaults"],
+        "saved_characters": _character_switch()["characters"],
         "action_message": "",
         "action_error": "",
     }
@@ -335,8 +390,10 @@ def _client(monkeypatch) -> TestClient:
     monkeypatch.setattr(pages.journal_service, "get_unmatched_page", lambda limit=20: _journal_page("unmatched"))
     monkeypatch.setattr(pages.character_service, "get_character_page", lambda: _character_page())
     monkeypatch.setattr(pages.character_service, "run_auth_action", lambda action: {**_character_page(), "action_message": f"auth {action}"})
+    monkeypatch.setattr(pages.character_service, "activate_character", lambda character_id: {"ok": True, "character_id": int(character_id), "character_name": "Hauler Alt"})
     monkeypatch.setattr(pages.character_service, "run_character_action", lambda action: {**_character_page(), "action_message": f"character {action}"})
     monkeypatch.setattr(pages.config_service, "get_config_page", lambda: _config_page())
+    monkeypatch.setattr(pages.active_character_service, "get_switcher_context", lambda current_path="/": _character_switch(current_path))
     return TestClient(create_app())
 
 
@@ -356,6 +413,8 @@ def test_analysis_form_renders(monkeypatch) -> None:
     assert 'class="page-analysis"' in response.text
     assert "Run analysis" in response.text
     assert "balanced" in response.text
+    assert "Active basis:" in response.text
+    assert "New runs use this local character token/profile slot." in response.text
 
 
 def test_analysis_run_renders_results(monkeypatch) -> None:
@@ -363,6 +422,7 @@ def test_analysis_run_renders_results(monkeypatch) -> None:
     response = client.post("/analysis/run", data={"budget_isk": "500m", "cargo_m3": "12000", "risk_profile": "balanced"})
     assert response.status_code == 200
     assert "Analysis results" in response.text
+    assert 'name="return_to" value="/analysis"' in response.text
     assert "Corridor O4T outbound" in response.text
     assert "O4T -&gt; R-ARKN" in response.text
     assert "3-leg span" in response.text
@@ -392,6 +452,8 @@ def test_journal_views_render(monkeypatch) -> None:
     assert "Capsuleer" in overview.text
     assert "Open orders" in overview.text
     assert "42 tx" in overview.text
+    assert "Active character sell orders" in overview.text
+    assert "Tritanium" in overview.text
     assert "content for reconcile" in reconcile_get.text
     assert "content for reconcile" in reconcile.text
     assert "content for unmatched" in unmatched.text
@@ -407,8 +469,28 @@ def test_character_page_and_actions_render(monkeypatch) -> None:
     assert sync.status_code == 200
     assert "Character / Auth" in page.text
     assert "character context disabled" in page.text
+    assert "Saved characters" in page.text
     assert "auth status" in auth.text
     assert "character status" in sync.text
+
+
+def test_global_character_switcher_redirects_back_to_page(monkeypatch) -> None:
+    activated: list[int] = []
+
+    def _activate(character_id: str) -> dict:
+        activated.append(int(character_id))
+        return {"ok": True, "character_id": int(character_id), "character_name": "Hauler Alt"}
+
+    client = _client(monkeypatch)
+    monkeypatch.setattr(pages.character_service, "activate_character", _activate)
+    response = client.post(
+        "/character/activate",
+        data={"character_id": "90000002", "return_to": "/journal?tab=overview"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/journal?tab=overview"
+    assert activated == [90000002]
 
 
 def test_config_page_renders(monkeypatch) -> None:
@@ -574,6 +656,8 @@ def test_character_service_omits_raw_config_and_sanitizes_context(monkeypatch) -
     monkeypatch.setattr(character_service_module, "build_character_context_summary", lambda *args, **kwargs: summary)
     monkeypatch.setattr(character_service_module, "character_status_lines", lambda *args, **kwargs: ["Character context: generic defaults"])
     monkeypatch.setattr(character_service_module, "requested_character_scopes", lambda value: ["scope.one"])
+    monkeypatch.setattr(character_service_module.active_character_service, "capture_current_character", lambda: None)
+    monkeypatch.setattr(character_service_module.active_character_service, "list_known_characters", lambda: [])
     page = character_service_module.get_character_page()
     payload = json.dumps(page, ensure_ascii=False)
     assert "config" not in page
@@ -610,6 +694,8 @@ def test_character_sync_action_sanitizes_context(monkeypatch) -> None:
     monkeypatch.setattr(character_service_module, "character_status_lines", lambda *args, **kwargs: ["Character status"])
     monkeypatch.setattr(character_service_module, "requested_character_scopes", lambda value: ["scope.one"])
     monkeypatch.setattr(character_service_module, "sync_character_profile", lambda *args, **kwargs: context)
+    monkeypatch.setattr(character_service_module.active_character_service, "capture_current_character", lambda: None)
+    monkeypatch.setattr(character_service_module.active_character_service, "list_known_characters", lambda: [])
     page = character_service_module.run_character_action("sync")
     payload = json.dumps(page, ensure_ascii=False)
     assert page["character_context"] == {"character_name": "Capsuleer", "source": "live", "warnings": ["sync warning"]}

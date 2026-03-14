@@ -6,6 +6,7 @@
     <p class="eyebrow">Local EVE auth and character cache</p>
     <h2>Character / Auth</h2>
     <p class="hero-copy">Inspect token status, scopes and cached character context. All actions remain local and optional.</p>
+    <p class="muted">The active character switcher is global. Analysis and journal pages use whichever saved character is currently active.</p>
   </div>
 </section>
 
@@ -71,6 +72,40 @@
       {% endfor %}
     </ul>
   </article>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h3>Saved characters</h3>
+  </div>
+  {% if data.saved_characters %}
+  <div class="row-list">
+    {% for item in data.saved_characters %}
+    <article class="row-item">
+      <div class="row-item-main">
+        <strong>{{ item.display_name }}</strong>
+        <span class="muted">Character ID {{ item.character_id }} | Token {% if item.has_token %}yes{% else %}no{% endif %} | Profile {% if item.has_profile %}yes{% else %}no{% endif %}</span>
+        {% if item.last_seen_at %}
+        <span class="muted">Last seen {{ item.last_seen_at }}</span>
+        {% endif %}
+      </div>
+      <div class="row-item-actions">
+        {% if item.is_active %}
+        <span class="pill good">active</span>
+        {% else %}
+        <form method="post" action="/character/activate" class="inline-form">
+          <input type="hidden" name="character_id" value="{{ item.character_id }}">
+          <input type="hidden" name="return_to" value="/character">
+          <button class="button secondary" type="submit">Activate</button>
+        </form>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="muted">No saved characters yet. Log in and sync a character once to make it switchable in the UI.</p>
+  {% endif %}
 </section>
 
 <section class="panel">

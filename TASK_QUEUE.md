@@ -1,12 +1,39 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 32 small wallet hub safe)
+Last updated: 2026-03-14 (session 33 web active character seam)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
 full backlog scrape.
 
 ## P0
+
+### Task 0m: Add a small active-character switch seam to the local web UI
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `webapp/routes/pages.py`, `webapp/services/active_character_service.py`,
+  `webapp/services/character_service.py`, `webapp/services/journal_service.py`,
+  `webapp/templates/`, `journal_models.py`, `tests/`
+- What was done:
+  - added a small single-user active-character registry under the existing
+    character cache area and a global browser switcher that can activate a
+    locally saved character at any time
+  - character activation now replaces the existing active runtime token/profile
+    files, so later analysis runs and journal/reconcile views really use the
+    selected character basis instead of only showing a cosmetic label
+  - the character page now lists saved locally known characters and their local
+    token/profile availability
+  - the journal page now shows active-character sell-order exposure from the
+    cached character profile and matches it against local journal entries by
+    type where data exists
+  - `trade_plan_*.json` now derives route/transport confidence from the same
+    route-summary seam used by leaderboard/text output when those fields are
+    absent on the raw route record
+  - focused regression:
+    `python -m pytest -q tests/test_webapp.py tests/test_active_character_service.py tests/test_journal.py tests/test_runtime_runner.py tests/test_execution_plan.py`
+    -> **118 passed**
 
 ### Task 0l: Add a small-wallet conservative hub-safe profile
 
@@ -49,10 +76,12 @@ full backlog scrape.
 - What was done:
   - added a small `candidate_nodes` config seam with explicit node kinds:
     `station_candidate`, `market_candidate`, and `corridor_checkpoint`
-  - preloaded the requested Imperium watch systems cautiously as configurable
-    candidates instead of silently promoting them into real trade hubs
-  - kept `RE-C26` out of `station_candidate`; it is modeled only as a
-    `corridor_checkpoint`
+  - the mechanism supports `station_candidate`, `market_candidate`, and
+    `corridor_checkpoint` node kinds as configurable watch-node entries
+  - **follow-up (2026-03-14):** all previously preloaded Imperium systems and
+    `RE-C26` removed from the `config.json` defaults; the `nodes` list is now
+    intentionally empty — only manually verified, clearly blue nodes may be
+    added by the operator
   - attached candidate-node hits to route metadata when a route starts, ends,
     or passes through one of those nodes; this is display-only and does not
     change route search or scoring
@@ -269,6 +298,20 @@ full backlog scrape.
   - Full suite: 239 passed.
 
 ## P1
+
+### Task 1a: Localize the post-snapshot slow live-run path
+
+- Priority: P1
+- Status: TODO
+- Relevant files: `runtime_runner.py`, `runtime_clients.py`, `market_fetch.py`,
+  `cache/http_cache.json`, `cache/types.json`
+- Expected result:
+  - determine which live-only step still runs for a long time after
+    `replay_snapshot.json` has already been written
+  - confirm whether the stall is cache/type enrichment, remaining fetch work,
+    or later post-fetch runtime processing
+  - keep this diagnostic narrow; no broad performance rewrite unless the hot
+    path is clearly identified
 
 ### Task 0i: Tighten private web deploy semantics and sensitive-page minimization
 
@@ -669,7 +712,8 @@ full backlog scrape.
   `route_search.py`, `README.md`
 - Expected result: only promote a configured watch node into real location or
   structure logic when verified data or an explicit operator decision exists;
-  keep the default watch-node list descriptive until then.
+  the default `nodes` list is already empty — this task covers the decision of
+  which verified nodes to promote into real station/location treatment.
 
 ### Task 7c: Keep local journal schema migration robust for UI and CLI entry points
 

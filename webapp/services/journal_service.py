@@ -100,11 +100,58 @@ def _empty_journal_notice(entry_count: int, character_summary: dict) -> str:
     )
 
 
+def _active_sell_orders(entries: list[dict], context: dict, *, limit: int = 8) -> dict:
+    profile = context.get("profile", {}) if isinstance(context.get("profile", {}), dict) else {}
+    orders_snapshot = profile.get("open_orders_snapshot", {}) if isinstance(profile.get("open_orders_snapshot", {}), dict) else {}
+    top_types = list(orders_snapshot.get("top_types", []) or [])
+    if not top_types:
+        top_types = list((orders_snapshot.get("by_type", {}) or {}).values())
+    character_id = int(context.get("character_id", profile.get("character_id", 0)) or 0)
+    character_name = str(context.get("character_name", profile.get("character_name", "")) or "").strip()
+    sell_orders: list[dict] = []
+    for raw in top_types:
+        if not isinstance(raw, dict):
+            continue
+        sell_order_count = int(raw.get("sell_order_count", 0) or 0)
+        if sell_order_count <= 0:
+            continue
+        type_id = int(raw.get("type_id", 0) or 0)
+        matching_entries = [entry for entry in list(entries or []) if int(entry.get("item_type_id", 0) or 0) == type_id]
+        active_matches = matching_entries
+        if character_id > 0:
+            active_matches = [entry for entry in matching_entries if int(entry.get("character_id", 0) or 0) == character_id]
+        sell_orders.append(
+            {
+                "type_id": type_id,
+                "name": str(raw.get("name", f"type_{type_id}") or f"type_{type_id}"),
+                "sell_order_count": sell_order_count,
+                "sell_units": int(raw.get("sell_units", 0) or 0),
+                "sell_gross_isk": float(raw.get("sell_gross_isk", 0.0) or 0.0),
+                "location_ids": [int(value) for value in list(raw.get("location_ids", []) or []) if int(value or 0) > 0],
+                "journal_match_count": len(matching_entries),
+                "active_character_match_count": len(active_matches),
+            }
+        )
+    sell_orders.sort(
+        key=lambda item: (
+            -int(item.get("sell_order_count", 0) or 0),
+            -float(item.get("sell_gross_isk", 0.0) or 0.0),
+            str(item.get("name", "") or "").lower(),
+        )
+    )
+    return {
+        "available": bool(character_id > 0 or character_name),
+        "character_id": character_id,
+        "character_name": character_name,
+        "sell_orders": sell_orders[: max(1, int(limit or 1))],
+    }
+
+
 def get_journal_page(tab: str = "overview", *, limit: int = 20) -> dict:
     cfg = load_config()
     db_path = resolve_journal_db_path(None)
     entries = _load_entries(db_path)
-    _, character_summary = _load_character_context_summary(cfg, prefer_live=False)
+    context, character_summary = _load_character_context_summary(cfg, prefer_live=False)
     active_tab = str(tab or "overview").strip().lower()
     if active_tab not in JOURNAL_TABS:
         active_tab = "overview"
@@ -141,6 +188,7 @@ def get_journal_page(tab: str = "overview", *, limit: int = 20) -> dict:
         "journal_db_path": db_path,
         "has_reconciliation_result": isinstance(_LAST_RECONCILIATION_RESULT, dict),
         "character_summary": character_summary,
+        "active_sell_orders": _active_sell_orders(entries, context),
         "empty_notice": _empty_journal_notice(len(entries), character_summary),
     }
 
@@ -157,6 +205,7 @@ def run_reconciliation(*, limit: int = 20) -> dict:
     page["content"] = format_reconciliation_overview(result, limit=min(25, limit))
     page["last_action"] = "reconcile"
     page["character_summary"] = character_summary
+    page["active_sell_orders"] = _active_sell_orders(_load_entries(db_path), context)
     page["empty_notice"] = _empty_journal_notice(page["entry_count"], character_summary)
     return page
 

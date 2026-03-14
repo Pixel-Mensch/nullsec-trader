@@ -17,6 +17,10 @@ journal, character, and config workflows without replacing the CLI.
 - enforce a small private-deploy access seam: optional Basic Auth when a web
   password exists, otherwise allow only direct localhost request shape and
   block proxy-shaped or non-local requests
+- keep one small active-character seam for private single-user use: the web UI
+  may switch between locally saved characters, but it should do so by
+  replacing the existing active runtime token/profile files rather than
+  inventing a parallel multi-user runtime model
 - keep sensitive template payloads narrow: config and character pages should
   receive redacted/sanitized view-models, not raw secret-bearing config blobs
 - keep public or multi-user web hardening explicitly out of scope for this seam
@@ -41,6 +45,7 @@ journal, character, and config workflows without replacing the CLI.
 - `webapp/routes/pages.py`
 - `webapp/services/runtime_bridge.py`
 - `webapp/services/analysis_service.py`
+- `webapp/services/active_character_service.py`
 - `webapp/services/dashboard_service.py`
 - `webapp/services/journal_service.py`
 - `webapp/services/character_service.py`
@@ -80,8 +85,12 @@ journal, character, and config workflows without replacing the CLI.
 - improve browser-safe formatting of runtime or journal outputs
 - tighten service boundaries around runtime and character calls
 - expose more status metadata without changing trading logic
+- surface active-character state globally and switch it without bypassing the
+  existing runtime/journal character-context files
 - make the journal web flow clearly distinguish local journal entries from
   current character snapshot / reconcile data
+- expose active-character sell-order context in the journal page using real
+  cached character data instead of fabricated browser-side state
 - keep browser route presentation aligned with runtime corridor-display
   metadata instead of inventing a second ranking view
 - surface compact internal travel metadata from runtime artifacts, including
@@ -99,6 +108,9 @@ journal, character, and config workflows without replacing the CLI.
 - runtime bridge currently calls `run_cli()` in-process; stdout/artifact parsing
   must stay aligned with CLI output
 - character and reconcile actions must remain robust without live ESI
+- active-character switching must not leave mismatched token/profile state
+  behind; when a saved character lacks one side of the data, the web seam
+  should clear the stale active file rather than silently mixing characters
 - templates can drift from real service payloads if not covered by tests,
   especially on sensitive pages where only redacted/sanitized fields should
   reach Jinja

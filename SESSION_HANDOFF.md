@@ -1,93 +1,120 @@
 # Session Handoff
 
-Date: 2026-03-14 (session 32 small wallet hub safe)
+Date: 2026-03-14 (session 33 web active character seam)
 Branch: `dev`
 
 ## Completed This Session
 
-Implemented a new conservative profile `small_wallet_hub_safe` for small-wallet
-nullsec trading with protected reserve liquidity, harsh final liquidity /
-market-quality gates, and a compact `SAFE BUYS TODAY` execution-plan summary.
+Implemented a small single-user active-character seam for the local web UI.
+The browser can now switch the active character at any time, and that switch
+really changes the token/profile basis used by later analysis and journal /
+reconcile views. The journal page also now surfaces active-character sell-order
+context, and the `trade_plan_*.json` manifest no longer drops route/transport
+confidence to `0.0` when the route record itself omitted those fields.
 
 ## Root Cause
 
-- existing profiles covered generic conservative behavior but not the specific
-  small-wallet operating model: keep reserve liquid, avoid capital lock, cap
-  per-item exposure hard, and only show a short safe-buy list for today
-- the runtime already had a clean risk-profile seam and a compact shopping-list
-  seam, so the right fix was to extend those seams instead of inventing a new
-  mode-specific runner or report type
+- the web UI previously read only the one current active character/token state
+  from the existing runtime paths, so there was no safe browser seam to pivot
+  analysis and journal views between locally known characters
+- runtime analysis, character status, and journal/reconcile already depended on
+  the same active token/profile files, so the smallest correct solution was to
+  switch those files deliberately instead of adding a parallel browser-only
+  character layer
+- the confidence mismatch came from `trade_plan_*.json` serializing raw route
+  fields directly even when text-plan / leaderboard confidence was derived
+  later from `route_search.summarize_route_for_ranking()`
 
 ## What Changed
 
-- `risk_profiles.py`
-  - added built-in profile `small_wallet_hub_safe`
-  - added optional final pick gates for sell-time, liquidity, market quality,
-    manipulation risk, and profit/spend
-  - added `resolve_profile_budget_window()` for protected reserve handling
-- `runtime_runner.py`
-  - applies the profile reserve before route planning and attaches the budget
-    reserve metadata to route results
-  - extends profile rejection metrics / prune-reason mapping for the stricter
-    final gates
-- `execution_plan.py`
-  - adds `SAFE BUYS TODAY` to the top of plans when the active profile requests
-    it
-  - fixes internal-route near-miss floor rendering for explicit
-    `internal_route_profit_below_operational_floor` rejections
-- `config_loader.py`
-  - validates `risk_profile.name` against the built-in profile registry
-- `no_trade.py`
-  - carries `transport_mode` through near-miss records for report parity
-- `nullsectrader.py`
-  - re-exports the new risk-profile budget helper for test/tool parity
-- `tests/test_risk_profiles.py`, `tests/test_config.py`,
-  `tests/test_execution_plan.py`, `tests/test_runtime_runner.py`
-  - added focused coverage for the new profile, reserve-budget math,
-    safe-buy output, config validation, and new prune buckets
+- `webapp/services/active_character_service.py`
+  - new small single-user registry of locally saved characters under
+    `cache/character_context/`
+  - captures currently active characters into per-character saved slots
+  - activates a chosen character by copying its saved token/profile into the
+    existing active runtime paths
+- `webapp/routes/pages.py`
+  - injects global active-character switch state into page templates
+  - adds `POST /character/activate` with safe redirect-back behavior
+  - normalizes switch return targets so switching from `/analysis/run` returns
+    to `/analysis` instead of a POST-only endpoint
+- `webapp/services/character_service.py`
+  - captures characters after login/sync and exposes saved local characters to
+    the character page
+- `webapp/services/journal_service.py`
+  - adds active-character sell-order summary from the cached character profile
+  - matches those sell-order types against local journal entries by
+    `item_type_id` and optional `character_id`
+- `webapp/templates/base.html`
+  - adds the global `Active character` switcher in the header
+- `webapp/templates/analysis.html`
+  - states that new analyses use the active local character slot
+- `webapp/templates/journal.html`
+  - states that journal/reconcile use the active slot and shows active sell
+    orders for that character
+- `webapp/templates/character.html`
+  - lists locally saved characters and lets the operator activate one directly
+- `webapp/static/css/app.css`
+  - styles the new switcher and compact sell-order / saved-character blocks
+- `journal_models.py`
+  - uses derived route-summary confidence as a manifest fallback when raw route
+    confidence fields are absent or zero
+- `tests/test_active_character_service.py`
+  - verifies that character activation swaps the real active token/profile
+    files and clears stale profile state when needed
+- `tests/test_webapp.py`
+  - covers the global switcher, redirect-back behavior, analysis basis note,
+    journal sell-order block, and character saved-slot view
+- `tests/test_journal.py`
+  - covers the confidence fallback in `trade_plan_*.json`
 
 ## Tests And Verification
 
-- `python -m pytest -q tests/test_risk_profiles.py tests/test_config.py tests/test_execution_plan.py tests/test_runtime_runner.py tests/test_webapp.py`
-  - **195 passed**
-- `python -m pytest -q tests/test_no_trade.py tests/test_execution_plan.py`
-  - **108 passed**
-- `python scripts/quality_check.py`
-  - **203 passed**
+- `python -m pytest -q tests/test_webapp.py tests/test_active_character_service.py tests/test_journal.py tests/test_runtime_runner.py tests/test_execution_plan.py`
+  - **118 passed**
+
+Additional verification from the prior live/replay check still relevant here:
+
+- the exact live command
+  `python .\main.py --profile small_wallet_hub_safe --cargo-m3 12000 --budget-isk 800m --compact`
+  wrote the live snapshot but did not finish after more than 20 minutes
+- the direct replay against that fresh snapshot completed successfully and
+  showed the expected safe-route output
 
 ## Remaining Limits
 
-- `small_wallet_hub_safe` currently protects reserve liquidity by shrinking the
-  spendable planning budget; it does not yet show separate reserve handling in
-  every non-route-profile artifact
-- the reserve floor intentionally soft-caps itself at 50% of budget on very
-  small wallets so the profile still leaves some deployable capital
-- the mode strongly prefers direct exits by blocking planned sells and
-  hard-gating final picks, but it still relies on the existing hub / market
-  evidence already modeled elsewhere in the runtime
+- the active-character seam is intentionally local and single-user; it is not
+  a multi-user/session architecture and does not handle concurrent operators
+- journal sell-order visibility is intentionally narrow: cached open orders are
+  matched against local journal entries by `item_type_id` and optional
+  `character_id`, not by a deeper order-to-trade linkage model
+- the slow live-run path is still only localized at a coarse level: snapshot
+  creation happened quickly, so the long-running part appears to be later in
+  the live path, but this session did not perform a full runtime profiling pass
 
 ## Next Recommended Task
 
-Add one narrow CLI smoke test that proves `--profile small_wallet_hub_safe`
-parses and reaches the runtime path without needing a full market-data run.
+Narrow the slow live-run path after snapshot creation: identify whether the
+remaining long-running work is cache/type enrichment, extra live fetch work, or
+later post-fetch processing, without doing a broad performance refactor first.
 
 ## Files Touched
 
-- `risk_profiles.py`
-- `runtime_runner.py`
-- `execution_plan.py`
-- `config_loader.py`
-- `no_trade.py`
-- `nullsectrader.py`
-- `tests/test_config.py`
-- `tests/test_risk_profiles.py`
-- `tests/test_execution_plan.py`
-- `tests/test_runtime_runner.py`
+- `webapp/services/active_character_service.py`
+- `webapp/routes/pages.py`
+- `webapp/services/character_service.py`
+- `webapp/services/journal_service.py`
+- `webapp/templates/base.html`
+- `webapp/templates/analysis.html`
+- `webapp/templates/journal.html`
+- `webapp/templates/character.html`
+- `webapp/static/css/app.css`
+- `journal_models.py`
+- `tests/test_active_character_service.py`
+- `tests/test_webapp.py`
+- `tests/test_journal.py`
 - `README.md`
 - `PROJECT_STATE.md`
 - `TASK_QUEUE.md`
-- `ARCHITECTURE.md`
 - `SESSION_HANDOFF.md`
-- `docs/module-maps/risk_profiles.md`
-- `docs/module-maps/execution_plan.md`
-- `docs/module-maps/runtime_runner.md`
+- `docs/module-maps/webapp.md`
