@@ -17,6 +17,8 @@ This map is based on focused output and test inspection, not a full audit.
 - surfaces internal-route operational floor notes and suppressed low-profit routes
 - surfaces route-mix cleanup notes when weak add-on picks were removed after
   final route selection
+- exposes profit-basis context for price-sensitive / materially repriced picks
+  so visible quote vs displayed profit stays explainable
 
 ## Inputs
 
@@ -67,6 +69,8 @@ This map is based on focused output and test inspection, not a full audit.
 - surface new route or profile metadata
 - surface personal-layer state and explainability without inventing business logic
 - keep "best actionable route" vs "aggregate alternatives" semantics honest
+- keep internal-route floor messaging scoped to real internal routes only
+- keep price-basis transparency honest for PRICE-SENS picks
 
 ## Risk Areas
 

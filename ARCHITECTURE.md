@@ -186,6 +186,10 @@ transport and confidence calibration:
   cleanup that removes clearly weak optional/speculative add-ons when route
   confidence / market quality recover materially and the route score stays
   effectively intact
+- that cleanup now also looks for weak tail signals explicitly
+  (`speculative`, `price-sensitive`, fragile market quality, weak retention,
+  low confidence, elevated manipulation risk) instead of relying only on raw
+  score deltas
 - the same post-build seam also derives clearer `route_prune_reason` buckets
   and applies the internal-self-haul operational route floor before artifacts
   are emitted
@@ -206,6 +210,13 @@ Trade quality now has one central seam instead of separate ad-hoc penalties:
   only two generic structural penalties (`DEPTH_COLLAPSE`,
   `ORDERBOOK_CONCENTRATION`) and the candidate-stage quality confidence
   haircut; fake-spread / thin-top / unusable-depth gates were left unchanged
+- `execution_plan.py` now surfaces that seam more honestly for operators:
+  PRICE-SENS / materially repriced picks show the quote basis, visible-book
+  profit proxy, conservative executable profit proxy, retention, and the
+  displayed profit basis actually used in the plan
+- internal-route operational floor metadata is now presentation-scoped to
+  `internal_self_haul` routes instead of any route result that merely carried a
+  floor value
 
 Volume validity is now intentionally conservative across the runtime path:
 

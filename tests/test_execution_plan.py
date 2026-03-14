@@ -598,6 +598,34 @@ class TestWriteExecutionPlanProfiles:
         assert "Internal Route Floor" in content
         assert "Suppressed Profit" in content
 
+    def test_external_route_operational_floor_is_hidden(self):
+        result = _make_route_result(picks=[_instant_pick()])
+        result["transport_mode"] = "shipping_lane"
+        result["operational_profit_floor_isk"] = 2_000_000.0
+        result["suppressed_expected_realized_profit_total"] = 1_300_000.0
+        result["operational_filter_note"] = "Should not render on external routes."
+        content = self._write_and_read([result])
+        assert "Internal Route Floor" not in content
+        assert "Internal Route Note" not in content
+
+    def test_price_sensitive_pick_shows_profit_basis_block(self):
+        pick = _planned_pick(
+            target_price_basis="best_ask_undercut",
+            profit_at_top_of_book=30_000.0,
+            profit_at_conservative_executable_price=18_000.0,
+            expected_realized_profit_90d=16_000.0,
+            profit_retention_ratio=0.60,
+        )
+        result = _make_route_result(picks=[pick])
+        content = self._write_and_read([result])
+        assert "Quote Basis:" in content
+        assert "Profit Basis:" in content
+        assert "visible-book" in content
+        assert "conservative executable" in content
+        assert "displayed uses" in content
+        assert "retention 60%" in content
+        assert "Net Exit Basis Used:" in content
+
     def test_personal_history_warning_shown_in_header(self):
         result = _make_route_result()
         result["_personal_calibration_summary"] = {

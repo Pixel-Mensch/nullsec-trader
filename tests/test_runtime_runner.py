@@ -164,3 +164,37 @@ def test_route_mix_cleanup_keeps_optional_pick_when_profile_needs_second_strong_
 
     assert out["route_mix_cleanup_applied"] is False
     assert [p["name"] for p in out["picks"]] == ["Strong A", "Weak Optional"]
+
+
+def test_route_mix_cleanup_removes_weak_speculative_price_sensitive_tail_pick() -> None:
+    tail = _scored_pick(
+        type_id=3,
+        name="Weak Spec Tail",
+        expected_profit=8_000_000.0,
+        overall_confidence=0.52,
+        market_quality_score=0.61,
+        manipulation_risk_score=0.36,
+    )
+    tail["instant"] = False
+    tail["mode"] = "planned_sell"
+    tail["exit_type"] = "speculative"
+    tail["profit_at_top_of_book"] = 8_000_000.0
+    tail["profit_at_conservative_executable_price"] = 4_600_000.0
+    tail["profit_retention_ratio"] = 0.575
+
+    result = _route_result(
+        picks=[
+            _scored_pick(type_id=1, name="Strong A", expected_profit=90_000_000.0, overall_confidence=0.82, market_quality_score=0.82),
+            _scored_pick(type_id=2, name="Strong B", expected_profit=60_000_000.0, overall_confidence=0.80, market_quality_score=0.80),
+            tail,
+        ]
+    )
+    result["transport_mode"] = "shipping_lane"
+    nst._refresh_route_result_from_current_picks(result)
+
+    out = nst._apply_post_selection_route_mix_cleanup(result, {})
+
+    assert [p["name"] for p in out["picks"]] == ["Strong A", "Strong B"]
+    assert out["route_mix_cleanup_applied"] is True
+    assert "Weak Spec Tail" in str(out["route_mix_cleanup_notes"][0])
+    assert "price-sensitive" in str(out["route_mix_cleanup_notes"][0])

@@ -111,6 +111,52 @@ def _pick_market_quality(p: dict) -> float:
     return float(p.get("market_quality_score", p.get("market_plausibility_score", 1.0)) or 1.0)
 
 
+def _pick_displayed_profit(p: dict) -> float:
+    return float(
+        p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0
+    )
+
+
+def _pick_visible_book_profit(p: dict) -> float:
+    return float(p.get("profit_at_top_of_book", p.get("gross_profit_if_full_sell", p.get("profit", 0.0))) or 0.0)
+
+
+def _pick_conservative_profit(p: dict) -> float:
+    return float(p.get("profit_at_conservative_executable_price", _pick_displayed_profit(p)) or 0.0)
+
+
+def _pick_profit_retention_ratio(p: dict) -> float:
+    raw_ratio = float(p.get("profit_retention_ratio", 0.0) or 0.0)
+    if raw_ratio > 0.0:
+        return max(0.0, min(1.0, raw_ratio))
+    profit_book = _pick_visible_book_profit(p)
+    profit_cons = _pick_conservative_profit(p)
+    if profit_book <= 0.0:
+        return 1.0 if profit_cons <= 0.0 else 0.0
+    return max(0.0, min(1.0, profit_cons / profit_book))
+
+
+def _show_profit_basis_block(p: dict) -> bool:
+    if _is_price_sensitive(p):
+        return True
+    profit_book = _pick_visible_book_profit(p)
+    displayed_profit = _pick_displayed_profit(p)
+    if profit_book <= 0.0:
+        return False
+    return abs(profit_book - displayed_profit) / max(1.0, abs(profit_book)) >= 0.15
+
+
+def _internal_route_metadata_applicable(record: dict) -> bool:
+    transport_mode = str(record.get("transport_mode", "") or "").strip().lower()
+    if transport_mode != "internal_self_haul":
+        return False
+    if float(record.get("operational_profit_floor_isk", 0.0) or 0.0) > 0.0:
+        return True
+    if float(record.get("suppressed_expected_realized_profit_total", 0.0) or 0.0) > 0.0:
+        return True
+    return bool(str(record.get("operational_filter_note", "") or "").strip())
+
+
 def _categorize_pick(p: dict) -> str:
     """Return _CAT_MANDATORY, _CAT_OPTIONAL, or _CAT_SPECULATIVE for a pick."""
     is_instant = _pick_is_instant(p)
@@ -152,12 +198,8 @@ def _categorize_pick(p: dict) -> str:
 
 def _is_price_sensitive(p: dict) -> bool:
     """Return True if repricing to book-top erodes profit by >35%."""
-    profit_book = float(p.get("profit_at_top_of_book", 0.0) or 0.0)
-    profit_cons = float(
-        p.get("profit_at_conservative_executable_price",
-              p.get("expected_realized_profit_90d",
-                    p.get("profit", 0.0))) or 0.0
-    )
+    profit_book = _pick_visible_book_profit(p)
+    profit_cons = _pick_conservative_profit(p)
     if profit_book <= 0.0:
         return False
     return profit_cons < 0.65 * profit_book
@@ -184,13 +226,8 @@ def _pick_action_warnings(p: dict) -> list[str]:
     if not is_instant and exp_days > 45.0:
         warnings.append(f"Long capital lock - expected {exp_days:.0f}d to sell")
     if _is_price_sensitive(p):
-        profit_book = float(p.get("profit_at_top_of_book", 0.0) or 0.0)
-        profit_cons = float(
-            p.get("profit_at_conservative_executable_price",
-                  p.get("expected_realized_profit_90d", p.get("profit", 0.0))) or 0.0
-        )
-        drop_pct = max(0.0, (1.0 - profit_cons / profit_book) * 100.0) if profit_book > 0 else 0.0
-        warnings.append(f"Price-sensitive - profit drops ~{drop_pct:.0f}% if repriced to best offer")
+        retention = _pick_profit_retention_ratio(p)
+        warnings.append(f"Price-sensitive - displayed profit retains only ~{retention:.0%} of visible-book profit")
     return warnings
 
 
@@ -339,9 +376,10 @@ def _write_route_trip_summary(
     leg_shipping_costs = float(leg.get("total_shipping_cost", 0.0) or 0.0)
     if leg_shipping_costs > 0.0:
         lines.append(f"  Shipping:  {fmt_isk_de(leg_shipping_costs)} (transport cost)")
-    operational_floor = float(leg.get("operational_profit_floor_isk", 0.0) or 0.0)
-    if operational_floor > 0.0:
-        lines.append(f"  Internal Route Floor: {fmt_isk_de(operational_floor)}")
+    if _internal_route_metadata_applicable(leg):
+        operational_floor = float(leg.get("operational_profit_floor_isk", 0.0) or 0.0)
+        if operational_floor > 0.0:
+            lines.append(f"  Internal Route Floor: {fmt_isk_de(operational_floor)}")
         suppressed_profit = float(leg.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
         if suppressed_profit > 0.0:
             lines.append(f"  Suppressed Profit:    {fmt_isk_de(suppressed_profit)}")
@@ -380,9 +418,7 @@ def _write_pick_block(
     exp_days = _pick_expected_days(p)
     fill_prob = _pick_liquidity_confidence(p) * 100.0
     overall_conf = _pick_overall_confidence(p)
-    profit = float(
-        p.get("expected_realized_profit_90d", p.get("expected_profit_90d", p.get("profit", 0.0))) or 0.0
-    )
+    profit = _pick_displayed_profit(p)
     pick_m3 = float(p.get("unit_volume", 0.0) or 0.0) * float(qty)
     unit_m3 = float(p.get("unit_volume", 0.0) or 0.0)
 
@@ -421,6 +457,29 @@ def _write_pick_block(
             lines.append(
                 f"     >>> MIN SELL: {fmt_isk_de(sell_unit)}/unit - skip if market collapsed below this"
             )
+    if _show_profit_basis_block(p):
+        quote_basis = str(p.get("target_price_basis", "") or "").strip().replace("_", " ")
+        if not quote_basis:
+            quote_basis = "visible exit quote"
+        visible_book_profit = _pick_visible_book_profit(p)
+        conservative_profit = _pick_conservative_profit(p)
+        retention = _pick_profit_retention_ratio(p)
+        transport_cost = float(p.get("transport_cost", 0.0) or 0.0)
+        cost_net = float(p.get("cost", buy_total) or buy_total)
+        implied_net_exit = cost_net + transport_cost + profit
+        lines.append(
+            f"     Quote Basis: {fmt_isk_de(sell_unit)}/unit ({quote_basis})"
+        )
+        lines.append(
+            f"     Profit Basis: visible-book {fmt_isk_de(visible_book_profit)}"
+            f" | conservative executable {fmt_isk_de(conservative_profit)}"
+            f" | displayed uses {fmt_isk_de(profit)}"
+            f" | retention {retention:.0%}"
+        )
+        lines.append(
+            f"     Net Exit Basis Used: {fmt_isk_de(implied_net_exit)} after fees/taxes"
+            f" (buy net {fmt_isk_de(cost_net)}, transport {fmt_isk_de(transport_cost)})"
+        )
     lines.append(
         f"     Expected: {exp_days:.1f}d  | Fill {fill_prob:.0f}%  | Confidence {overall_conf:.2f}"
         f"  |  Profit: {fmt_isk_de(profit)}"
@@ -984,15 +1043,16 @@ def write_route_leaderboard(path: str, timestamp: str, route_results: list[dict]
                 reason_code = str(pruned_reason.get("code", "") or "")
             suffix = f" [{reason_code}]" if reason_code else ""
             lines.append(f"- {r.get('route_label', '')}: {reason}{suffix}")
-            operational_floor = float(r.get("operational_profit_floor_isk", 0.0) or 0.0)
-            if operational_floor > 0.0:
-                lines.append(f"  internal_route_floor: {fmt_isk_de(operational_floor)}")
-            suppressed_profit = float(r.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
-            if suppressed_profit > 0.0:
-                lines.append(f"  suppressed_expected_profit: {fmt_isk_de(suppressed_profit)}")
-            operational_note = str(r.get("operational_filter_note", "") or "")
-            if operational_note:
-                lines.append(f"  internal_route_note: {operational_note}")
+            if _internal_route_metadata_applicable(r):
+                operational_floor = float(r.get("operational_profit_floor_isk", 0.0) or 0.0)
+                if operational_floor > 0.0:
+                    lines.append(f"  internal_route_floor: {fmt_isk_de(operational_floor)}")
+                suppressed_profit = float(r.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+                if suppressed_profit > 0.0:
+                    lines.append(f"  suppressed_expected_profit: {fmt_isk_de(suppressed_profit)}")
+                operational_note = str(r.get("operational_filter_note", "") or "")
+                if operational_note:
+                    lines.append(f"  internal_route_note: {operational_note}")
         lines.append("")
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -1070,15 +1130,16 @@ def write_no_trade_report(
             lines.append(f"    Grund: {reason}  |  Kandidaten geprueft: {candidates}")
             if blocked:
                 lines.append("    [Transport blockiert - keine Shipping Lane verfuegbar]")
-            operational_floor = float(nm.get("operational_profit_floor_isk", 0.0) or 0.0)
-            if operational_floor > 0.0:
-                lines.append(f"    Internal Route Floor: {fmt_isk_de(operational_floor)}")
-            suppressed_profit = float(nm.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
-            if suppressed_profit > 0.0:
-                lines.append(f"    Suppressed Expected Profit: {fmt_isk_de(suppressed_profit)}")
-            operational_note = str(nm.get("operational_filter_note", "") or "")
-            if operational_note:
-                lines.append(f"    Internal Route Note: {operational_note}")
+            if _internal_route_metadata_applicable(nm):
+                operational_floor = float(nm.get("operational_profit_floor_isk", 0.0) or 0.0)
+                if operational_floor > 0.0:
+                    lines.append(f"    Internal Route Floor: {fmt_isk_de(operational_floor)}")
+                suppressed_profit = float(nm.get("suppressed_expected_realized_profit_total", 0.0) or 0.0)
+                if suppressed_profit > 0.0:
+                    lines.append(f"    Suppressed Expected Profit: {fmt_isk_de(suppressed_profit)}")
+                operational_note = str(nm.get("operational_filter_note", "") or "")
+                if operational_note:
+                    lines.append(f"    Internal Route Note: {operational_note}")
             why = dict(nm.get("why_out_summary", {}) or {})
             if why:
                 top_why = sorted(why.items(), key=lambda kv: kv[1], reverse=True)[:3]

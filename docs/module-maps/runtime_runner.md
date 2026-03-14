@@ -17,6 +17,7 @@ not a full line-by-line review.
 - owns the shared post-build pick-gating seam after transport and calibration
 - owns the post-selection route-mix cleanup seam for weak non-mandatory add-ons
 - owns the internal-self-haul operational route floor before artifact emission
+- keeps external routes from carrying misleading internal-route floor metadata
 
 ## Inputs
 
@@ -82,6 +83,7 @@ not a full line-by-line review.
 - wire new profile, calibration, or ranking behavior into the main flow
 - surface runtime metadata and keep personal-layer effects explicit
 - change artifact generation or route/chain branching
+- tune the weak-tail cleanup seam without weakening candidate-stage anti-bait gates
 
 ## Risk Areas
 

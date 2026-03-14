@@ -97,6 +97,16 @@ Not fully re-audited this session:
 - route-profile, chain, roundtrip, leaderboard, and no-trade text artifacts
   now distinguish between actionable routes/legs and aggregate sequential or
   alternative totals instead of implying one simultaneous executable spend
+- execution-plan / leaderboard rendering now only shows internal-route floor
+  metadata for actual `internal_self_haul` routes instead of leaking that
+  floor onto external shipping routes
+- price-sensitive or otherwise materially repriced picks now show an explicit
+  profit-basis block in execution plans: quote basis, visible-book profit
+  proxy, conservative executable profit proxy, retention, and the displayed
+  profit basis used in the plan
+- final route-mix cleanup in `runtime_runner.py` now removes some weak
+  speculative / price-sensitive tail picks more aggressively when route quality
+  improves, profit share stays small, and route score remains effectively intact
 - local trade journal and confidence calibration support
 - targeted test suite plus lightweight custom test runner
 - optional private character context via EVE SSO/ESI with local token storage,
@@ -351,10 +361,14 @@ Files that indicate this focus:
   the whole selected route mix. That behavior was left unchanged in this
   session.
 - a narrow post-selection route-mix cleanup seam now exists, but the current
-  narrow `replay_snapshot.json` rerun did not produce a live removal after the
-  latest market-quality calibration; the new cleanup is covered by targeted
-  runtime/output tests and is designed for clear trade-off cases rather than
-  cosmetic route beautification.
+  narrow `replay_snapshot.json` rerun did not previously produce a live removal
+  after the latest market-quality calibration; the cleanup is now slightly more
+  willing to drop weak speculative / price-sensitive tails, but still only when
+  score retention remains high and route confidence / quality recover.
+- execution-plan profit-basis transparency is now much better for PRICE-SENS
+  picks, but it still explains the conservative basis via profit proxies and
+  implied net-exit math rather than a separately persisted repriced unit sell
+  quote.
 - `route_search.py` speculative penalty was re-reviewed on 2026-03-07. The
   small planned-share term still looks like a separate route-composition risk
   heuristic, not a confirmed double-counting defect, so no change was made.

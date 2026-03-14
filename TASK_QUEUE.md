@@ -1,6 +1,6 @@
 # Task Queue
 
-Last updated: 2026-03-14 (session 25 clean-start command)
+Last updated: 2026-03-14 (session 26 output honesty + tail cleanup)
 
 This queue is intentionally small and focused.
 It reflects the current visible hotspots from a narrow repository audit, not a
@@ -106,6 +106,28 @@ full backlog scrape.
   - focused regression:
     `pytest -q tests/test_runtime_runner.py tests/test_execution_plan.py tests/test_route_search.py tests/test_no_trade.py tests/test_integration.py -k "runtime_runner or execution_plan or route_search or no_trade or replay_live_focused_fixture_keeps_real_pick_set or same_snapshot_keeps_stable_plan_and_pick_ids"`
     -> **125 passed**
+
+### Task 0g: Tighten output honesty and weak-tail cleanup without regressing anti-bait gates
+
+- Priority: P0
+- Status: DONE
+- Completed: 2026-03-14
+- Relevant files: `execution_plan.py`, `runtime_runner.py`,
+  `tests/test_execution_plan.py`, `tests/test_route_search.py`,
+  `tests/test_runtime_runner.py`, `tests/test_integration.py`
+- What was done:
+  - execution-plan / leaderboard / no-trade rendering now gates internal-route
+    floor metadata on actual `internal_self_haul` applicability instead of
+    showing it on external shipping routes just because a floor value existed
+  - price-sensitive picks now show an explicit profit-basis block with quote
+    basis, visible-book profit proxy, conservative executable profit proxy,
+    retention, and the displayed profit basis used by the plan
+  - post-selection route-mix cleanup now also targets weak speculative /
+    price-sensitive tail picks when they contribute only a small profit share,
+    route quality/confidence recover, and route score stays effectively intact
+  - focused regression:
+    `pytest -q tests/test_execution_plan.py tests/test_portfolio.py tests/test_route_search.py tests/test_integration.py tests/test_runtime_runner.py`
+    -> **129 passed**
 
 ### Task 1: Verify and stabilize risk-profile integration
 

@@ -352,6 +352,20 @@ def test_replay_live_focused_fixture_keeps_real_pick_set() -> None:
     assert sum(float(pick.get("proposed_expected_profit", 0.0) or 0.0) for pick in actionable[0].get("picks", [])) > 200_000_000.0
 
 
+def test_replay_live_focused_fixture_keeps_known_bait_picks_out() -> None:
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    fixture_path = os.path.join(repo_root, "tests", "fixtures", "replay_live_focused_o4t_jita_20260308.json")
+    _, manifest = _run_replay_with_local_cfg(_focused_replay_local_cfg(fixture_path))
+    pick_names = [str(pick.get("item_name", "")) for route in manifest["routes"] for pick in route.get("picks", [])]
+    for banned in [
+        "Large Warhead Calefaction Catalyst II",
+        "IFFA Compact Damage Control",
+        "Heavy Gremlin Compact Energy Neutralizer",
+        "Drone Mutaplasmid Residue",
+    ]:
+        assert banned not in pick_names
+
+
 def test_replay_same_snapshot_keeps_stable_plan_and_pick_ids() -> None:
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     fixture_path = os.path.join(repo_root, "tests", "fixtures", "replay_live_focused_o4t_jita_20260308.json")

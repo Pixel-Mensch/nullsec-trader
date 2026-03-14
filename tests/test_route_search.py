@@ -348,4 +348,29 @@ def test_route_leaderboard_shows_internal_route_floor_for_suppressed_route() -> 
     assert "WEAK INTERNAL" in content
     assert "internal_route_floor" in content
     assert "suppressed_expected_profit" in content
+    assert "internal_route_note" in content
+
+
+def test_route_leaderboard_hides_internal_route_floor_for_external_route() -> None:
+    routes = [
+        {
+            "route_label": "EXTERNAL",
+            "source_label": "Jita",
+            "dest_label": "O4T",
+            "transport_mode": "shipping_lane",
+            "route_prune_reason": "confidence",
+            "operational_profit_floor_isk": 2_000_000.0,
+            "suppressed_expected_realized_profit_total": 1_300_000.0,
+            "operational_filter_note": "Should stay hidden on external routes.",
+            "picks": [],
+        },
+    ]
+    with tempfile.TemporaryDirectory() as tmpdir:
+        out_path = os.path.join(tmpdir, "route_leaderboard_test.txt")
+        nst.write_route_leaderboard(out_path, "2026-03-14_00-00-00", routes, ranking_metric="risk_adjusted_expected_profit", max_routes=5)
+        with open(out_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    assert "EXTERNAL" in content
+    assert "internal_route_floor" not in content
+    assert "internal_route_note" not in content
 

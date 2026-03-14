@@ -943,7 +943,7 @@ def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
     if len(picks) < 2:
         return result
 
-    from execution_plan import _CAT_MANDATORY, _CAT_SPECULATIVE, _categorize_pick
+    from execution_plan import _CAT_MANDATORY, _CAT_SPECULATIVE, _categorize_pick, _is_price_sensitive
     from no_trade import _profile_min_strong_picks
     from route_search import summarize_route_for_ranking
 
@@ -987,6 +987,35 @@ def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
             category = str(_categorize_pick(pick))
             if category == _CAT_MANDATORY:
                 continue
+            pick_conf = float(
+                pick.get(
+                    "decision_overall_confidence",
+                    pick.get("overall_confidence", pick.get("strict_confidence_score", pick.get("fill_probability", 0.0))),
+                )
+                or 0.0
+            )
+            pick_quality = float(pick.get("market_quality_score", pick.get("market_plausibility_score", 1.0)) or 1.0)
+            pick_manip = float(pick.get("manipulation_risk_score", 0.0) or 0.0)
+            pick_retention = float(pick.get("profit_retention_ratio", 0.0) or 0.0)
+            if pick_retention <= 0.0:
+                top_profit = float(pick.get("profit_at_top_of_book", 0.0) or 0.0)
+                conservative_profit = float(
+                    pick.get("profit_at_conservative_executable_price", _pick_expected_realized_profit(pick)) or 0.0
+                )
+                pick_retention = (conservative_profit / top_profit) if top_profit > 0.0 else 1.0
+            weak_signals: list[str] = []
+            if category == _CAT_SPECULATIVE:
+                weak_signals.append("speculative")
+            if _is_price_sensitive(pick):
+                weak_signals.append("price-sensitive")
+            if pick_quality < 0.62:
+                weak_signals.append("fragile-market-quality")
+            if pick_conf < 0.58:
+                weak_signals.append("low-confidence")
+            if 0.0 < pick_retention < 0.72:
+                weak_signals.append("weak-profit-retention")
+            if pick_manip >= 0.35:
+                weak_signals.append("elevated-manip-risk")
 
             trial_picks = current_picks[:idx] + current_picks[idx + 1 :]
             if not trial_picks:
@@ -1030,7 +1059,14 @@ def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
                 and score_retained >= 0.98
                 and (conf_gain >= (min_gain + 0.01) or quality_gain >= (min_gain + 0.01))
             )
-            if not clearly_better_route and not near_same_score_but_cleaner:
+            weak_tail_cleanup = (
+                len(weak_signals) >= 2
+                and profit_share <= (0.10 if category == _CAT_SPECULATIVE else 0.07)
+                and score_retained >= (0.96 if category == _CAT_SPECULATIVE else 0.97)
+                and (conf_gain >= 0.015 or quality_gain >= 0.015)
+                and ((conf_gain + quality_gain) >= 0.03)
+            )
+            if not clearly_better_route and not near_same_score_but_cleaner and not weak_tail_cleanup:
                 continue
 
             candidate = {
@@ -1041,6 +1077,8 @@ def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
                 "conf_gain": float(conf_gain),
                 "quality_gain": float(quality_gain),
                 "score_gain_ratio": float(score_gain_ratio),
+                "weak_signals": list(weak_signals),
+                "score_retained": float(score_retained),
             }
             if best_candidate is None or (
                 candidate["score_gain_ratio"],
@@ -1059,12 +1097,15 @@ def _apply_post_selection_route_mix_cleanup(result: dict, cfg: dict) -> dict:
         removed_pick = dict(best_candidate["pick"])
         current_picks.pop(int(best_candidate["idx"]))
         result["picks"] = list(current_picks)
+        weak_signal_text = ", ".join(str(sig) for sig in list(best_candidate.get("weak_signals", []) or []))
         note = (
             f"Removed weak {best_candidate['category']} add-on pick {removed_pick.get('name', '?')}: "
             f"+{best_candidate['conf_gain']:.2f} route confidence, "
             f"+{best_candidate['quality_gain']:.2f} market quality, "
             f"-{best_candidate['profit_share']:.1%} expected profit share."
         )
+        if weak_signal_text:
+            note += f" Signals: {weak_signal_text}."
         removed_entries.append(
             {
                 "type_id": int(removed_pick.get("type_id", 0) or 0),
@@ -1103,8 +1144,17 @@ def _apply_internal_self_haul_operational_filter(result: dict, cfg: dict) -> dic
     if not isinstance(filters_used, dict):
         filters_used = {}
     floor = _resolve_internal_route_operational_profit_floor(cfg, filters_used)
+    if transport_mode != "internal_self_haul":
+        result["operational_profit_floor_isk"] = 0.0
+        result["operational_filter_note"] = ""
+        result["operational_filter_applied"] = False
+        result["operational_filter_reason"] = ""
+        result["suppressed_expected_realized_profit_total"] = 0.0
+        result["suppressed_full_sell_profit_total"] = 0.0
+        result["suppressed_isk_used"] = 0.0
+        return result
     result["operational_profit_floor_isk"] = float(floor)
-    if transport_mode != "internal_self_haul" or floor <= 0.0:
+    if floor <= 0.0:
         return result
 
     result["operational_filter_note"] = (
